@@ -147,6 +147,10 @@ Sem o token configurado, o `main.py` para com uma mensagem de erro antes de cham
 
 > O `.env` contém credenciais e **nunca deve ser commitado** — ele já está no `.gitignore`. Em agendamentos ou servidores, o token também pode ser definido como variável de ambiente `TOKEN_INMET`, que tem prioridade sobre o `.env`.
 
+### Logos
+
+Os logos ficam em `img/`, em **PNG com fundo transparente** — uma imagem com fundo branco cobriria o mapa. A posição e o tamanho de cada um são definidos na lista `LOGOS`, em [`modulos/config.py`](modulos/config.py), como um retângulo `[x, y, largura, altura]` em fração da moldura do mapa: `(0, 0)` é o canto inferior esquerdo e `(1, 1)` o superior direito. O logo se ajusta ao retângulo mantendo a proporção e fica alinhado ao canto superior direito dele, no mesmo lugar em todos os mapas.
+
 ### Demais parâmetros
 
 Ficam em [`modulos/config.py`](modulos/config.py): UF, pastas, endereços e tempos limite da API, limites e resolução dos mapas, posição dos logos e parâmetros da interpolação.
@@ -163,7 +167,7 @@ Ficam em [`modulos/config.py`](modulos/config.py): UF, pastas, endereços e temp
 │   ├── mapas.py          # Mapas pontuais e interpolados
 │   └── excel.py          # Relatório Excel
 ├── shp/                  # Shapefiles: limite estadual (MS_UF_2022) e municípios (MS_mun)
-├── img/                  # Logos inseridos nos mapas
+├── img/                  # Logos inseridos nos mapas (PNG com fundo transparente)
 ├── saida/                # Resultados gerados (fora do controle de versão)
 ├── legado/               # Scripts originais, mantidos para comparação durante a validação
 ├── requirements.txt
@@ -199,6 +203,7 @@ Os três scripts de `legado/` foram unificados no `main.py`. Diferenças nos res
 - **Coordenadas:** `Latitude` e `Longitude` em todas as abas; a associação é feita pela própria estação, não pelo nome.
 - **Mapa de rajadas com direção:** gerado em todos os modos (antes, só no tempo real).
 - **Títulos dos mapas no tempo real:** mostram a janela real de cada variável (ex.: a temperatura mínima indica "desde 00 UTC").
+- **Logos:** em PNG com fundo transparente e posicionados em relação à moldura do mapa — mesmo lugar e proporção nos mapas pontuais e interpolados (antes, nos pontuais, um logo cobria o outro).
 - **Desempenho:** shapefiles, logos e máscara do estado são carregados uma única vez por execução.
 
 ## Limitações conhecidas (em revisão)

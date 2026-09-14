@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 import shapely
 from matplotlib.lines import Line2D
-from matplotlib.offsetbox import AnnotationBbox, OffsetImage
 
 from . import calculos, config
 from .config import Periodo
@@ -56,9 +55,9 @@ def carregar_base() -> BaseCartografica:
     dentro_uf = shapely.contains_xy(uf.geometry.union_all(), lon_grade, lat_grade)
 
     logos = []
-    for arquivo, zoom, posicao, alinhamento in config.LOGOS:
+    for arquivo, retangulo in config.LOGOS:
         if arquivo.exists():
-            logos.append((plt.imread(arquivo), zoom, posicao, alinhamento))
+            logos.append((plt.imread(arquivo), retangulo))
         else:
             print(f"⚠️ Logo não encontrado: {arquivo}")
     return BaseCartografica(uf, municipios, lon_grade, lat_grade, dentro_uf, logos)
@@ -240,9 +239,12 @@ def _finalizar(fig, ax, espec: EspecMapa, base: BaseCartografica, caminho: Path)
     ax.set_xlabel("Longitude")
     ax.set_ylabel("Latitude")
 
-    for imagem, zoom, posicao, alinhamento in base.logos:
-        ax.add_artist(AnnotationBbox(OffsetImage(imagem, zoom=zoom), posicao, xycoords="data",
-                                     frameon=False, box_alignment=alinhamento, zorder=10))
+    # Logos posicionados pela moldura do mapa: mesmo lugar e proporção em qualquer tamanho de figura
+    for imagem, retangulo in base.logos:
+        eixo_logo = ax.inset_axes(retangulo, zorder=10)
+        eixo_logo.imshow(imagem)
+        eixo_logo.set_anchor("NE")
+        eixo_logo.axis("off")
 
     fig.tight_layout(rect=[0, 0, 1, 0.93])
     fig.savefig(caminho, dpi=config.DPI, bbox_inches="tight", facecolor="white", edgecolor="none")
