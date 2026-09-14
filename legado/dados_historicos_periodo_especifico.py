@@ -19,26 +19,39 @@ warnings.filterwarnings('ignore')
 # CONFIGURAÇÕES
 # =====================================================
 UF = "MS"
-TOKEN_INMET = "R09kWlZ2cG45TXlsUUEzdTR1eUo3ZTBzSE5zaGs5c3o=GOdZVvpn9MylQA3u4uyJ7e0sHNshk9sz"
+TOKEN_INMET = "SEU_TOKEN_AQUI"  # token removido do código: use o arquivo .env do projeto
 
 # TUDO em UTC
 FUSO_UTC = ZoneInfo("UTC")
 FUSO_MS = ZoneInfo("America/Campo_Grande")
 
 # =====================================================
-# CONFIGURAÇÃO DA DATA DE BUSCA (ALTERE AQUI)
+# CONFIGURAÇÃO DO PERÍODO DE BUSCA (ALTERE AQUI)
 # =====================================================
-# Defina a data que deseja buscar
-DATA_BUSCA = datetime(2026, 7, 30, 0, 0, 0, tzinfo=FUSO_UTC)  # Exemplo: 15 de janeiro de 2024
+# Data INICIAL do período (inclusiva)
+DATA_INICIO = datetime(2026, 8, 1, 0, 0, 0, tzinfo=FUSO_UTC)
 
-# Período de busca (24 horas a partir da data definida)
-DATA_INI = DATA_BUSCA
-DATA_FIM = DATA_BUSCA + timedelta(days=1)  # 24 horas depois
+# Data FINAL do período (inclusiva - todo o dia até 23:59:59)
+DATA_FINAL = datetime(2026, 8, 31, 0, 0, 0, tzinfo=FUSO_UTC)
+
+# Ajuste automático: DATA_FIM = DATA_FINAL + 1 dia (00:00) para incluir todo o último dia
+DATA_INI = DATA_INICIO
+DATA_FIM = DATA_FINAL + timedelta(days=1)
+
+# Número de dias do período (informativo)
+NUM_DIAS = (DATA_FINAL.date() - DATA_INICIO.date()).days + 1
+
+# Texto formatado do período (para títulos)
+TEXTO_PERIODO = (
+    f"{DATA_INICIO.strftime('%d/%m/%Y')} a "
+    f"{DATA_FINAL.strftime('%d/%m/%Y')} "
+    f"({NUM_DIAS} dias)"
+)
 
 # =====================================================
 # CONFIGURAÇÃO DE SAÍDA
 # =====================================================
-PASTA_SAIDA = Path("saida_historico")
+PASTA_SAIDA = Path("saida_periodo")
 PASTA_SAIDA.mkdir(exist_ok=True)
 
 # Shapefiles usados no mapa de Mato Grosso do Sul
@@ -49,8 +62,12 @@ SHAPE_UF = "MS_UF_2022.shp"
 LOGO_CEMTEC = "logo_cemtec.jpeg"
 LOGO_SEMAGRO = "semagro_logo.jpeg"
 
-# Nome do arquivo com a data específica
-ARQUIVO_SAIDA = PASTA_SAIDA / f"Relatorio_Historico_{UF}_{DATA_BUSCA.strftime('%Y%m%d')}.xlsx"
+# Nome do arquivo com o período
+PERIODO_STR = (
+    f"{DATA_INICIO.strftime('%Y%m%d')}_a_"
+    f"{DATA_FINAL.strftime('%Y%m%d')}"
+)
+ARQUIVO_SAIDA = PASTA_SAIDA / f"Relatorio_Periodo_{UF}_{PERIODO_STR}.xlsx"
 
 # =====================================================
 # FUNÇÕES DE BUSCA E CÁLCULO
@@ -59,28 +76,28 @@ def get_inmet_data(cod, data_ini, data_fim):
     """Busca dados horários do INMET e mantém TUDO em UTC"""
     url = f"https://apitempo.inmet.gov.br/token/estacao/{data_ini.strftime('%Y-%m-%d')}/{data_fim.strftime('%Y-%m-%d')}/{cod}/{TOKEN_INMET}"
     try:
-        response = requests.get(url, timeout=30)
-        
+        response = requests.get(url, timeout=60)
+
         if response.status_code != 200:
             print(f"    ⚠️ Erro HTTP {response.status_code}: {response.text[:100]}")
             return None
-            
+
         r = response.json()
         if isinstance(r, list) and len(r) > 0:
             df = pd.DataFrame(r)
-            
+
             cols_num = ["TEM_MAX", "TEM_MIN", "UMD_MIN", "UMD_MAX", "VEN_RAJ", "VEN_DIR", "CHUVA"]
             for c in cols_num:
                 if c in df.columns:
                     df[c] = pd.to_numeric(df[c].astype(str).str.replace(",", "."), errors="coerce")
-            
+
             df['dt_utc'] = pd.to_datetime(
                 df['DT_MEDICAO'] + ' ' +
                 df['HR_MEDICAO'].apply(lambda x: f"{str(x).zfill(4)[:2]}:00"),
                 errors='coerce',
                 utc=True
             )
-            
+
             df['dt_local'] = df['dt_utc'].dt.tz_convert(FUSO_MS)
 
             return df.dropna(subset=['dt_utc'])
@@ -96,14 +113,7 @@ def get_inmet_data(cod, data_ini, data_fim):
 
 def calcular_acumulado_periodo(df, data_ini, data_fim):
     """Soma a chuva entre duas datas específicas (TUDO em UTC)"""
-    sub_df = df[(df['dt_utc'] >= data_ini) & (df['dt_utc'] <= data_fim)]
-    return round(sub_df["CHUVA"].fillna(0).sum(), 1) if not sub_df.empty else 0.0
-
-def calcular_chuva_periodo(df, data_busca):
-    """Soma a chuva entre 00:00 e 23:59 do dia específico (UTC)"""
-    inicio_dia = data_busca.replace(hour=0, minute=0, second=0, microsecond=0)
-    fim_dia = data_busca.replace(hour=23, minute=59, second=59, microsecond=999999)
-    sub_df = df[(df['dt_utc'] >= inicio_dia) & (df['dt_utc'] <= fim_dia)]
+    sub_df = df[(df['dt_utc'] >= data_ini) & (df['dt_utc'] < data_fim)]
     return round(sub_df["CHUVA"].fillna(0).sum(), 1) if not sub_df.empty else 0.0
 
 def formatar_nome_estacao(nome):
@@ -138,11 +148,11 @@ def plotar_base_mapa(ax, mun, uf):
     uf.boundary.plot(ax=ax, linewidth=1.8, color="black")
 
 def adicionar_logos(fig, ax):
-    """Adiciona os logos do CEMTEC e SEMAGRO dentro da área do mapa, canto superior direito"""
+    """Adiciona os logos do CEMTEC e SEMAGRO dentro da área do mapa"""
     try:
         LON_MIN, LON_MAX = -58.5, -50.5
         LAT_MIN, LAT_MAX = -24.5, -17.0
-        
+
         if Path(LOGO_SEMAGRO).exists():
             im_semagro = plt.imread(LOGO_SEMAGRO)
             imagebox_semagro = OffsetImage(im_semagro, zoom=0.14)
@@ -158,7 +168,7 @@ def adicionar_logos(fig, ax):
             print(f"✅ Logo SEMAGRO adicionado dentro do mapa")
         else:
             print(f"⚠️ Logo SEMAGRO não encontrado: {Path(LOGO_SEMAGRO).resolve()}")
-        
+
         if Path(LOGO_CEMTEC).exists():
             im_cemtec = plt.imread(LOGO_CEMTEC)
             imagebox_cemtec = OffsetImage(im_cemtec, zoom=0.12)
@@ -174,7 +184,7 @@ def adicionar_logos(fig, ax):
             print(f"✅ Logo CEMTEC adicionado dentro do mapa")
         else:
             print(f"⚠️ Logo CEMTEC não encontrado: {Path(LOGO_CEMTEC).resolve()}")
-            
+
     except Exception as e:
         print(f"⚠️ Não foi possível adicionar os logos: {e}")
 
@@ -182,7 +192,7 @@ def configurar_eixo_mapa(ax, titulo):
     """Configura os limites e labels do eixo do mapa"""
     LON_MIN, LON_MAX = -58.5, -50.5
     LAT_MIN, LAT_MAX = -24.5, -17.0
-    
+
     ax.set_title(titulo, fontsize=16, weight="bold", pad=20)
     ax.set_xlim(LON_MIN, LON_MAX)
     ax.set_ylim(LAT_MIN, LAT_MAX)
@@ -193,60 +203,60 @@ def criar_grid_interpolacao(resolucao=100):
     """Cria um grid para interpolação"""
     lon_min, lon_max = -58.5, -50.5
     lat_min, lat_max = -24.5, -17.0
-    
+
     lon_grid = np.linspace(lon_min, lon_max, resolucao)
     lat_grid = np.linspace(lat_min, lat_max, resolucao)
-    
+
     lon_mesh, lat_mesh = np.meshgrid(lon_grid, lat_grid)
-    
+
     return lon_mesh, lat_mesh
 
 def interpolar_dados(gdf, coluna_valor, resolucao=100):
     """Realiza interpolação IDW (Inverse Distance Weighting)"""
     coords = np.array([(geom.x, geom.y) for geom in gdf.geometry])
     valores = gdf[coluna_valor].values
-    
+
     if len(coords) < 3:
         print(f"⚠️ Muito poucos pontos para interpolação (mínimo 3, tem {len(coords)})")
         return None, None, None
-    
+
     lon_mesh, lat_mesh = criar_grid_interpolacao(resolucao)
-    
+
     pontos_grid = np.column_stack([lon_mesh.ravel(), lat_mesh.ravel()])
-    
+
     tree = cKDTree(coords)
-    
+
     k = min(8, len(coords))
-    
+
     if k > 1:
         distancias, indices = tree.query(pontos_grid, k=k)
     else:
         distancias, indices = tree.query(pontos_grid, k=1)
         distancias = distancias.reshape(-1, 1)
         indices = indices.reshape(-1, 1)
-    
+
     distancias = np.maximum(distancias, 1e-10)
-    
+
     pesos = 1.0 / (distancias ** 2)
-    
+
     valores_vizinhos = valores[indices]
-    
+
     valores_interpolados = np.sum(valores_vizinhos * pesos, axis=1) / np.sum(pesos, axis=1)
-    
+
     grid_valores = valores_interpolados.reshape(lon_mesh.shape)
-    
+
     return lon_mesh, lat_mesh, grid_valores
 
-def gerar_mapa_pontual(df_dados, coluna_valor, titulo, nome_arquivo, cmap, unidade, data_busca, ranking_titulo=None, ranking_ordem="maiores"):
+def gerar_mapa_pontual(df_dados, coluna_valor, titulo, nome_arquivo, cmap, unidade, subtitulo, ranking_titulo=None, ranking_ordem="maiores"):
     """Gera mapa pontual com os dados"""
     if df_dados.empty:
         print(f"⚠️ Não há dados para gerar o mapa: {titulo}")
         return
-    
+
     uf, mun = carregar_shapefiles()
     if uf is None or mun is None:
         return
-    
+
     gdf = gpd.GeoDataFrame(
         df_dados,
         geometry=gpd.points_from_xy(
@@ -255,20 +265,20 @@ def gerar_mapa_pontual(df_dados, coluna_valor, titulo, nome_arquivo, cmap, unida
         ),
         crs="EPSG:4326"
     )
-    
+
     fig, ax = plt.subplots(figsize=(12, 12))
     fig.patch.set_facecolor('white')
     ax.set_facecolor('white')
-    
+
     plotar_base_mapa(ax, mun, uf)
-    
+
     valores = gdf[coluna_valor]
-    
+
     if valores.min() != valores.max():
         tamanho = np.clip((valores - valores.min()) / (valores.max() - valores.min()) * 150 + 50, 50, 200)
     else:
         tamanho = 100
-    
+
     gdf.plot(
         ax=ax,
         column=coluna_valor,
@@ -282,7 +292,7 @@ def gerar_mapa_pontual(df_dados, coluna_valor, titulo, nome_arquivo, cmap, unida
             "shrink": 0.75
         }
     )
-    
+
     for _, row in gdf.iterrows():
         ax.text(
             row.geometry.x,
@@ -300,24 +310,21 @@ def gerar_mapa_pontual(df_dados, coluna_valor, titulo, nome_arquivo, cmap, unida
                 alpha=0.75
             )
         )
-    
-    titulo_completo = (
-        f"{titulo}\n"
-        f"{data_busca.strftime('%d/%m/%Y')} (UTC)"
-    )
-    
+
+    titulo_completo = f"{titulo}\n{subtitulo}"
+
     configurar_eixo_mapa(ax, titulo_completo)
-    
+
     if ranking_titulo and len(gdf) > 0:
         if ranking_ordem == "maiores":
             ranking = gdf.nlargest(5, coluna_valor)
         else:
             ranking = gdf.nsmallest(5, coluna_valor)
-        
+
         texto_ranking = f"{ranking_titulo}:\n"
         for _, row in ranking.iterrows():
             texto_ranking += f"{row['Estação']}: {row[coluna_valor]:.1f}\n"
-        
+
         ax.text(
             0.97, 0.04,
             texto_ranking,
@@ -333,31 +340,31 @@ def gerar_mapa_pontual(df_dados, coluna_valor, titulo, nome_arquivo, cmap, unida
                 alpha=0.9
             )
         )
-    
+
     adicionar_logos(fig, ax)
-    
+
     plt.tight_layout(rect=[0, 0, 1, 0.93])
-    
-    saida_mapa = PASTA_SAIDA / f"{nome_arquivo}_{data_busca.strftime('%Y%m%d')}.png"
+
+    saida_mapa = PASTA_SAIDA / f"{nome_arquivo}_{PERIODO_STR}.png"
     plt.savefig(saida_mapa, dpi=300, bbox_inches="tight", facecolor='white', edgecolor='none')
     plt.close()
-    
+
     print(f"🗺️ Mapa pontual salvo em: {saida_mapa}")
 
-def gerar_mapa_interpolado(df_dados, coluna_valor, titulo, nome_arquivo, cmap, unidade, data_busca, ranking_titulo=None, ranking_ordem="maiores"):
+def gerar_mapa_interpolado(df_dados, coluna_valor, titulo, nome_arquivo, cmap, unidade, subtitulo, ranking_titulo=None, ranking_ordem="maiores"):
     """Gera mapa interpolado com os dados, recortado para os limites do MS"""
     if df_dados.empty:
         print(f"⚠️ Não há dados para gerar o mapa interpolado: {titulo}")
         return
-    
+
     if len(df_dados) < 3:
         print(f"⚠️ Muito poucas estações com dados para interpolar ({len(df_dados)}). Mínimo necessário: 3")
         return
-    
+
     uf, mun = carregar_shapefiles()
     if uf is None or mun is None:
         return
-    
+
     gdf = gpd.GeoDataFrame(
         df_dados,
         geometry=gpd.points_from_xy(
@@ -366,39 +373,39 @@ def gerar_mapa_interpolado(df_dados, coluna_valor, titulo, nome_arquivo, cmap, u
         ),
         crs="EPSG:4326"
     )
-    
+
     resultado_interp = interpolar_dados(gdf, coluna_valor)
     if resultado_interp[0] is None:
         return
-    
+
     lon_mesh, lat_mesh, grid_valores = resultado_interp
-    
+
     ms_polygon = uf.geometry.union_all()
-    
+
     pontos_grid = np.column_stack([lon_mesh.ravel(), lat_mesh.ravel()])
-    
+
     mascara_dentro = np.array([ms_polygon.contains(Point(p[0], p[1])) for p in pontos_grid])
     mascara_dentro = mascara_dentro.reshape(lon_mesh.shape)
-    
+
     grid_valores_mascarado = np.ma.masked_where(~mascara_dentro, grid_valores)
-    
+
     fig, ax = plt.subplots(figsize=(14, 12))
     fig.patch.set_facecolor('white')
     ax.set_facecolor('white')
-    
+
     limites_mapa = box(-58.5, -24.5, -50.5, -17.0)
     area_fora = limites_mapa.difference(ms_polygon)
     if not area_fora.is_empty:
         gpd.GeoSeries([area_fora]).plot(ax=ax, color='white', alpha=0.3, zorder=0)
-    
+
     im = ax.contourf(lon_mesh, lat_mesh, grid_valores_mascarado, levels=20, cmap=cmap, alpha=0.8)
-    
+
     cbar = plt.colorbar(im, ax=ax, label=unidade, shrink=0.75)
-    
+
     plotar_base_mapa(ax, mun, uf)
-    
+
     gdf.plot(ax=ax, color='black', markersize=50, alpha=0.7, edgecolor='white', linewidth=1.5)
-    
+
     for _, row in gdf.iterrows():
         ax.text(
             row.geometry.x,
@@ -416,24 +423,21 @@ def gerar_mapa_interpolado(df_dados, coluna_valor, titulo, nome_arquivo, cmap, u
                 alpha=0.8
             )
         )
-    
-    titulo_completo = (
-        f"{titulo}\n"
-        f"{data_busca.strftime('%d/%m/%Y')} (UTC)"
-    )
-    
+
+    titulo_completo = f"{titulo}\n{subtitulo}"
+
     configurar_eixo_mapa(ax, titulo_completo)
-    
+
     if ranking_titulo and len(gdf) > 0:
         if ranking_ordem == "maiores":
             ranking = gdf.nlargest(5, coluna_valor)
         else:
             ranking = gdf.nsmallest(5, coluna_valor)
-        
+
         texto_ranking = f"{ranking_titulo}:\n"
         for _, row in ranking.iterrows():
             texto_ranking += f"{row['Estação']}: {row[coluna_valor]:.1f}\n"
-        
+
         ax.text(
             0.97, 0.04,
             texto_ranking,
@@ -449,28 +453,28 @@ def gerar_mapa_interpolado(df_dados, coluna_valor, titulo, nome_arquivo, cmap, u
                 alpha=0.9
             )
         )
-    
+
     adicionar_logos(fig, ax)
-    
+
     plt.tight_layout(rect=[0, 0, 1, 0.93])
-    
-    saida_mapa = PASTA_SAIDA / f"{nome_arquivo}_{data_busca.strftime('%Y%m%d')}_interpolado.png"
+
+    saida_mapa = PASTA_SAIDA / f"{nome_arquivo}_{PERIODO_STR}_interpolado.png"
     plt.savefig(saida_mapa, dpi=300, bbox_inches="tight", facecolor='white', edgecolor='none')
     plt.close()
-    
+
     print(f"🗺️ Mapa interpolado salvo em: {saida_mapa}")
 
 # =====================================================
 # FUNÇÕES ESPECÍFICAS PARA CADA VARIÁVEL
 # =====================================================
-def gerar_mapa_umidade(res_umid, data_busca):
+def gerar_mapa_umidade(res_umid, subtitulo):
     """Gera mapas pontuais e interpolados de umidade relativa"""
     if not res_umid:
         print("⚠️ Não há dados de umidade para gerar os mapas.")
         return
-    
+
     df_umidade = pd.DataFrame(res_umid).copy()
-    
+
     df_umidade_com_coord = []
     for _, est in df_estacoes.iterrows():
         nome_est = formatar_nome_estacao(est["DC_NOME"])
@@ -481,10 +485,10 @@ def gerar_mapa_umidade(res_umid, data_busca):
                 "Latitude": float(est["VL_LATITUDE"]),
                 "Longitude": float(est["VL_LONGITUDE"])
             })
-    
+
     if df_umidade_com_coord:
         df_umidade_plot = pd.DataFrame(df_umidade_com_coord)
-        
+
         gerar_mapa_pontual(
             df_umidade_plot,
             "Umidade Mín (%)",
@@ -492,11 +496,11 @@ def gerar_mapa_umidade(res_umid, data_busca):
             "Mapa_Umidade_MS",
             "YlGnBu",
             "Umidade (%)",
-            data_busca,
+            subtitulo,
             "5 MENORES UMIDADES",
             "menores"
         )
-        
+
         gerar_mapa_interpolado(
             df_umidade_plot,
             "Umidade Mín (%)",
@@ -504,19 +508,19 @@ def gerar_mapa_umidade(res_umid, data_busca):
             "Mapa_Umidade_MS",
             "YlGnBu",
             "Umidade (%)",
-            data_busca,
+            subtitulo,
             "5 MENORES UMIDADES",
             "menores"
         )
 
-def gerar_mapa_chuva(res_chuva, data_busca):
-    """Gera mapas pontuais e interpolados de chuva acumulada (24h)"""
+def gerar_mapa_chuva(res_chuva, subtitulo):
+    """Gera mapas pontuais e interpolados de chuva acumulada no período"""
     if not res_chuva:
         print("⚠️ Não há dados de chuva para gerar os mapas.")
         return
-    
+
     df_chuva = pd.DataFrame(res_chuva).copy()
-    
+
     df_chuva_com_coord = []
     for _, est in df_estacoes.iterrows():
         nome_est = formatar_nome_estacao(est["DC_NOME"])
@@ -524,47 +528,47 @@ def gerar_mapa_chuva(res_chuva, data_busca):
             chuva_row = df_chuva[df_chuva["Estação"] == nome_est]
             df_chuva_com_coord.append({
                 "Estação": nome_est,
-                "Chuva 24h (mm)": chuva_row["Acumulado 24h"].values[0],
+                "Chuva Período (mm)": chuva_row["Acumulado Período"].values[0],
                 "Latitude": float(est["VL_LATITUDE"]),
                 "Longitude": float(est["VL_LONGITUDE"])
             })
-    
+
     if df_chuva_com_coord:
         df_chuva_plot = pd.DataFrame(df_chuva_com_coord)
-        
-        # CHUVA 24 HORAS
-        df_chuva_24h = df_chuva_plot[df_chuva_plot["Chuva 24h (mm)"] > 0].copy()
-        if not df_chuva_24h.empty:
-            df_chuva_24h = df_chuva_24h[["Estação", "Chuva 24h (mm)", "Latitude", "Longitude"]]
-            df_chuva_24h = df_chuva_24h.rename(columns={"Chuva 24h (mm)": "Chuva (mm)"})
-            
+
+        # CHUVA DO PERÍODO (apenas estações com chuva > 0)
+        df_chuva_periodo = df_chuva_plot[df_chuva_plot["Chuva Período (mm)"] > 0].copy()
+        if not df_chuva_periodo.empty:
+            df_chuva_periodo = df_chuva_periodo[["Estação", "Chuva Período (mm)", "Latitude", "Longitude"]]
+            df_chuva_periodo = df_chuva_periodo.rename(columns={"Chuva Período (mm)": "Chuva (mm)"})
+
             gerar_mapa_pontual(
-                df_chuva_24h,
+                df_chuva_periodo,
                 "Chuva (mm)",
-                "Chuva acumulada em 24 horas - Mato Grosso do Sul",
-                "Mapa_Chuva_24h_MS",
+                f"Chuva acumulada em {NUM_DIAS} dias - Mato Grosso do Sul",
+                "Mapa_Chuva_Periodo_MS",
                 "Blues",
                 "Chuva (mm)",
-                data_busca,
+                subtitulo,
                 "5 MAIORES ACUMULADOS",
                 "maiores"
             )
-            
+
             gerar_mapa_interpolado(
-                df_chuva_24h,
+                df_chuva_periodo,
                 "Chuva (mm)",
-                "Chuva acumulada em 24 horas - Mato Grosso do Sul",
-                "Mapa_Chuva_24h_MS",
+                f"Chuva acumulada em {NUM_DIAS} dias - Mato Grosso do Sul",
+                "Mapa_Chuva_Periodo_MS",
                 "Blues",
                 "Chuva (mm)",
-                data_busca,
+                subtitulo,
                 "5 MAIORES ACUMULADOS",
                 "maiores"
             )
         else:
-            print("⚠️ Não há chuva acumulada em 24h para gerar mapas")
+            print(f"⚠️ Não há chuva acumulada no período para gerar mapas")
 
-def gerar_mapa_temperatura(res_temp_min, res_temp_max, data_busca):
+def gerar_mapa_temperatura(res_temp_min, res_temp_max, subtitulo):
     """Gera mapas de Mato Grosso do Sul com valores de temperatura"""
     if not res_temp_min and not res_temp_max:
         print("⚠️ Não há dados de temperatura para gerar os mapas.")
@@ -573,7 +577,7 @@ def gerar_mapa_temperatura(res_temp_min, res_temp_max, data_busca):
     # TEMPERATURA MÍNIMA
     if res_temp_min:
         df_temp_min = pd.DataFrame(res_temp_min).copy()
-        
+
         df_temp_min_com_coord = []
         for _, est in df_estacoes.iterrows():
             nome_est = formatar_nome_estacao(est["DC_NOME"])
@@ -584,10 +588,10 @@ def gerar_mapa_temperatura(res_temp_min, res_temp_max, data_busca):
                     "Latitude": float(est["VL_LATITUDE"]),
                     "Longitude": float(est["VL_LONGITUDE"])
                 })
-        
+
         if df_temp_min_com_coord:
             df_temp_min_plot = pd.DataFrame(df_temp_min_com_coord)
-            
+
             gerar_mapa_pontual(
                 df_temp_min_plot,
                 "Temperatura Mínima (°C)",
@@ -595,11 +599,11 @@ def gerar_mapa_temperatura(res_temp_min, res_temp_max, data_busca):
                 "Mapa_Temp_Min_MS",
                 "coolwarm",
                 "Temperatura (°C)",
-                data_busca,
+                subtitulo,
                 "5 MENORES TEMPERATURAS",
                 "menores"
             )
-            
+
             gerar_mapa_interpolado(
                 df_temp_min_plot,
                 "Temperatura Mínima (°C)",
@@ -607,7 +611,7 @@ def gerar_mapa_temperatura(res_temp_min, res_temp_max, data_busca):
                 "Mapa_Temp_Min_MS",
                 "coolwarm",
                 "Temperatura (°C)",
-                data_busca,
+                subtitulo,
                 "5 MENORES TEMPERATURAS",
                 "menores"
             )
@@ -615,7 +619,7 @@ def gerar_mapa_temperatura(res_temp_min, res_temp_max, data_busca):
     # TEMPERATURA MÁXIMA
     if res_temp_max:
         df_temp_max = pd.DataFrame(res_temp_max).copy()
-        
+
         df_temp_max_com_coord = []
         for _, est in df_estacoes.iterrows():
             nome_est = formatar_nome_estacao(est["DC_NOME"])
@@ -626,10 +630,10 @@ def gerar_mapa_temperatura(res_temp_min, res_temp_max, data_busca):
                     "Latitude": float(est["VL_LATITUDE"]),
                     "Longitude": float(est["VL_LONGITUDE"])
                 })
-        
+
         if df_temp_max_com_coord:
             df_temp_max_plot = pd.DataFrame(df_temp_max_com_coord)
-            
+
             gerar_mapa_pontual(
                 df_temp_max_plot,
                 "Temperatura Máxima (°C)",
@@ -637,11 +641,11 @@ def gerar_mapa_temperatura(res_temp_min, res_temp_max, data_busca):
                 "Mapa_Temp_Max_MS",
                 "YlOrRd",
                 "Temperatura (°C)",
-                data_busca,
+                subtitulo,
                 "5 MAIORES TEMPERATURAS",
                 "maiores"
             )
-            
+
             gerar_mapa_interpolado(
                 df_temp_max_plot,
                 "Temperatura Máxima (°C)",
@@ -649,12 +653,12 @@ def gerar_mapa_temperatura(res_temp_min, res_temp_max, data_busca):
                 "Mapa_Temp_Max_MS",
                 "YlOrRd",
                 "Temperatura (°C)",
-                data_busca,
+                subtitulo,
                 "5 MAIORES TEMPERATURAS",
                 "maiores"
             )
 
-def gerar_mapa_rajadas(res_vento, data_busca):
+def gerar_mapa_rajadas(res_vento, subtitulo):
     """Gera mapas de rajadas de vento"""
     if not res_vento:
         print("⚠️ Não há dados de vento para gerar os mapas.")
@@ -675,7 +679,7 @@ def gerar_mapa_rajadas(res_vento, data_busca):
         return
 
     df_vento_basico = df_vento[["Estação", "Rajada (km/h)", "Latitude", "Longitude"]].copy()
-    
+
     gerar_mapa_pontual(
         df_vento_basico,
         "Rajada (km/h)",
@@ -683,11 +687,11 @@ def gerar_mapa_rajadas(res_vento, data_busca):
         "Mapa_Rajadas_MS",
         "turbo",
         "Velocidade (km/h)",
-        data_busca,
+        subtitulo,
         "5 MAIORES RAJADAS",
         "maiores"
     )
-    
+
     gerar_mapa_interpolado(
         df_vento_basico,
         "Rajada (km/h)",
@@ -695,7 +699,7 @@ def gerar_mapa_rajadas(res_vento, data_busca):
         "Mapa_Rajadas_Interpolado_MS",
         "turbo",
         "Velocidade (km/h)",
-        data_busca,
+        subtitulo,
         "5 MAIORES RAJADAS",
         "maiores"
     )
@@ -704,15 +708,21 @@ def gerar_mapa_rajadas(res_vento, data_busca):
 # PROCESSAMENTO
 # =====================================================
 print("=" * 60)
-print("📊 RELATÓRIO HISTÓRICO INMET - MATO GROSSO DO SUL")
+print("📊 RELATÓRIO DE PERÍODO INMET - MATO GROSSO DO SUL")
 print("=" * 60)
-print(f"📅 Data de busca: {DATA_BUSCA.strftime('%d/%m/%Y')} (UTC)")
-print(f"📅 Período: {DATA_INI.strftime('%d/%m/%Y %H:%M')} até {DATA_FIM.strftime('%d/%m/%Y %H:%M')} (UTC)")
+print(f"📅 Período: {TEXTO_PERIODO}")
+print(f"📅 Início: {DATA_INICIO.strftime('%d/%m/%Y %H:%M')} (UTC)")
+print(f"📅 Fim:    {DATA_FINAL.strftime('%d/%m/%Y %H:%M')} (UTC)")
 print("=" * 60)
 
 if TOKEN_INMET == "SEU_TOKEN_AQUI":
     print("❌ ERRO: Você precisa substituir 'SEU_TOKEN_AQUI' pelo seu token válido do INMET!")
     print("   Para obter um token, acesse: https://portal.inmet.gov.br/paginas/cadastro")
+    exit()
+
+# Validação das datas
+if DATA_FINAL < DATA_INICIO:
+    print("❌ ERRO: A DATA_FINAL deve ser maior ou igual à DATA_INICIO!")
     exit()
 
 try:
@@ -738,81 +748,70 @@ for _, est in df_estacoes.iterrows():
     if df_full is None or df_full.empty:
         print(f"    ⚠️ Sem dados para esta estação")
         continue
-    
+
     estacoes_com_dados += 1
+    print(f"    📊 Total de registros no período: {len(df_full)}")
 
-    # Filtrar apenas o dia específico
-    inicio_dia = DATA_BUSCA.replace(hour=0, minute=0, second=0, microsecond=0)
-    fim_dia = DATA_BUSCA.replace(hour=23, minute=59, second=59, microsecond=999999)
-    df_dia = df_full[(df_full['dt_utc'] >= inicio_dia) & (df_full['dt_utc'] <= fim_dia)]
+    # ---------- TEMPERATURA MÍNIMA DO PERÍODO ----------
+    tn = df_full["TEM_MIN"].min()
+    if not pd.isna(tn):
+        idx_min = df_full["TEM_MIN"].idxmin()
+        dt_min_utc = df_full.loc[idx_min, 'dt_utc']
+        dt_min_local = df_full.loc[idx_min, 'dt_local']
 
-    print(f"    📊 Total de registros: {len(df_full)} | Dia: {len(df_dia)}")
+        res_temp_min.append({
+            "Estação": nome,
+            "Temperatura Mínima (°C)": tn,
+            "Data/Hora (UTC)": dt_min_utc.strftime('%d/%m/%Y %H:%M'),
+            "Data/Hora (MS)": dt_min_local.strftime('%d/%m/%Y %H:%M')
+        })
 
-    if not df_dia.empty:
-        # Temperatura mínima do dia
-        tn = df_dia["TEM_MIN"].min()
-        if not pd.isna(tn):
-            idx_min = df_dia["TEM_MIN"].idxmin()
-            hora_utc = df_dia.loc[idx_min, 'dt_utc'].strftime('%H:%M')
-            hora_local = df_dia.loc[idx_min, 'dt_local'].strftime('%H:%M')
-            
-            res_temp_min.append({
-                "Estação": nome,
-                "Temperatura Mínima (°C)": tn,
-                "Hora (UTC)": hora_utc,
-                "Hora (MS)": hora_local
-            })
-        
-        # Temperatura máxima do dia
-        tx = df_dia["TEM_MAX"].max()
-        if not pd.isna(tx):
-            idx_max = df_dia["TEM_MAX"].idxmax()
-            hora_utc = df_dia.loc[idx_max, 'dt_utc'].strftime('%H:%M')
-            hora_local = df_dia.loc[idx_max, 'dt_local'].strftime('%H:%M')
-            
-            res_temp_max.append({
-                "Estação": nome,
-                "Temperatura Máxima (°C)": tx,
-                "Hora (UTC)": hora_utc,
-                "Hora (MS)": hora_local
-            })
-        
-        # Umidade mínima do dia
-        un = df_dia["UMD_MIN"].min()
-        if not pd.isna(un):
-            res_umid.append({
-                "Estação": nome, 
-                "Umidade Mín (%)": un
-            })
-        
-        # Rajada máxima do dia
-        vx = df_dia["VEN_RAJ"].max()
-        if not pd.isna(vx):
-            idx_rajada = df_dia["VEN_RAJ"].idxmax()
-            dir_vento = None
-            if "VEN_DIR" in df_dia.columns:
-                dir_vento = df_dia.loc[idx_rajada, "VEN_DIR"]
-                if pd.isna(dir_vento):
-                    dir_vento = None
-            
-            res_vento.append({
-                "Estação": nome,
-                "Rajada (km/h)": round(vx * 3.6, 1),
-                "Direção (°)": dir_vento,
-                "Latitude": est["VL_LATITUDE"],
-                "Longitude": est["VL_LONGITUDE"]
-            })
+    # ---------- TEMPERATURA MÁXIMA DO PERÍODO ----------
+    tx = df_full["TEM_MAX"].max()
+    if not pd.isna(tx):
+        idx_max = df_full["TEM_MAX"].idxmax()
+        dt_max_utc = df_full.loc[idx_max, 'dt_utc']
+        dt_max_local = df_full.loc[idx_max, 'dt_local']
 
-    # Chuva acumulada no dia específico
-    c_dia = calcular_chuva_periodo(df_full, DATA_BUSCA)
-    c_24h = calcular_acumulado_periodo(df_full, DATA_BUSCA, DATA_BUSCA + timedelta(hours=24))
-    c_48h = calcular_acumulado_periodo(df_full, DATA_BUSCA - timedelta(hours=24), DATA_BUSCA + timedelta(hours=24))
-    
+        res_temp_max.append({
+            "Estação": nome,
+            "Temperatura Máxima (°C)": tx,
+            "Data/Hora (UTC)": dt_max_utc.strftime('%d/%m/%Y %H:%M'),
+            "Data/Hora (MS)": dt_max_local.strftime('%d/%m/%Y %H:%M')
+        })
+
+    # ---------- UMIDADE MÍNIMA DO PERÍODO ----------
+    un = df_full["UMD_MIN"].min()
+    if not pd.isna(un):
+        res_umid.append({
+            "Estação": nome,
+            "Umidade Mín (%)": un
+        })
+
+    # ---------- RAJADA MÁXIMA DO PERÍODO ----------
+    vx = df_full["VEN_RAJ"].max()
+    if not pd.isna(vx):
+        idx_rajada = df_full["VEN_RAJ"].idxmax()
+        dir_vento = None
+        if "VEN_DIR" in df_full.columns:
+            dir_vento = df_full.loc[idx_rajada, "VEN_DIR"]
+            if pd.isna(dir_vento):
+                dir_vento = None
+
+        res_vento.append({
+            "Estação": nome,
+            "Rajada (km/h)": round(vx * 3.6, 1),
+            "Direção (°)": dir_vento,
+            "Latitude": est["VL_LATITUDE"],
+            "Longitude": est["VL_LONGITUDE"]
+        })
+
+    # ---------- CHUVA ACUMULADA NO PERÍODO ----------
+    c_periodo = calcular_acumulado_periodo(df_full, DATA_INI, DATA_FIM)
+
     res_chuva.append({
         "Estação": nome,
-        "Chuva Dia (00-23h UTC)": c_dia,
-        "Acumulado 24h": c_24h,
-        "Acumulado 48h": c_48h,
+        "Acumulado Período": c_periodo,
         "Latitude": est["VL_LATITUDE"],
         "Longitude": est["VL_LONGITUDE"]
     })
@@ -828,7 +827,7 @@ print(f"   - Registros de vento: {len(res_vento)}")
 print(f"   - Registros de chuva: {len(res_chuva)}")
 
 # =====================================================
-# GERAÇÃO DO EXCEL (apenas se houver dados)
+# GERAÇÃO DO EXCEL
 # =====================================================
 if any([res_temp_min, res_temp_max, res_umid, res_vento, res_chuva]):
     with pd.ExcelWriter(ARQUIVO_SAIDA, engine="openpyxl") as writer:
@@ -854,7 +853,7 @@ if any([res_temp_min, res_temp_max, res_umid, res_vento, res_chuva]):
 
         if res_chuva:
             df_chuva = pd.DataFrame(res_chuva)
-            df_chuva.sort_values("Acumulado 24h", ascending=False)\
+            df_chuva.sort_values("Acumulado Período", ascending=False)\
                 .to_excel(writer, sheet_name="Chuva", index=False)
 
         header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
@@ -866,7 +865,7 @@ if any([res_temp_min, res_temp_max, res_umid, res_vento, res_chuva]):
                 cell.fill, cell.font, cell.alignment = header_fill, header_font, Alignment(horizontal="center")
             for col in ws.columns:
                 ws.column_dimensions[col[0].column_letter].width = 25
-    
+
     print(f"\n✅ Relatório Excel salvo em: {ARQUIVO_SAIDA}")
 else:
     print("\n⚠️ Nenhum dado foi coletado. O arquivo Excel não será gerado.")
@@ -876,19 +875,22 @@ else:
 # =====================================================
 print("\n🗺️ Gerando mapas...")
 
+SUBTITULO = f"Período: {TEXTO_PERIODO} (UTC)"
+
 # Temperatura
-gerar_mapa_temperatura(res_temp_min, res_temp_max, DATA_BUSCA)
+gerar_mapa_temperatura(res_temp_min, res_temp_max, SUBTITULO)
 
 # Umidade
-gerar_mapa_umidade(res_umid, DATA_BUSCA)
+gerar_mapa_umidade(res_umid, SUBTITULO)
 
 # Chuva
-gerar_mapa_chuva(res_chuva, DATA_BUSCA)
+gerar_mapa_chuva(res_chuva, SUBTITULO)
 
 # Vento
-gerar_mapa_rajadas(res_vento, DATA_BUSCA)
+gerar_mapa_rajadas(res_vento, SUBTITULO)
 
 print("=" * 60)
-print(f"✅ PROCESSAMENTO CONCLUÍDO PARA {DATA_BUSCA.strftime('%d/%m/%Y')}")
+print(f"✅ PROCESSAMENTO CONCLUÍDO PARA O PERÍODO")
+print(f"📅 {TEXTO_PERIODO}")
 print(f"📁 Todos os arquivos salvos em: {PASTA_SAIDA}")
 print("=" * 60)
