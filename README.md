@@ -155,6 +155,17 @@ Os logos ficam em `img/`, em **PNG com fundo transparente** — uma imagem com f
 
 Ficam em [`modulos/config.py`](modulos/config.py): UF, pastas, endereços e tempos limite da API, limites e resolução dos mapas, posição dos logos e parâmetros da interpolação.
 
+## Testes
+
+Os testes usam uma API do INMET simulada, então não precisam de token nem de internet:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+Rode os testes antes de cada commit: eles conferem as janelas de tempo, os cálculos, o acesso à API e a execução completa (Excel e mapas) nos três modos.
+
 ## Estrutura do repositório
 
 ```
@@ -167,11 +178,15 @@ Ficam em [`modulos/config.py`](modulos/config.py): UF, pastas, endereços e temp
 │   ├── mapas.py          # Mapas pontuais e interpolados
 │   └── excel.py          # Relatório Excel
 ├── ferramentas/          # Scripts auxiliares (ex.: gerar o shapefile simplificado dos municípios)
+├── tests/                # Testes automatizados (pytest), com a API do INMET simulada
+├── docs/                 # Documentos da equipe (ex.: questões em aberto para a meteorologia)
 ├── shp/                  # Shapefiles: limite estadual e municípios (original e simplificado)
 ├── img/                  # Logos inseridos nos mapas (PNG com fundo transparente)
 ├── saida/                # Resultados gerados (fora do controle de versão)
 ├── legado/               # Scripts originais, mantidos para comparação durante a validação
 ├── requirements.txt
+├── requirements-dev.txt  # Dependências de desenvolvimento (testes)
+├── pytest.ini            # Configuração dos testes
 ├── .env                  # Token do INMET (local, fora do controle de versão)
 ├── .env.example          # Modelo do arquivo .env
 └── README.md
@@ -211,6 +226,8 @@ Os três scripts de `legado/` foram unificados no `main.py`. Diferenças nos res
 - **Desempenho:** shapefiles, logos e máscara do estado são carregados uma única vez por execução, e os limites municipais usam uma versão simplificada (~5% dos vértices, sem diferença visível).
 
 ## Limitações conhecidas (em revisão)
+
+Estes pontos dependem de decisão da equipe de meteorologia e estão detalhados, com as opções, em [`docs/questoes_meteorologia.md`](docs/questoes_meteorologia.md).
 
 - Os mapas de chuva interpolados excluem as estações sem chuva, o que pode espalhar chuva sobre áreas secas.
 - A convenção de horário das leituras das 00 UTC (se pertencem ao dia anterior ou ao dia atual) precisa ser validada pela equipe de meteorologia.
