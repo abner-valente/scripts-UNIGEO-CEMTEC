@@ -166,7 +166,8 @@ Ficam em [`modulos/config.py`](modulos/config.py): UF, pastas, endereços e temp
 │   ├── calculos.py       # Extremos, acumulados de chuva e interpolação IDW
 │   ├── mapas.py          # Mapas pontuais e interpolados
 │   └── excel.py          # Relatório Excel
-├── shp/                  # Shapefiles: limite estadual (MS_UF_2022) e municípios (MS_mun)
+├── ferramentas/          # Scripts auxiliares (ex.: gerar o shapefile simplificado dos municípios)
+├── shp/                  # Shapefiles: limite estadual e municípios (original e simplificado)
 ├── img/                  # Logos inseridos nos mapas (PNG com fundo transparente)
 ├── saida/                # Resultados gerados (fora do controle de versão)
 ├── legado/               # Scripts originais, mantidos para comparação durante a validação
@@ -183,7 +184,10 @@ Ficam em [`modulos/config.py`](modulos/config.py): UF, pastas, endereços e temp
 - **API do INMET** (`apitempo.inmet.gov.br`)
   - `/estacoes/T` — lista de estações automáticas (sem token)
   - `/token/estacao/{data_ini}/{data_fim}/{codigo}/{token}` — dados horários de uma estação
-- **Shapefiles** — `MS_UF_2022` (limite estadual, malha IBGE 2022) e `MS_mun` (79 municípios), em SIRGAS 2000 (EPSG:4674), reprojetados para WGS 84 (EPSG:4326) na execução.
+- **Shapefiles** (SIRGAS 2000, EPSG:4674, reprojetados para WGS 84/EPSG:4326 na execução):
+  - `MS_UF_2022` — limite estadual (malha IBGE 2022).
+  - `MS_mun` — limites dos 79 municípios, versão original e detalhada (~755 mil vértices).
+  - `MS_mun_simplificado` — versão usada nos mapas, simplificada com tolerância de 0,001° (~100 m, menos de meio pixel): ~5% dos vértices e sem diferença visível. Serve só para desenho; para cálculos de área ou análises espaciais, use o original. Se a malha municipal for atualizada, substitua os arquivos `MS_mun.*` e gere a versão simplificada de novo com `python ferramentas/simplificar_municipios.py`.
 
 ## Notas metodológicas
 
@@ -204,7 +208,7 @@ Os três scripts de `legado/` foram unificados no `main.py`. Diferenças nos res
 - **Mapa de rajadas com direção:** gerado em todos os modos (antes, só no tempo real).
 - **Títulos dos mapas no tempo real:** mostram a janela real de cada variável (ex.: a temperatura mínima indica "desde 00 UTC").
 - **Logos:** em PNG com fundo transparente e posicionados em relação à moldura do mapa — mesmo lugar e proporção nos mapas pontuais e interpolados (antes, nos pontuais, um logo cobria o outro).
-- **Desempenho:** shapefiles, logos e máscara do estado são carregados uma única vez por execução.
+- **Desempenho:** shapefiles, logos e máscara do estado são carregados uma única vez por execução, e os limites municipais usam uma versão simplificada (~5% dos vértices, sem diferença visível).
 
 ## Limitações conhecidas (em revisão)
 

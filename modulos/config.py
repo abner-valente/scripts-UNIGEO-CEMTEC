@@ -29,7 +29,9 @@ PASTA_IMG = RAIZ / "img"
 PASTA_SAIDA = RAIZ / "saida"
 
 SHAPE_UF = PASTA_SHP / "MS_UF_2022.shp"
-SHAPE_MUN = PASTA_SHP / "MS_mun.shp"
+# Versão simplificada (~100 m) de MS_mun.shp, gerada por ferramentas/simplificar_municipios.py:
+# visualmente idêntica nos mapas e bem mais leve para desenhar.
+SHAPE_MUN = PASTA_SHP / "MS_mun_simplificado.shp"
 
 # =====================================================
 # CREDENCIAIS
