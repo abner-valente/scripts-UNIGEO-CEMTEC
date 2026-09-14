@@ -212,7 +212,7 @@ Os testes também rodam automaticamente no GitHub (GitHub Actions, em Linux, com
 - **Horários:** a API do INMET retorna os dados em UTC. As temperaturas mínima e máxima trazem a data/hora em UTC e no horário local de MS (`America/Campo_Grande`, UTC−4).
 - **Janelas de tempo:** todos os recortes usam o intervalo `[início, fim)` — a leitura das 00 UTC do dia inicial entra e a das 00 UTC do dia seguinte ao final não entra.
 - **Rajada:** `VEN_RAJ` é convertida de m/s para km/h (× 3,6). A direção registrada é a do horário da rajada máxima.
-- **Interpolação:** IDW (inverso do quadrado da distância) com os 8 vizinhos mais próximos, em uma grade de 100 × 100 pontos sobre longitude −58,5 a −50,5 e latitude −24,5 a −17,0. A distância é calculada em graus. São necessárias ao menos 3 estações.
+- **Interpolação:** IDW (inverso do quadrado da distância) com os 8 vizinhos mais próximos, em uma grade de 100 × 100 pontos sobre longitude −58,5 a −50,5 e latitude −24,5 a −17,0. A distância é calculada em graus. São necessárias ao menos 3 estações. A superfície é calculada até um pouco além da divisa e recortada exatamente pelo contorno de MS.
 - **Mapas de chuva:** consideram somente as estações com acumulado maior que zero.
 
 ## Mudanças em relação aos scripts legados
@@ -226,6 +226,7 @@ Os três scripts de `legado/` foram unificados no `main.py`. Diferenças nos res
 - **Mapa de rajadas com direção:** gerado em todos os modos (antes, só no tempo real).
 - **Títulos dos mapas no tempo real:** mostram a janela real de cada variável (ex.: a temperatura mínima indica "desde 00 UTC").
 - **Logos:** em PNG com fundo transparente e posicionados em relação à moldura do mapa — mesmo lugar e proporção nos mapas pontuais e interpolados (antes, nos pontuais, um logo cobria o outro).
+- **Bordas dos mapas interpolados:** a cor preenche o estado até a divisa. Antes, a superfície era cortada pela grade de cálculo (células de ~8 km) e deixava falhas em degrau junto às bordas.
 - **Desempenho:** shapefiles, logos e máscara do estado são carregados uma única vez por execução, e os limites municipais usam uma versão simplificada (~5% dos vértices, sem diferença visível).
 
 ## Limitações conhecidas (em revisão)

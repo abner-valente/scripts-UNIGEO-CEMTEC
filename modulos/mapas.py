@@ -7,6 +7,7 @@ import matplotlib
 
 matplotlib.use("Agg")  # gera os arquivos sem abrir janelas (permite rodar agendado)
 
+import matplotlib.path as mpath
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -42,7 +43,8 @@ class BaseCartografica:
     municipios: gpd.GeoDataFrame
     lon_grade: np.ndarray
     lat_grade: np.ndarray
-    dentro_uf: np.ndarray  # máscara: pontos da grade dentro do estado
+    dentro_uf: np.ndarray    # máscara: pontos da grade dentro do estado, com margem de 2 células
+    contorno_uf: mpath.Path  # contorno exato do estado, usado para recortar a superfície interpolada
     logos: list
 
 
@@ -52,7 +54,11 @@ def carregar_base() -> BaseCartografica:
     lon_grade, lat_grade = calculos.criar_grade(
         (config.LON_MIN, config.LON_MAX, config.LAT_MIN, config.LAT_MAX), config.RESOLUCAO_GRADE
     )
-    dentro_uf = shapely.contains_xy(uf.geometry.union_all(), lon_grade, lat_grade)
+    # A superfície é calculada um pouco além da divisa (2 células da grade) e depois recortada
+    # exatamente pelo contorno do estado: a cor chega até a divisa, sem falhas em degrau.
+    estado = uf.geometry.union_all()
+    passo = max(config.LON_MAX - config.LON_MIN, config.LAT_MAX - config.LAT_MIN) / (config.RESOLUCAO_GRADE - 1)
+    dentro_uf = shapely.contains_xy(estado.buffer(2 * passo), lon_grade, lat_grade)
 
     logos = []
     for arquivo, retangulo in config.LOGOS:
@@ -60,7 +66,7 @@ def carregar_base() -> BaseCartografica:
             logos.append((plt.imread(arquivo), retangulo))
         else:
             print(f"⚠️ Logo não encontrado: {arquivo}")
-    return BaseCartografica(uf, municipios, lon_grade, lat_grade, dentro_uf, logos)
+    return BaseCartografica(uf, municipios, lon_grade, lat_grade, dentro_uf, _caminho_matplotlib(estado), logos)
 
 
 def especificacoes(periodo: Periodo) -> list[EspecMapa]:
@@ -154,6 +160,7 @@ def mapa_interpolado(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartogra
 
     fig, ax = _nova_figura((14, 12))
     superficie = ax.contourf(base.lon_grade, base.lat_grade, grade, levels=20, cmap=espec.cmap, alpha=0.8)
+    superficie.set_clip_path(base.contorno_uf, transform=ax.transData)
     fig.colorbar(superficie, ax=ax, label=espec.unidade, shrink=0.75)
     _desenhar_limites(ax, base)
     gdf.plot(ax=ax, color="black", markersize=50, alpha=0.7, edgecolor="white", linewidth=1.5)
@@ -186,6 +193,14 @@ def _preparar_dados(tabela: pd.DataFrame | None, espec: EspecMapa) -> gpd.GeoDat
         return None
     return gpd.GeoDataFrame(dados, geometry=gpd.points_from_xy(dados["Longitude"], dados["Latitude"]),
                             crs="EPSG:4326")
+
+
+def _caminho_matplotlib(geometria) -> mpath.Path:
+    """Converte um Polygon ou MultiPolygon em caminho do matplotlib, usado para recortar desenhos."""
+    aneis = []
+    for poligono in getattr(geometria, "geoms", [geometria]):
+        aneis += [poligono.exterior, *poligono.interiors]
+    return mpath.Path.make_compound_path(*(mpath.Path(np.asarray(anel.coords)[:, :2], closed=True) for anel in aneis))
 
 
 def _nova_figura(tamanho: tuple[float, float]):
