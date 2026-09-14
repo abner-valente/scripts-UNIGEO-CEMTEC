@@ -19,7 +19,7 @@ warnings.filterwarnings('ignore')
 # CONFIGURAÇÕES
 # =====================================================
 UF = "MS"
-TOKEN_INMET = "***TOKEN_REMOVIDO***"
+TOKEN_INMET = "SEU_TOKEN_AQUI"  # token removido do código: use o arquivo .env do projeto
 
 # TUDO em UTC
 FUSO_UTC = ZoneInfo("UTC")
