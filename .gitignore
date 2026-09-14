@@ -1,0 +1,33 @@
+# Credenciais
+.env
+.env.*
+!.env.example
+
+# Saídas geradas (a pasta saida/ é versionada vazia)
+saida/*
+!saida/.gitkeep
+
+# Saídas dos scripts legados
+saida_historico/
+saida_periodo/
+legado/saida/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# Arquivos temporários do Excel
+~$*
+
+# Editores
+.vscode/
+.idea/
+
+# Sistema operacional
+Thumbs.db
+desktop.ini
+.DS_Store
