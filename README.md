@@ -166,6 +166,8 @@ pytest
 
 Rode os testes antes de cada commit: eles conferem as janelas de tempo, os cálculos, o acesso à API e a execução completa (Excel e mapas) nos três modos.
 
+Os testes também rodam automaticamente no GitHub (GitHub Actions, em Linux, com Python 3.10 e 3.14) a cada push e a cada pull request para a `main`. O resultado aparece como ✓ ou ✗ ao lado de cada commit e na aba **Actions** do repositório, onde também é possível rodá-los manualmente.
+
 ## Estrutura do repositório
 
 ```
@@ -179,6 +181,7 @@ Rode os testes antes de cada commit: eles conferem as janelas de tempo, os cálc
 │   └── excel.py          # Relatório Excel
 ├── ferramentas/          # Scripts auxiliares (ex.: gerar o shapefile simplificado dos municípios)
 ├── tests/                # Testes automatizados (pytest), com a API do INMET simulada
+├── .github/workflows/    # Execução automática dos testes no GitHub (GitHub Actions)
 ├── docs/                 # Documentos da equipe (ex.: questões em aberto para a meteorologia)
 ├── shp/                  # Shapefiles: limite estadual e municípios (original e simplificado)
 ├── img/                  # Logos inseridos nos mapas (PNG com fundo transparente)
