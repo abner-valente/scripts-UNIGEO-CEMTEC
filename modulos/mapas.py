@@ -1,5 +1,5 @@
 """Mapas pontuais e interpolados (IDW) das variáveis meteorológicas."""
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import geopandas as gpd
@@ -15,7 +15,6 @@ import shapely
 from matplotlib.lines import Line2D
 
 from . import calculos, config
-from .config import Periodo
 
 
 @dataclass(frozen=True)
@@ -69,45 +68,9 @@ def carregar_base() -> BaseCartografica:
     return BaseCartografica(uf, municipios, lon_grade, lat_grade, dentro_uf, _caminho_matplotlib(estado), logos)
 
 
-def especificacoes(periodo: Periodo) -> list[EspecMapa]:
-    """Mapas gerados para o período."""
-    uf, sigla = config.NOME_UF, config.UF
-    subtitulo = periodo.descrever_janela(*periodo.janela_extremos)
-
-    mapas = [
-        EspecMapa("Temp_Min", "Temperatura Mínima (°C)", f"Temperatura mínima em {uf}",
-                  periodo.descrever_janela(*periodo.janela_temp_min), f"Mapa_Temp_Min_{sigla}",
-                  "coolwarm", "Temperatura (°C)", "5 MENORES TEMPERATURAS", maiores=False),
-        EspecMapa("Temp_Max", "Temperatura Máxima (°C)", f"Temperatura máxima em {uf}", subtitulo,
-                  f"Mapa_Temp_Max_{sigla}", "YlOrRd", "Temperatura (°C)", "5 MAIORES TEMPERATURAS"),
-        EspecMapa("Umidade", "Umidade Mín (%)", f"Umidade relativa mínima em {uf}", subtitulo,
-                  f"Mapa_Umidade_{sigla}", "YlGnBu", "Umidade (%)", "5 MENORES UMIDADES", maiores=False),
-    ]
-
-    # (coluna, duração no título, sufixo do arquivo, paleta)
-    if periodo.modo == "tempo_real":
-        chuvas = [("Acumulado 24h", "24 horas", "24h", "Blues"), ("Acumulado 48h", "48 horas", "48h", "Purples")]
-    elif periodo.modo == "dia":
-        chuvas = [(periodo.coluna_chuva_principal, "24 horas", "24h", "Blues")]
-    else:
-        chuvas = [(periodo.coluna_chuva_principal, f"{periodo.num_dias} dias", "Periodo", "Blues")]
-    for coluna, duracao, sufixo, cmap in chuvas:
-        mapas.append(EspecMapa(
-            "Chuva", coluna, f"Chuva acumulada em {duracao} - {uf}",
-            periodo.descrever_janela(*periodo.janelas_chuva[coluna]), f"Mapa_Chuva_{sufixo}_{sigla}",
-            cmap, "Chuva (mm)", "5 MAIORES ACUMULADOS", somente_positivos=True,
-        ))
-
-    rajadas = EspecMapa("Vento", "Rajada (km/h)", f"Rajadas de vento em {uf}", subtitulo,
-                        f"Mapa_Rajadas_{sigla}", "turbo", "Velocidade (km/h)", "5 MAIORES RAJADAS")
-    mapas.append(rajadas)
-    mapas.append(replace(rajadas, titulo=f"Rajadas de vento com direção em {uf}",
-                         arquivo=f"Mapa_Rajadas_Direcao_{sigla}", direcao_vento=True))
-    return mapas
-
-
-def gerar_mapas(tabelas: dict[str, pd.DataFrame], periodo: Periodo, pasta: Path) -> None:
-    """Gera todos os mapas do período na pasta indicada."""
+def gerar_mapas(tabelas: dict[str, pd.DataFrame], especificacoes: list[EspecMapa], pasta: Path,
+                identificador: str) -> None:
+    """Gera, na pasta indicada, os mapas descritos pelas especificações (identificador vai no nome dos arquivos)."""
     if not tabelas:
         print("⚠️ Nenhum dado foi coletado. Os mapas não serão gerados.")
         return
@@ -118,11 +81,11 @@ def gerar_mapas(tabelas: dict[str, pd.DataFrame], periodo: Periodo, pasta: Path)
         return
 
     pasta.mkdir(parents=True, exist_ok=True)
-    for espec in especificacoes(periodo):
+    for espec in especificacoes:
         dados = _preparar_dados(tabelas.get(espec.tabela), espec)
         if dados is None:
             continue
-        nome = f"{espec.arquivo}_{periodo.identificador}"
+        nome = f"{espec.arquivo}_{identificador}"
         if espec.direcao_vento:
             mapa_interpolado(dados, espec, base, pasta / f"{nome}.png")
         else:
