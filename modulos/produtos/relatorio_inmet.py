@@ -3,6 +3,9 @@
 Primeiro produto migrado dos scripts da equipe (originais em legado/relatorio_inmet/). Para cada
 estação calcula a temperatura mínima e máxima, a umidade relativa mínima, a rajada máxima (com a
 direção) e a chuva acumulada, e gera uma planilha Excel com uma aba por variável e os mapas de cada uma.
+
+As regras de cálculo seguem as decisões da equipe de meteorologia (docs/questoes_meteorologia.md):
+dias no horário de MS, extremos do tempo real nas últimas 24 h e estações com 0 mm nos mapas de chuva.
 """
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -21,17 +24,10 @@ TITULO = "Relatório INMET — extremos e chuva das estações automáticas"
 # =====================================================
 # JANELAS DE TEMPO DESTE RELATÓRIO
 # =====================================================
-def janela_temp_min(periodo: Periodo) -> tuple[datetime, datetime]:
-    """Intervalo da temperatura mínima. No tempo real, desde 00 UTC do dia atual (regra do script original)."""
-    if periodo.modo == "tempo_real":
-        return periodo.inicio_do_dia, periodo.fim
-    return periodo.janela
-
-
 def janelas_chuva(periodo: Periodo) -> dict[str, tuple[datetime, datetime]]:
     """Colunas de chuva acumulada da planilha e o intervalo de cada uma."""
     if periodo.modo == "tempo_real":
-        janelas = {"Chuva Hoje (desde 00h UTC)": (periodo.inicio_do_dia, periodo.fim)}
+        janelas = {"Chuva Hoje (desde 00h MS)": (periodo.inicio_do_dia, periodo.fim)}
         for horas in (12, 24, 48, 72):
             janelas[f"Acumulado {horas}h"] = (periodo.fim - timedelta(hours=horas), periodo.fim)
         return janelas
@@ -54,16 +50,15 @@ def resumir_estacao(dados: pd.DataFrame, estacao: pd.Series, periodo: Periodo) -
     """
     nome = estacao["Estação"]
     coordenadas = {"Latitude": estacao["VL_LATITUDE"], "Longitude": estacao["VL_LONGITUDE"]}
-    dados_tmin = calculos.recortar(dados, *janela_temp_min(periodo))
     dados_periodo = calculos.recortar(dados, *periodo.janela)
     linhas = {}
 
-    indice = calculos.indice_extremo(dados_tmin, "TEM_MIN", minimo=True)
+    indice = calculos.indice_extremo(dados_periodo, "TEM_MIN", minimo=True)
     if indice is not None:
         linhas["Temp_Min"] = {
             "Estação": nome,
-            "Temperatura Mínima (°C)": dados_tmin.at[indice, "TEM_MIN"],
-            **calculos.data_hora(dados_tmin, indice),
+            "Temperatura Mínima (°C)": dados_periodo.at[indice, "TEM_MIN"],
+            **calculos.data_hora(dados_periodo, indice),
             **coordenadas,
         }
 
@@ -129,9 +124,8 @@ def especificacoes_mapas(periodo: Periodo) -> list[EspecMapa]:
     subtitulo = periodo.descrever_janela(*periodo.janela)
 
     especificacoes = [
-        EspecMapa("Temp_Min", "Temperatura Mínima (°C)", f"Temperatura mínima em {uf}",
-                  periodo.descrever_janela(*janela_temp_min(periodo)), f"Mapa_Temp_Min_{sigla}",
-                  "coolwarm", "Temperatura (°C)", "5 MENORES TEMPERATURAS", maiores=False),
+        EspecMapa("Temp_Min", "Temperatura Mínima (°C)", f"Temperatura mínima em {uf}", subtitulo,
+                  f"Mapa_Temp_Min_{sigla}", "coolwarm", "Temperatura (°C)", "5 MENORES TEMPERATURAS", maiores=False),
         EspecMapa("Temp_Max", "Temperatura Máxima (°C)", f"Temperatura máxima em {uf}", subtitulo,
                   f"Mapa_Temp_Max_{sigla}", "YlOrRd", "Temperatura (°C)", "5 MAIORES TEMPERATURAS"),
         EspecMapa("Umidade", "Umidade Mín (%)", f"Umidade relativa mínima em {uf}", subtitulo,
@@ -149,7 +143,7 @@ def especificacoes_mapas(periodo: Periodo) -> list[EspecMapa]:
         especificacoes.append(EspecMapa(
             "Chuva", coluna, f"Chuva acumulada em {duracao} - {uf}",
             periodo.descrever_janela(*janelas_chuva(periodo)[coluna]), f"Mapa_Chuva_{sufixo}_{sigla}",
-            cmap, "Chuva (mm)", "5 MAIORES ACUMULADOS", somente_positivos=True,
+            cmap, "Chuva (mm)", "5 MAIORES ACUMULADOS",
         ))
 
     rajadas = EspecMapa("Vento", "Rajada (km/h)", f"Rajadas de vento em {uf}", subtitulo,

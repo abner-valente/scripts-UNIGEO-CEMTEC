@@ -29,9 +29,8 @@ class EspecMapa:
     cmap: str
     unidade: str
     ranking: str
-    maiores: bool = True             # ranking dos maiores (True) ou dos menores (False)
-    somente_positivos: bool = False  # descarta valores <= 0 (usado na chuva)
-    direcao_vento: bool = False      # desenha as setas de direção do vento
+    maiores: bool = True         # ranking dos maiores (True) ou dos menores (False)
+    direcao_vento: bool = False  # desenha as setas de direção do vento
 
 
 @dataclass
@@ -101,8 +100,9 @@ def mapa_pontual(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartografica
     valores = gdf[espec.coluna]
     amplitude = valores.max() - valores.min()
     tamanho = (valores - valores.min()) / amplitude * 150 + 50 if amplitude else 100
-    gdf.plot(ax=ax, column=espec.coluna, cmap=espec.cmap, markersize=tamanho, edgecolor="black",
-             linewidth=0.8, legend=True, legend_kwds={"label": espec.unidade, "shrink": 0.75})
+    vmin, vmax = _faixa_de_cores(valores)
+    gdf.plot(ax=ax, column=espec.coluna, cmap=espec.cmap, vmin=vmin, vmax=vmax, markersize=tamanho,
+             edgecolor="black", linewidth=0.8, legend=True, legend_kwds={"label": espec.unidade, "shrink": 0.75})
 
     _rotular(ax, gdf, valores.map("{:.1f}".format), tamanho_fonte=8, cor="black",
              fundo="white", borda="none", opacidade=0.75)
@@ -122,7 +122,9 @@ def mapa_interpolado(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartogra
     grade = np.ma.masked_where(~base.dentro_uf, grade)
 
     fig, ax = _nova_figura((14, 12))
-    superficie = ax.contourf(base.lon_grade, base.lat_grade, grade, levels=20, cmap=espec.cmap, alpha=0.8)
+    valores = gdf[espec.coluna]
+    niveis = 20 if valores.max() > valores.min() else np.linspace(*_faixa_de_cores(valores), 11)
+    superficie = ax.contourf(base.lon_grade, base.lat_grade, grade, levels=niveis, cmap=espec.cmap, alpha=0.8)
     superficie.set_clip_path(base.contorno_uf, transform=ax.transData)
     fig.colorbar(superficie, ax=ax, label=espec.unidade, shrink=0.75)
     _desenhar_limites(ax, base)
@@ -149,13 +151,17 @@ def _preparar_dados(tabela: pd.DataFrame | None, espec: EspecMapa) -> gpd.GeoDat
         print(f"⚠️ Sem dados para o mapa: {espec.titulo}")
         return None
     dados = tabela.dropna(subset=[espec.coluna, "Latitude", "Longitude"])
-    if espec.somente_positivos:
-        dados = dados[dados[espec.coluna] > 0]
     if dados.empty:
         print(f"⚠️ Sem valores para o mapa: {espec.titulo}")
         return None
     return gpd.GeoDataFrame(dados, geometry=gpd.points_from_xy(dados["Longitude"], dados["Latitude"]),
                             crs="EPSG:4326")
+
+
+def _faixa_de_cores(valores: pd.Series) -> tuple[float, float]:
+    """Mínimo e máximo da escala de cores. Se todos os valores forem iguais (ex.: dia sem chuva), abre a escala em 1."""
+    vmin, vmax = float(valores.min()), float(valores.max())
+    return (vmin, vmax) if vmax > vmin else (vmin, vmin + 1.0)
 
 
 def _caminho_matplotlib(geometria) -> mpath.Path:

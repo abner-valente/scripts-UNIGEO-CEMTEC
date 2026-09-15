@@ -13,7 +13,7 @@ Desenvolvido pela equipe de meteorologia do **CEMTEC** — Centro de Monitoramen
 ## Como usar
 
 1. Instale as dependências (veja [Instalação](#instalação)) e configure o token do INMET no arquivo `.env` (veja [Configuração](#configuração)).
-2. Em [`main.py`](main.py), escolha o produto e ajuste as datas da consulta (dias em UTC):
+2. Em [`main.py`](main.py), escolha o produto e ajuste as datas da consulta (dias no horário de MS):
 
    ```python
    PRODUTO = "relatorio_inmet"
@@ -46,11 +46,13 @@ python main.py --produto relatorio_inmet --tempo-real
 
 | Variável | Tempo real | Data específica / Período |
 |---|---|---|
-| Temperatura mínima | Desde 00 UTC do dia atual, com data/hora | No dia/período, com data/hora |
+| Temperatura mínima | Últimas 24 h, com data/hora | No dia/período, com data/hora |
 | Temperatura máxima | Últimas 24 h, com data/hora | No dia/período, com data/hora |
 | Umidade relativa mínima | Últimas 24 h | No dia/período |
 | Rajada máxima + direção | Últimas 24 h | No dia/período |
-| Chuva acumulada | Hoje (desde 00 UTC), 12 h, 24 h, 48 h e 72 h | Total do dia/período |
+| Chuva acumulada | Hoje (desde a 00 h de MS), 12 h, 24 h, 48 h e 72 h | Total do dia/período |
+
+Os dias, os horários dos títulos e os nomes das pastas seguem o horário de MS.
 
 ## Como funciona
 
@@ -83,7 +85,7 @@ saida/
     ├── periodo/
     │   └── 20260801_a_20260831/
     └── tempo_real/
-        └── 20260914_1325_UTC/
+        └── 20260914_0925/
 ```
 
 | Modo | Mapas gerados |
@@ -222,11 +224,11 @@ Os scripts da equipe estão sendo migrados aos poucos. Cada um vira um produto e
 
 ## Notas metodológicas
 
-- **Horários:** a API do INMET retorna os dados em UTC. As temperaturas mínima e máxima trazem a data/hora em UTC e no horário local de MS (`America/Campo_Grande`, UTC−4).
-- **Janelas de tempo:** todos os recortes usam o intervalo `[início, fim)` — a leitura das 00 UTC do dia inicial entra e a das 00 UTC do dia seguinte ao final não entra.
+- **Horários:** a API do INMET retorna os dados em UTC. Os dias, as janelas, os títulos e os nomes das pastas seguem o horário de MS (`America/Campo_Grande`, UTC−4); a planilha traz a data/hora das temperaturas em UTC e em MS.
+- **Leituras horárias:** cada leitura do INMET se refere à hora que termina no horário indicado (a das 05 UTC cobre das 04 às 05 UTC). Assim, o dia D — da 00 h às 24 h de MS — reúne as leituras das 05 UTC do dia D às 04 UTC do dia seguinte.
 - **Rajada:** `VEN_RAJ` é convertida de m/s para km/h (× 3,6). A direção registrada é a do horário da rajada máxima.
-- **Interpolação:** IDW (inverso do quadrado da distância) com os 8 vizinhos mais próximos, em uma grade de 100 × 100 pontos sobre longitude −58,5 a −50,5 e latitude −24,5 a −17,0. A distância é calculada em graus. São necessárias ao menos 3 estações. A superfície é calculada até um pouco além da divisa e recortada exatamente pelo contorno de MS.
-- **Mapas de chuva:** consideram somente as estações com acumulado maior que zero.
+- **Interpolação:** IDW (inverso do quadrado da distância) com os 8 vizinhos mais próximos, em uma grade de 100 × 100 pontos sobre longitude −58,5 a −50,5 e latitude −24,5 a −17,0. A distância é medida em quilômetros, numa projeção equidistante centrada em MS. São necessárias ao menos 3 estações. A superfície é calculada até um pouco além da divisa e recortada exatamente pelo contorno de MS.
+- **Mapas de chuva:** incluem as estações com 0 mm, que aparecem no mapa pontual e entram na interpolação. Num dia sem chuva em nenhuma estação, os mapas mostram 0 mm em todo o estado.
 
 ## Mudanças em relação aos scripts legados
 
@@ -237,15 +239,16 @@ Os três scripts de `legado/relatorio_inmet/` foram unificados no produto `relat
 - **Temperaturas:** sempre com data e hora completas, em UTC e em horário de MS.
 - **Coordenadas:** `Latitude` e `Longitude` em todas as abas; a associação é feita pela própria estação, não pelo nome.
 - **Mapa de rajadas com direção:** gerado em todos os modos (antes, só no tempo real).
-- **Títulos dos mapas no tempo real:** mostram a janela real de cada variável (ex.: a temperatura mínima indica "desde 00 UTC").
+- **Dia no horário de MS:** data específica e período usam o dia da 00 h às 24 h de MS (antes, o dia em UTC, com as leituras das 00 às 23 UTC).
+- **Temperatura mínima no tempo real:** usa as últimas 24 horas, como as demais variáveis (antes, desde as 00 UTC do dia).
+- **"Chuva Hoje" no tempo real:** conta desde a 00 h de MS (antes, desde as 00 UTC).
+- **Estações com 0 mm nos mapas de chuva:** aparecem no mapa pontual e entram na interpolação (antes, eram descartadas).
+- **Interpolação em quilômetros:** antes, a distância era medida em graus.
+- **Horários nos títulos e nos nomes das pastas:** no horário de MS (antes, em UTC).
 - **Logos:** em PNG com fundo transparente e posicionados em relação à moldura do mapa — mesmo lugar e proporção nos mapas pontuais e interpolados (antes, nos pontuais, um logo cobria o outro).
 - **Bordas dos mapas interpolados:** a cor preenche o estado até a divisa. Antes, a superfície era cortada pela grade de cálculo (células de ~8 km) e deixava falhas em degrau junto às bordas.
 - **Desempenho:** shapefiles, logos e máscara do estado são carregados uma única vez por execução, e os limites municipais usam uma versão simplificada (~5% dos vértices, sem diferença visível).
 
-## Limitações conhecidas (em revisão)
+## Decisões da equipe de meteorologia
 
-Estes pontos dependem de decisão da equipe de meteorologia e estão detalhados, com as opções, em [`docs/questoes_meteorologia.md`](docs/questoes_meteorologia.md).
-
-- Os mapas de chuva interpolados excluem as estações sem chuva, o que pode espalhar chuva sobre áreas secas.
-- A convenção de horário das leituras das 00 UTC (se pertencem ao dia anterior ou ao dia atual) precisa ser validada pela equipe de meteorologia.
-- No tempo real, a temperatura mínima usa a janela "desde 00 UTC" (20 h do dia anterior no horário de MS), enquanto as demais variáveis usam "últimas 24 h".
+As regras de cálculo acima (dia no horário de MS, janela da temperatura mínima, estações com 0 mm nos mapas de chuva e distância em quilômetros) foram definidas pela equipe de meteorologia em 15/09/2026. As perguntas, as opções e as respostas estão registradas em [`docs/questoes_meteorologia.md`](docs/questoes_meteorologia.md).
