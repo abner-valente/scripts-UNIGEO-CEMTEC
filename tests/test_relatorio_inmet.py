@@ -12,9 +12,13 @@ from modulos.produtos import relatorio_inmet
 ESTACAO = pd.Series({"Estação": "Teste", "VL_LATITUDE": -20.0, "VL_LONGITUDE": -55.0})
 DIA = Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30))
 PERIODO = Periodo.de_datas(date(2026, 8, 1), date(2026, 8, 31))
-AGORA = datetime(2026, 9, 14, 13, 25, tzinfo=FUSO_UTC)
+AGORA = datetime(2026, 9, 14, 13, 25, tzinfo=FUSO_UTC)  # 9h25 em MS
 TEMPO_REAL = Periodo.tempo_real(AGORA)
-COLUNAS_TEMPO_REAL = ["Chuva Hoje (desde 00h UTC)", "Acumulado 12h", "Acumulado 24h", "Acumulado 48h", "Acumulado 72h"]
+COLUNAS_TEMPO_REAL = ["Chuva Hoje (desde 00h MS)", "Acumulado 12h", "Acumulado 24h", "Acumulado 48h", "Acumulado 72h"]
+
+
+def utc(texto):
+    return pd.Timestamp(texto, tz="UTC")
 
 
 # ---------- Janelas de tempo ----------
@@ -25,18 +29,27 @@ def test_colunas_de_chuva_de_cada_modo():
     assert list(relatorio_inmet.janelas_chuva(TEMPO_REAL)) == COLUNAS_TEMPO_REAL
 
 
-def test_temperatura_minima_do_tempo_real_conta_desde_00_utc():
-    assert relatorio_inmet.janela_temp_min(TEMPO_REAL) == (datetime(2026, 9, 14, tzinfo=FUSO_UTC), AGORA)
-    assert relatorio_inmet.janela_temp_min(PERIODO) == PERIODO.janela
-
-
 # ---------- Cálculos por estação ----------
+
+def test_dia_no_horario_de_ms(serie):
+    """Dia 30/07 em MS = leituras das 05 UTC de 30/07 às 04 UTC de 31/07 (cada leitura fecha a hora anterior)."""
+    dados = serie("2026-07-29", "2026-08-01", CHUVA=0.0)
+    dados.loc[dados["dt_utc"] == utc("2026-07-30 04:00"), "CHUVA"] = 50.0  # 23 h–24 h de 29/07 em MS: fica de fora
+    dados.loc[dados["dt_utc"] == utc("2026-07-30 05:00"), "CHUVA"] = 3.0   # 0 h–1 h de 30/07 em MS
+    dados.loc[dados["dt_utc"] == utc("2026-07-31 04:00"), "CHUVA"] = 7.0   # 23 h–24 h de 30/07 em MS
+    assert relatorio_inmet.resumir_estacao(dados, ESTACAO, DIA)["Chuva"]["Acumulado Dia"] == 10.0
+
+
+def test_chuva_do_dia_soma_24_leituras(serie):
+    dados = serie("2026-07-29", "2026-08-01")
+    assert relatorio_inmet.resumir_estacao(dados, ESTACAO, DIA)["Chuva"]["Acumulado Dia"] == 24.0
+
 
 def test_extremos_e_chuva_ficam_restritos_ao_periodo(serie):
     dados = serie("2026-07-31", "2026-09-02")
-    fora = (dados["dt_utc"] < PERIODO.inicio) | (dados["dt_utc"] >= PERIODO.fim)
+    fora = (dados["dt_utc"] <= PERIODO.inicio) | (dados["dt_utc"] > PERIODO.fim)
     dados.loc[fora, ["TEM_MIN", "TEM_MAX", "VEN_RAJ", "CHUVA"]] = [-5.0, 45.0, 40.0, 100.0]
-    dados.loc[dados["dt_utc"] == pd.Timestamp("2026-08-15 18:00", tz="UTC"), "TEM_MAX"] = 38.5
+    dados.loc[dados["dt_utc"] == utc("2026-08-15 18:00"), "TEM_MAX"] = 38.5
 
     resumo = relatorio_inmet.resumir_estacao(dados, ESTACAO, PERIODO)
 
@@ -47,27 +60,31 @@ def test_extremos_e_chuva_ficam_restritos_ao_periodo(serie):
     assert resumo["Chuva"]["Acumulado Período"] == 31 * 24 * 1.0
 
 
+def test_temperatura_minima_do_tempo_real_usa_as_ultimas_24_horas(serie):
+    dados = serie("2026-09-10", "2026-09-14 14:00")
+    dados.loc[dados["dt_utc"] == utc("2026-09-13 20:00"), "TEM_MIN"] = 5.0  # há 17 h: dentro das últimas 24 h
+    dados.loc[dados["dt_utc"] == utc("2026-09-13 10:00"), "TEM_MIN"] = 1.0  # há 27 h: fora
+    linha = relatorio_inmet.resumir_estacao(dados, ESTACAO, TEMPO_REAL)["Temp_Min"]
+    assert linha["Temperatura Mínima (°C)"] == 5.0
+    assert linha["Data/Hora (MS)"] == "13/09/2026 16:00"
+
+
+def test_acumulados_de_chuva_do_tempo_real(serie):
+    dados = serie("2026-09-10", "2026-09-14 14:00")  # 1 mm por hora; última leitura às 13 UTC (9 h em MS)
+    chuva = relatorio_inmet.resumir_estacao(dados, ESTACAO, TEMPO_REAL)["Chuva"]
+    assert chuva["Chuva Hoje (desde 00h MS)"] == 9.0  # leituras das 05 às 13 UTC (0 h às 9 h em MS)
+    assert chuva["Acumulado 12h"] == 12.0
+    assert chuva["Acumulado 24h"] == 24.0
+    assert chuva["Acumulado 48h"] == 48.0
+    assert chuva["Acumulado 72h"] == 72.0
+
+
 def test_rajada_em_km_h_com_a_direcao_do_mesmo_horario(serie):
     dados = serie("2026-07-30", "2026-07-31")
     dados.loc[10, ["VEN_RAJ", "VEN_DIR"]] = [20.0, 225.0]
     linha = relatorio_inmet.resumir_estacao(dados, ESTACAO, DIA)["Vento"]
     assert linha["Rajada (km/h)"] == 72.0
     assert linha["Direção (°)"] == 225.0
-
-
-def test_chuva_do_dia_soma_os_24_registros(serie):
-    dados = serie("2026-07-29", "2026-08-01")
-    assert relatorio_inmet.resumir_estacao(dados, ESTACAO, DIA)["Chuva"]["Acumulado Dia"] == 24.0
-
-
-def test_acumulados_de_chuva_do_tempo_real(serie):
-    dados = serie("2026-09-10", "2026-09-14 14:00")  # 1 mm por hora; última leitura às 13 UTC
-    chuva = relatorio_inmet.resumir_estacao(dados, ESTACAO, TEMPO_REAL)["Chuva"]
-    assert chuva["Chuva Hoje (desde 00h UTC)"] == 14.0  # leituras das 00 às 13 UTC
-    assert chuva["Acumulado 12h"] == 12.0
-    assert chuva["Acumulado 24h"] == 24.0
-    assert chuva["Acumulado 48h"] == 48.0
-    assert chuva["Acumulado 72h"] == 72.0
 
 
 def test_variavel_sem_dados_validos_fica_fora_do_resumo(serie):

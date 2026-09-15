@@ -2,7 +2,9 @@
 
 Durante a reestruturação dos scripts (versão 0.1.1), alguns pontos ficaram em aberto porque **mudam os resultados** e dependem de uma decisão meteorológica. Para cada um estão a situação atual, o problema e as opções. As respostas podem ser anotadas no campo **Decisão**.
 
-Todos os horários estão em UTC (horário de MS = UTC−4).
+> **Situação em 15/09/2026:** todas as questões foram respondidas. As decisões estão anotadas abaixo e aplicadas no código (versão 0.1.1).
+
+Nas descrições abaixo, os horários estão em UTC (horário de MS = UTC−4).
 
 ---
 
@@ -20,7 +22,7 @@ Todos os horários estão em UTC (horário de MS = UTC−4).
 
 E no mapa pontual: as estações com 0 mm devem aparecer (por exemplo, com um marcador cinza)?
 
-**Decisão:**
+**Decisão (15/09/2026):** opção (a) — as estações com 0 mm entram na interpolação e aparecem no mapa pontual.
 
 ---
 
@@ -37,7 +39,7 @@ E no mapa pontual: as estações com 0 mm devem aparecer (por exemplo, com um ma
 - **(c)** Dia no horário de MS: leituras das 05 UTC do dia D às 04 UTC do dia D+1 (da 00 h às 24 h locais).
 - **(d)** Dia pluviométrico (12 às 12 UTC, horário de leitura das estações convencionais): leituras das 13 UTC do dia anterior às 12 UTC do dia D.
 
-**Decisão:**
+**Decisão (15/09/2026):** opção (c) — dia no horário de MS: leituras das 05 UTC do dia D às 04 UTC do dia D+1.
 
 ---
 
@@ -55,7 +57,7 @@ E no mapa pontual: as estações com 0 mm devem aparecer (por exemplo, com um ma
 
 Em que horário o relatório diário costuma ser gerado?
 
-**Decisão:**
+**Decisão (15/09/2026):** opção (b) — últimas 24 horas, como as demais variáveis, com os horários exibidos no horário de MS. Por coerência com a questão 2, a coluna "Chuva Hoje" passou a contar desde a 00 h de MS.
 
 ---
 
@@ -70,7 +72,7 @@ Em que horário o relatório diário costuma ser gerado?
 - Podemos passar a calcular as distâncias em quilômetros? A mudança nos mapas é pequena, mas altera os valores interpolados.
 - Os parâmetros atuais (potência 2, 8 vizinhos, grade de ~8 km) estão adequados, ou há outro método preferido (ex.: krigagem)?
 
-**Decisão:**
+**Decisão (15/09/2026):** medir as distâncias em quilômetros. Os demais parâmetros (potência 2, 8 vizinhos, grade de ~8 km) foram mantidos.
 
 ---
 
@@ -83,4 +85,4 @@ Estas mudanças já estão no código (detalhes no README, seção "Mudanças em
 - **Mapa de rajadas com direção:** agora é gerado em todos os modos (antes, só no diário). Faz sentido também para data específica e período?
 - **Scripts originais:** estão em `legado/` para comparação. Depois da validação, podem ser removidos?
 
-**Decisão:**
+**Decisão (15/09/2026):** extremos do período confirmados; sem o acumulado de 48 h por enquanto; mapa de rajadas com direção confirmado; `legado/` mantido até decisão sobre a exclusão.

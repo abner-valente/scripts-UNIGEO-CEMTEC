@@ -84,35 +84,36 @@ NOMES_MODO = {"dia": "Data específica", "periodo": "Período", "tempo_real": "T
 
 @dataclass(frozen=True)
 class Periodo:
-    """Janela de tempo de uma consulta, sempre em UTC.
+    """Janela de tempo de uma consulta.
 
     Crie com um dos construtores:
         Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30))  -> data específica
         Periodo.de_datas(date(2026, 8, 1), date(2026, 8, 31))   -> período
         Periodo.tempo_real()                                     -> últimas 24 h
 
-    Todas as janelas são intervalos [início, fim): o início entra, o fim não.
-    Regras que valem só para um produto (ex.: a janela da temperatura mínima do
-    relatorio_inmet) ficam no arquivo do produto, em modulos/produtos/.
+    Os dias seguem o horário de MS (da 00 h às 24 h locais); início e fim ficam guardados em
+    UTC, como as leituras do INMET. Cada leitura horária se refere à hora que termina no horário
+    indicado, então a janela (início, fim) reúne as leituras com início < horário <= fim.
+    Regras que valem só para um produto ficam no arquivo do produto, em modulos/produtos/.
     """
 
-    inicio: datetime
-    fim: datetime
-    modo: str  # "dia", "periodo" ou "tempo_real"
+    inicio: datetime  # UTC
+    fim: datetime     # UTC
+    modo: str         # "dia", "periodo" ou "tempo_real"
 
     @classmethod
     def de_datas(cls, data_inicial: date, data_final: date) -> "Periodo":
-        """Dias inteiros, da 00 UTC da data inicial até o fim da data final."""
+        """Dias inteiros no horário de MS, da 00 h da data inicial às 24 h da data final."""
         if data_final < data_inicial:
             raise ValueError("A data final deve ser igual ou posterior à data inicial.")
-        inicio = datetime.combine(data_inicial, time.min, tzinfo=FUSO_UTC)
-        fim = datetime.combine(data_final + timedelta(days=1), time.min, tzinfo=FUSO_UTC)
+        inicio = datetime.combine(data_inicial, time.min, tzinfo=FUSO_MS).astimezone(FUSO_UTC)
+        fim = datetime.combine(data_final + timedelta(days=1), time.min, tzinfo=FUSO_MS).astimezone(FUSO_UTC)
         return cls(inicio, fim, "dia" if data_inicial == data_final else "periodo")
 
     @classmethod
     def tempo_real(cls, agora: datetime | None = None) -> "Periodo":
         """Últimas 24 horas até o momento atual."""
-        agora = agora or datetime.now(FUSO_UTC)
+        agora = (agora or datetime.now(FUSO_UTC)).astimezone(FUSO_UTC)
         return cls(agora - timedelta(hours=24), agora, "tempo_real")
 
     @property
@@ -120,23 +121,30 @@ class Periodo:
         return NOMES_MODO[self.modo]
 
     @property
-    def num_dias(self) -> int:
-        return (self.fim - self.inicio).days
+    def primeiro_dia(self) -> date:
+        """Primeiro dia da consulta, no horário de MS."""
+        return self.inicio.astimezone(FUSO_MS).date()
 
     @property
     def ultimo_dia(self) -> date:
-        return (self.fim - timedelta(days=1)).date()
+        """Último dia da consulta, no horário de MS."""
+        return (self.fim.astimezone(FUSO_MS) - timedelta(microseconds=1)).date()
+
+    @property
+    def num_dias(self) -> int:
+        return (self.ultimo_dia - self.primeiro_dia).days + 1
 
     @property
     def inicio_do_dia(self) -> datetime:
-        """00 UTC do dia em que a consulta termina (no tempo real: 00 UTC de hoje)."""
-        return self.fim.replace(hour=0, minute=0, second=0, microsecond=0)
+        """00 h (horário de MS) do dia em que a consulta termina, em UTC. No tempo real: a 00 h de hoje."""
+        fim_local = self.fim.astimezone(FUSO_MS)
+        return fim_local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(FUSO_UTC)
 
     # ---------- Janelas ----------
 
     @property
     def janela(self) -> tuple[datetime, datetime]:
-        """Intervalo da consulta: [início, fim)."""
+        """Intervalo da consulta: (início, fim]."""
         return self.inicio, self.fim
 
     @property
@@ -146,32 +154,33 @@ class Periodo:
             return self.fim - timedelta(hours=HORAS_BUSCA_TEMPO_REAL), self.fim
         return self.inicio, self.fim
 
-    # ---------- Textos e saída ----------
+    # ---------- Textos e saída (no horário de MS) ----------
 
     @property
     def identificador(self) -> str:
         """Trecho usado nos nomes de pastas e arquivos."""
         if self.modo == "tempo_real":
-            return f"{self.fim:%Y%m%d_%H%M}_UTC"
+            return f"{self.fim.astimezone(FUSO_MS):%Y%m%d_%H%M}"
         if self.modo == "dia":
-            return f"{self.inicio:%Y%m%d}"
-        return f"{self.inicio:%Y%m%d}_a_{self.ultimo_dia:%Y%m%d}"
+            return f"{self.primeiro_dia:%Y%m%d}"
+        return f"{self.primeiro_dia:%Y%m%d}_a_{self.ultimo_dia:%Y%m%d}"
 
     @property
     def descricao(self) -> str:
         if self.modo == "tempo_real":
             return f"Últimas 24 horas: {self.descrever_janela(self.inicio, self.fim)}"
         if self.modo == "dia":
-            return f"{self.inicio:%d/%m/%Y} (UTC)"
+            return f"{self.primeiro_dia:%d/%m/%Y} (horário de MS)"
         return (
-            f"Período: {self.inicio:%d/%m/%Y} a {self.ultimo_dia:%d/%m/%Y} "
-            f"({self.num_dias} dias, UTC)"
+            f"Período: {self.primeiro_dia:%d/%m/%Y} a {self.ultimo_dia:%d/%m/%Y} "
+            f"({self.num_dias} dias, horário de MS)"
         )
 
     def descrever_janela(self, inicio: datetime, fim: datetime) -> str:
         """Texto de uma janela para os subtítulos dos mapas."""
         if self.modo == "tempo_real":
-            return f"{inicio:%d/%m/%Y %H:%M} até {fim:%d/%m/%Y %H:%M} UTC"
+            return (f"{inicio.astimezone(FUSO_MS):%d/%m/%Y %H:%M} até "
+                    f"{fim.astimezone(FUSO_MS):%d/%m/%Y %H:%M} (horário de MS)")
         return self.descricao
 
     def pasta_saida(self, produto: str) -> Path:

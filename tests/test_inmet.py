@@ -66,8 +66,9 @@ def test_baixar_dados_converte_valores_e_horarios(monkeypatch):
 
 
 @pytest.mark.parametrize("periodo, trecho_da_url", [
-    (Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30)), "/2026-07-30/2026-07-30/A702/"),
-    (Periodo.de_datas(date(2026, 8, 1), date(2026, 8, 31)), "/2026-08-01/2026-08-31/A702/"),
+    # Dia 30/07 em MS = leituras das 05 UTC de 30/07 às 04 UTC de 31/07
+    (Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30)), "/2026-07-30/2026-07-31/A702/"),
+    (Periodo.de_datas(date(2026, 8, 1), date(2026, 8, 31)), "/2026-08-01/2026-09-01/A702/"),
     (Periodo.tempo_real(datetime(2026, 9, 14, 13, 25, tzinfo=FUSO_UTC)), "/2026-09-10/2026-09-14/A702/"),
 ], ids=["dia", "periodo", "tempo_real"])
 def test_baixar_dados_pede_apenas_os_dias_necessarios(monkeypatch, periodo, trecho_da_url):

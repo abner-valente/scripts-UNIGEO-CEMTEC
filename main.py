@@ -2,7 +2,7 @@
 
 COMO USAR
     1. Configure o token do INMET no arquivo .env (modelo: .env.example).
-    2. Escolha o produto em PRODUTO e ajuste DATA_INICIAL e DATA_FINAL logo abaixo (dias em UTC):
+    2. Escolha o produto em PRODUTO e ajuste DATA_INICIAL e DATA_FINAL logo abaixo (dias no horário de MS):
          - datas iguais      -> consulta de data específica
          - datas diferentes  -> consulta de período
          - ambas None        -> monitoramento em tempo real (últimas 24 h)

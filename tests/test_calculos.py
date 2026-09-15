@@ -10,18 +10,20 @@ def utc(texto):
     return pd.Timestamp(texto, tz="UTC")
 
 
-def test_recorte_inclui_o_inicio_e_exclui_o_fim(serie):
+def test_recorte_segue_a_hora_que_termina_na_leitura(serie):
+    """A leitura das HH:00 fecha a hora anterior: entra a do fim da janela, não a do início."""
     dados = serie("2026-07-30", "2026-08-01")
-    recorte = calculos.recortar(dados, utc("2026-07-30 00:00"), utc("2026-07-31 00:00"))
+    recorte = calculos.recortar(dados, utc("2026-07-30 04:00"), utc("2026-07-31 04:00"))
     assert len(recorte) == 24
-    assert recorte["dt_utc"].min() == utc("2026-07-30 00:00")
-    assert recorte["dt_utc"].max() == utc("2026-07-30 23:00")
+    assert recorte["dt_utc"].min() == utc("2026-07-30 05:00")
+    assert recorte["dt_utc"].max() == utc("2026-07-31 04:00")
 
 
 def test_acumulado_de_chuva(serie):
     dados = serie("2026-07-30", "2026-07-31", CHUVA=0.5)
     dados.loc[3, "CHUVA"] = np.nan  # leitura sem dado conta como zero
-    assert calculos.acumulado_chuva(dados, utc("2026-07-30"), utc("2026-07-31")) == 11.5
+    # Janela (00 UTC, 12 UTC]: leituras das 01 às 12 UTC, uma delas sem dado
+    assert calculos.acumulado_chuva(dados, utc("2026-07-30 00:00"), utc("2026-07-30 12:00")) == 5.5
     assert calculos.acumulado_chuva(dados, utc("2026-08-01"), utc("2026-08-02")) == 0.0
 
 
@@ -43,6 +45,13 @@ def test_idw_reproduz_o_valor_na_posicao_da_estacao():
     lons, lats, valores = [-55.0, -53.0, -57.0], [-20.0, -22.0, -19.0], [10.0, 30.0, 20.0]
     resultado = calculos.interpolar_idw(lons, lats, valores, np.array([[-55.0, -53.0]]), np.array([[-20.0, -22.0]]))
     np.testing.assert_allclose(resultado, [[10.0, 30.0]])
+
+
+def test_idw_mede_a_distancia_em_quilometros():
+    """Estação A fica 1° a leste do ponto e B 1° ao norte: em graus, a mesma distância. Em MS,
+    1° de longitude (~104 km) é mais curto que 1° de latitude (~111 km), então A pesa mais."""
+    resultado = calculos.interpolar_idw([-54.0, -55.0], [-21.0, -20.0], [10.0, 0.0], np.array([[-55.0]]), np.array([[-21.0]]))
+    assert resultado[0, 0] == pytest.approx(10 * 110.6**2 / (103.9**2 + 110.6**2), abs=0.02)  # ≈ 5,3 (em graus seria 5,0)
 
 
 def test_idw_fica_entre_o_menor_e_o_maior_valor_das_estacoes():
