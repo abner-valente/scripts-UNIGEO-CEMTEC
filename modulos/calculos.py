@@ -1,108 +1,39 @@
-"""Cálculos meteorológicos: recorte temporal, extremos, acumulados e interpolação IDW."""
+"""Cálculos compartilhados pelos produtos: recorte no tempo, extremos, acumulados e interpolação IDW."""
 from datetime import datetime
 
 import numpy as np
 import pandas as pd
+from pyproj import Transformer
 from scipy.spatial import cKDTree
-
-from .config import Periodo
 
 
 def recortar(dados: pd.DataFrame, inicio: datetime, fim: datetime) -> pd.DataFrame:
-    """Registros com início <= horário (UTC) < fim."""
-    return dados[(dados["dt_utc"] >= inicio) & (dados["dt_utc"] < fim)]
+    """Leituras da janela (início, fim].
+
+    Cada leitura do INMET se refere à hora que termina no horário indicado: a das 05 UTC cobre
+    das 04 às 05 UTC. Por isso entra a leitura do fim da janela e não a do início.
+    """
+    return dados[(dados["dt_utc"] > inicio) & (dados["dt_utc"] <= fim)]
 
 
 def acumulado_chuva(dados: pd.DataFrame, inicio: datetime, fim: datetime) -> float:
-    """Soma da chuva (mm) no intervalo [início, fim)."""
+    """Soma da chuva (mm) na janela (início, fim]."""
     return round(float(recortar(dados, inicio, fim)["CHUVA"].fillna(0).sum()), 1)
 
 
-def _indice_extremo(dados: pd.DataFrame, coluna: str, minimo: bool):
+def indice_extremo(dados: pd.DataFrame, coluna: str, minimo: bool):
     """Índice do registro com o menor (ou maior) valor da coluna, ou None se não houver dado válido."""
     if coluna not in dados or dados[coluna].isna().all():
         return None
     return dados[coluna].idxmin() if minimo else dados[coluna].idxmax()
 
 
-def _data_hora(dados: pd.DataFrame, indice) -> dict:
+def data_hora(dados: pd.DataFrame, indice) -> dict:
+    """Data e hora de um registro, em UTC e no horário de MS, prontas para a planilha."""
     return {
         "Data/Hora (UTC)": dados.at[indice, "dt_utc"].strftime("%d/%m/%Y %H:%M"),
         "Data/Hora (MS)": dados.at[indice, "dt_local"].strftime("%d/%m/%Y %H:%M"),
     }
-
-
-def resumir_estacao(dados: pd.DataFrame, estacao: pd.Series, periodo: Periodo) -> dict[str, dict]:
-    """Extremos e acumulados de uma estação no período.
-
-    Retorna {aba do Excel: linha da tabela}. Variáveis sem nenhum dado válido ficam de fora.
-    """
-    nome = estacao["Estação"]
-    coordenadas = {"Latitude": estacao["VL_LATITUDE"], "Longitude": estacao["VL_LONGITUDE"]}
-    dados_tmin = recortar(dados, *periodo.janela_temp_min)
-    dados_periodo = recortar(dados, *periodo.janela_extremos)
-    linhas = {}
-
-    indice = _indice_extremo(dados_tmin, "TEM_MIN", minimo=True)
-    if indice is not None:
-        linhas["Temp_Min"] = {
-            "Estação": nome,
-            "Temperatura Mínima (°C)": dados_tmin.at[indice, "TEM_MIN"],
-            **_data_hora(dados_tmin, indice),
-            **coordenadas,
-        }
-
-    indice = _indice_extremo(dados_periodo, "TEM_MAX", minimo=False)
-    if indice is not None:
-        linhas["Temp_Max"] = {
-            "Estação": nome,
-            "Temperatura Máxima (°C)": dados_periodo.at[indice, "TEM_MAX"],
-            **_data_hora(dados_periodo, indice),
-            **coordenadas,
-        }
-
-    indice = _indice_extremo(dados_periodo, "UMD_MIN", minimo=True)
-    if indice is not None:
-        linhas["Umidade"] = {
-            "Estação": nome,
-            "Umidade Mín (%)": dados_periodo.at[indice, "UMD_MIN"],
-            **coordenadas,
-        }
-
-    indice = _indice_extremo(dados_periodo, "VEN_RAJ", minimo=False)
-    if indice is not None:
-        # Direção registrada no mesmo horário da rajada máxima
-        direcao = dados_periodo.at[indice, "VEN_DIR"] if "VEN_DIR" in dados_periodo else np.nan
-        linhas["Vento"] = {
-            "Estação": nome,
-            "Rajada (km/h)": round(dados_periodo.at[indice, "VEN_RAJ"] * 3.6, 1),  # m/s -> km/h
-            "Direção (°)": direcao,
-            **coordenadas,
-        }
-
-    linhas["Chuva"] = {
-        "Estação": nome,
-        **{coluna: acumulado_chuva(dados, inicio, fim) for coluna, (inicio, fim) in periodo.janelas_chuva.items()},
-        **coordenadas,
-    }
-    return linhas
-
-
-def montar_tabelas(resumos: list[dict[str, dict]], periodo: Periodo) -> dict[str, pd.DataFrame]:
-    """Junta os resumos das estações em uma tabela ordenada para cada aba do Excel."""
-    ordenacao = {  # aba: (coluna de ordenação, crescente?)
-        "Temp_Min": ("Temperatura Mínima (°C)", True),
-        "Temp_Max": ("Temperatura Máxima (°C)", False),
-        "Umidade": ("Umidade Mín (%)", True),
-        "Vento": ("Rajada (km/h)", False),
-        "Chuva": (periodo.coluna_chuva_principal, False),
-    }
-    tabelas = {}
-    for aba, (coluna, crescente) in ordenacao.items():
-        linhas = [resumo[aba] for resumo in resumos if aba in resumo]
-        if linhas:
-            tabelas[aba] = pd.DataFrame(linhas).sort_values(coluna, ascending=crescente, ignore_index=True)
-    return tabelas
 
 
 def criar_grade(limites: tuple[float, float, float, float], resolucao: int) -> tuple[np.ndarray, np.ndarray]:
@@ -114,14 +45,28 @@ def criar_grade(limites: tuple[float, float, float, float], resolucao: int) -> t
 def interpolar_idw(lons, lats, valores, lon_grade, lat_grade, vizinhos: int = 8, potencia: float = 2) -> np.ndarray:
     """Interpolação pelo inverso da distância (IDW) usando os vizinhos mais próximos.
 
-    A distância é calculada diretamente em graus de latitude/longitude.
+    As distâncias são medidas em quilômetros, numa projeção equidistante centrada na grade.
     """
-    pontos = np.column_stack([lons, lats])
+    centro = float(np.mean(lon_grade)), float(np.mean(lat_grade))
+    pontos = _em_km(lons, lats, *centro)
     k = min(vizinhos, len(pontos))
-    distancias, indices = cKDTree(pontos).query(np.column_stack([lon_grade.ravel(), lat_grade.ravel()]), k=k)
+    distancias, indices = cKDTree(pontos).query(_em_km(lon_grade, lat_grade, *centro), k=k)
     if k == 1:
         distancias, indices = distancias[:, None], indices[:, None]
 
     pesos = 1.0 / np.maximum(distancias, 1e-10) ** potencia
     interpolados = np.sum(np.asarray(valores)[indices] * pesos, axis=1) / np.sum(pesos, axis=1)
-    return interpolados.reshape(lon_grade.shape)
+    return interpolados.reshape(np.shape(lon_grade))
+
+
+def _em_km(lons, lats, lon_centro: float, lat_centro: float) -> np.ndarray:
+    """Converte lon/lat (graus) em x/y (km) numa projeção azimutal equidistante centrada em (lon, lat).
+
+    Na extensão de MS, as distâncias nessa projeção ficam praticamente exatas (erro abaixo de 0,2%).
+    """
+    projecao = f"+proj=aeqd +lat_0={lat_centro} +lon_0={lon_centro} +datum=WGS84 +units=km"
+    transformador = Transformer.from_crs("EPSG:4326", projecao, always_xy=True)
+    # Listas (e não arrays) fazem o pyproj usar sempre o cálculo vetorizado, mesmo com um único ponto
+    x, y = transformador.transform(np.ravel(np.asarray(lons, dtype=float)).tolist(),
+                                   np.ravel(np.asarray(lats, dtype=float)).tolist())
+    return np.column_stack([x, y])
