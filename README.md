@@ -1,6 +1,10 @@
 # Scripts UNIGEO / CEMTEC — Monitoramento meteorológico de Mato Grosso do Sul
 
-Coleta os dados horários das **estações automáticas do INMET** em Mato Grosso do Sul e gera **relatórios em Excel** e **mapas** (pontuais e interpolados) de temperatura, umidade relativa, chuva e vento.
+Produtos meteorológicos gerados a partir dos dados horários das **estações automáticas do INMET** em Mato Grosso do Sul, com **planilhas Excel** e **mapas** (pontuais e interpolados).
+
+| Produto | O que gera |
+|---|---|
+| `relatorio_inmet` | Extremos de temperatura, umidade e rajada e chuva acumulada de cada estação: planilha Excel e mapas |
 
 Desenvolvido pela equipe de meteorologia do **CEMTEC** — Centro de Monitoramento do Tempo e do Clima de Mato Grosso do Sul (SEMADESC).
 
@@ -9,9 +13,10 @@ Desenvolvido pela equipe de meteorologia do **CEMTEC** — Centro de Monitoramen
 ## Como usar
 
 1. Instale as dependências (veja [Instalação](#instalação)) e configure o token do INMET no arquivo `.env` (veja [Configuração](#configuração)).
-2. Em [`main.py`](main.py), ajuste as datas da consulta (dias em UTC):
+2. Em [`main.py`](main.py), escolha o produto e ajuste as datas da consulta (dias em UTC):
 
    ```python
+   PRODUTO = "relatorio_inmet"
    DATA_INICIAL = date(2026, 8, 1)
    DATA_FINAL = date(2026, 8, 31)
    ```
@@ -28,15 +33,16 @@ Desenvolvido pela equipe de meteorologia do **CEMTEC** — Centro de Monitoramen
    python main.py
    ```
 
-As datas também podem ser passadas pela linha de comando, sem editar o arquivo (útil para agendamentos):
+O produto e as datas também podem ser passados pela linha de comando, sem editar o arquivo:
 
 ```bash
 python main.py --inicio 30/07/2026
 python main.py --inicio 01/08/2026 --fim 31/08/2026
 python main.py --tempo-real
+python main.py --produto relatorio_inmet --tempo-real
 ```
 
-### O que é calculado
+### O que o `relatorio_inmet` calcula
 
 | Variável | Tempo real | Data específica / Período |
 |---|---|---|
@@ -62,21 +68,22 @@ Tipos de mapa:
 
 ## Saídas
 
-Cada execução gera uma pasta própria dentro de `saida/`, separada por modo:
+Cada execução gera uma pasta própria dentro de `saida/`, separada por produto e por modo:
 
 ```
 saida/
-├── dia/
-│   └── 20260730/
-│       ├── Relatorio_MS_20260730.xlsx
-│       └── mapas/
-│           ├── Mapa_Temp_Min_MS_20260730.png
-│           ├── Mapa_Temp_Min_MS_20260730_interpolado.png
-│           └── ...
-├── periodo/
-│   └── 20260801_a_20260831/
-└── tempo_real/
-    └── 20260914_1325_UTC/
+└── relatorio_inmet/
+    ├── dia/
+    │   └── 20260730/
+    │       ├── Relatorio_MS_20260730.xlsx
+    │       └── mapas/
+    │           ├── Mapa_Temp_Min_MS_20260730.png
+    │           ├── Mapa_Temp_Min_MS_20260730_interpolado.png
+    │           └── ...
+    ├── periodo/
+    │   └── 20260801_a_20260831/
+    └── tempo_real/
+        └── 20260914_1325_UTC/
 ```
 
 | Modo | Mapas gerados |
@@ -168,17 +175,23 @@ Rode os testes antes de cada commit: eles conferem as janelas de tempo, os cálc
 
 Os testes também rodam automaticamente no GitHub (GitHub Actions, em Linux, com Python 3.10 e 3.14) a cada push e a cada pull request para a `main`. O resultado aparece como ✓ ou ✗ ao lado de cada commit e na aba **Actions** do repositório, onde também é possível rodá-los manualmente.
 
+## Novos produtos
+
+Os scripts da equipe estão sendo migrados aos poucos. Cada um vira um produto em `modulos/produtos/`, reaproveitando as peças compartilhadas (API do INMET, períodos, cálculos, mapas e Excel). O passo a passo está em [`docs/como_migrar_um_script.md`](docs/como_migrar_um_script.md).
+
 ## Estrutura do repositório
 
 ```
 .
-├── main.py               # Ponto de entrada: datas da consulta e execução
-├── modulos/
+├── main.py               # Ponto de entrada: escolha do produto e das datas
+├── modulos/              # Peças compartilhadas por todos os produtos
 │   ├── config.py         # Configurações, leitura do .env e a classe Periodo (janelas de tempo)
-│   ├── inmet.py          # Acesso à API do INMET
-│   ├── calculos.py       # Extremos, acumulados de chuva e interpolação IDW
+│   ├── inmet.py          # Acesso à API do INMET (estações e dados horários)
+│   ├── calculos.py       # Recorte no tempo, extremos, acumulados e interpolação IDW
 │   ├── mapas.py          # Mapas pontuais e interpolados
-│   └── excel.py          # Relatório Excel
+│   ├── excel.py          # Planilha Excel
+│   └── produtos/         # Um arquivo por produto
+│       └── relatorio_inmet.py  # Extremos e chuva das estações automáticas
 ├── ferramentas/          # Scripts auxiliares (ex.: gerar o shapefile simplificado dos municípios)
 ├── tests/                # Testes automatizados (pytest), com a API do INMET simulada
 ├── .github/workflows/    # Execução automática dos testes no GitHub (GitHub Actions)
@@ -186,7 +199,7 @@ Os testes também rodam automaticamente no GitHub (GitHub Actions, em Linux, com
 ├── shp/                  # Shapefiles: limite estadual e municípios (original e simplificado)
 ├── img/                  # Logos inseridos nos mapas (PNG com fundo transparente)
 ├── saida/                # Resultados gerados (fora do controle de versão)
-├── legado/               # Scripts originais, mantidos para comparação durante a validação
+├── legado/               # Scripts originais de cada produto (ex.: legado/relatorio_inmet/), para comparação
 ├── requirements.txt
 ├── requirements-dev.txt  # Dependências de desenvolvimento (testes)
 ├── pytest.ini            # Configuração dos testes
@@ -217,7 +230,7 @@ Os testes também rodam automaticamente no GitHub (GitHub Actions, em Linux, com
 
 ## Mudanças em relação aos scripts legados
 
-Os três scripts de `legado/` foram unificados no `main.py`. Diferenças nos resultados:
+Os três scripts de `legado/relatorio_inmet/` foram unificados no produto `relatorio_inmet`. Diferenças nos resultados:
 
 - **Período:** os extremos (temperaturas, umidade e rajada) agora ficam restritos ao período. Antes, o dia seguinte à data final também entrava no cálculo.
 - **Data específica:** a aba `Chuva` traz apenas o `Acumulado Dia`. As colunas `Acumulado 24h` e `Acumulado 48h` foram removidas — a de 48 h somava só cerca de 24 h de dados.

@@ -99,3 +99,15 @@ def test_falhas_da_api_retornam_none_sem_expor_o_token(monkeypatch, capsys, falh
     inicio, fim = Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30)).janela_busca
     assert inmet.baixar_dados_estacao("A702", inicio, fim) is None
     assert "TOKEN-SECRETO" not in capsys.readouterr().out
+
+
+def test_baixar_estacoes_deixa_de_fora_as_que_nao_tem_dados(monkeypatch):
+    estacoes = pd.DataFrame({"CD_ESTACAO": ["A1", "A2", "A3"], "Estação": ["Um", "Dois", "Tres"]})
+    monkeypatch.setattr(inmet, "listar_estacoes", lambda uf=config.UF: estacoes)
+    monkeypatch.setattr(inmet, "baixar_dados_estacao",
+                        lambda codigo, inicio, fim: None if codigo == "A2" else pd.DataFrame({"dt_utc": [1]}))
+    monkeypatch.setattr(config, "PAUSA_ENTRE_REQUISICOES", 0)
+
+    coletados = inmet.baixar_estacoes(*Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30)).janela_busca)
+
+    assert [estacao["CD_ESTACAO"] for estacao, _ in coletados] == ["A1", "A3"]

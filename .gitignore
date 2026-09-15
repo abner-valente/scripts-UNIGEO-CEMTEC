@@ -10,7 +10,7 @@ saida/*
 # Saídas dos scripts legados
 saida_historico/
 saida_periodo/
-legado/saida/
+legado/**/saida/
 
 # Python
 __pycache__/

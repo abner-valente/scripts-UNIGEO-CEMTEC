@@ -92,6 +92,8 @@ class Periodo:
         Periodo.tempo_real()                                     -> últimas 24 h
 
     Todas as janelas são intervalos [início, fim): o início entra, o fim não.
+    Regras que valem só para um produto (ex.: a janela da temperatura mínima do
+    relatorio_inmet) ficam no arquivo do produto, em modulos/produtos/.
     """
 
     inicio: datetime
@@ -126,45 +128,23 @@ class Periodo:
         return (self.fim - timedelta(days=1)).date()
 
     @property
-    def _inicio_do_dia(self) -> datetime:
+    def inicio_do_dia(self) -> datetime:
+        """00 UTC do dia em que a consulta termina (no tempo real: 00 UTC de hoje)."""
         return self.fim.replace(hour=0, minute=0, second=0, microsecond=0)
 
     # ---------- Janelas ----------
 
     @property
+    def janela(self) -> tuple[datetime, datetime]:
+        """Intervalo da consulta: [início, fim)."""
+        return self.inicio, self.fim
+
+    @property
     def janela_busca(self) -> tuple[datetime, datetime]:
-        """Intervalo baixado da API."""
+        """Intervalo baixado da API (no tempo real, inclui o histórico usado nos acumulados)."""
         if self.modo == "tempo_real":
             return self.fim - timedelta(hours=HORAS_BUSCA_TEMPO_REAL), self.fim
         return self.inicio, self.fim
-
-    @property
-    def janela_extremos(self) -> tuple[datetime, datetime]:
-        """Intervalo da temperatura máxima, umidade mínima e rajada máxima."""
-        return self.inicio, self.fim
-
-    @property
-    def janela_temp_min(self) -> tuple[datetime, datetime]:
-        """Intervalo da temperatura mínima (no tempo real: desde 00 UTC do dia atual)."""
-        if self.modo == "tempo_real":
-            return self._inicio_do_dia, self.fim
-        return self.inicio, self.fim
-
-    @property
-    def janelas_chuva(self) -> dict[str, tuple[datetime, datetime]]:
-        """Colunas de chuva acumulada do relatório e o intervalo de cada uma."""
-        if self.modo == "tempo_real":
-            janelas = {"Chuva Hoje (desde 00h UTC)": (self._inicio_do_dia, self.fim)}
-            for horas in (12, 24, 48, 72):
-                janelas[f"Acumulado {horas}h"] = (self.fim - timedelta(hours=horas), self.fim)
-            return janelas
-        rotulo = "Acumulado Dia" if self.modo == "dia" else "Acumulado Período"
-        return {rotulo: (self.inicio, self.fim)}
-
-    @property
-    def coluna_chuva_principal(self) -> str:
-        """Coluna de chuva usada para ordenar a aba do Excel."""
-        return "Acumulado 24h" if self.modo == "tempo_real" else next(iter(self.janelas_chuva))
 
     # ---------- Textos e saída ----------
 
@@ -194,6 +174,6 @@ class Periodo:
             return f"{inicio:%d/%m/%Y %H:%M} até {fim:%d/%m/%Y %H:%M} UTC"
         return self.descricao
 
-    @property
-    def pasta_saida(self) -> Path:
-        return PASTA_SAIDA / self.modo / self.identificador
+    def pasta_saida(self, produto: str) -> Path:
+        """Pasta dos resultados: saida/<produto>/<modo>/<identificador>/."""
+        return PASTA_SAIDA / produto / self.modo / self.identificador

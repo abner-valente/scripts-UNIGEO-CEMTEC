@@ -1,83 +1,42 @@
-"""Extremos, acumulados de chuva, montagem das tabelas e interpolação IDW."""
-from datetime import date, datetime
-
+"""Cálculos compartilhados: recorte no tempo, extremos, acumulados e interpolação IDW."""
 import numpy as np
 import pandas as pd
 import pytest
 
 from modulos import calculos
-from modulos.config import FUSO_UTC, Periodo
-
-ESTACAO = pd.Series({"Estação": "Teste", "VL_LATITUDE": -20.0, "VL_LONGITUDE": -55.0})
-DIA = Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30))
 
 
-def test_extremos_e_chuva_ficam_restritos_ao_periodo(serie):
-    periodo = Periodo.de_datas(date(2026, 8, 1), date(2026, 8, 31))
-    dados = serie("2026-07-31", "2026-09-02")
-    fora = (dados["dt_utc"] < periodo.inicio) | (dados["dt_utc"] >= periodo.fim)
-    dados.loc[fora, ["TEM_MIN", "TEM_MAX", "VEN_RAJ", "CHUVA"]] = [-5.0, 45.0, 40.0, 100.0]
-    dados.loc[dados["dt_utc"] == pd.Timestamp("2026-08-15 18:00", tz="UTC"), "TEM_MAX"] = 38.5
-
-    resumo = calculos.resumir_estacao(dados, ESTACAO, periodo)
-
-    assert resumo["Temp_Max"]["Temperatura Máxima (°C)"] == 38.5
-    assert resumo["Temp_Min"]["Temperatura Mínima (°C)"] == 20.0
-    assert resumo["Vento"]["Rajada (km/h)"] == 18.0
-    assert resumo["Chuva"]["Acumulado Período"] == 31 * 24 * 1.0
+def utc(texto):
+    return pd.Timestamp(texto, tz="UTC")
 
 
-def test_horario_do_extremo_em_utc_e_em_ms(serie):
+def test_recorte_inclui_o_inicio_e_exclui_o_fim(serie):
+    dados = serie("2026-07-30", "2026-08-01")
+    recorte = calculos.recortar(dados, utc("2026-07-30 00:00"), utc("2026-07-31 00:00"))
+    assert len(recorte) == 24
+    assert recorte["dt_utc"].min() == utc("2026-07-30 00:00")
+    assert recorte["dt_utc"].max() == utc("2026-07-30 23:00")
+
+
+def test_acumulado_de_chuva(serie):
+    dados = serie("2026-07-30", "2026-07-31", CHUVA=0.5)
+    dados.loc[3, "CHUVA"] = np.nan  # leitura sem dado conta como zero
+    assert calculos.acumulado_chuva(dados, utc("2026-07-30"), utc("2026-07-31")) == 11.5
+    assert calculos.acumulado_chuva(dados, utc("2026-08-01"), utc("2026-08-02")) == 0.0
+
+
+def test_indice_do_extremo_e_data_hora(serie):
     dados = serie("2026-07-30", "2026-07-31")
-    dados.loc[dados["dt_utc"] == pd.Timestamp("2026-07-30 18:00", tz="UTC"), "TEM_MAX"] = 33.0
-    linha = calculos.resumir_estacao(dados, ESTACAO, DIA)["Temp_Max"]
-    assert linha["Data/Hora (UTC)"] == "30/07/2026 18:00"
-    assert linha["Data/Hora (MS)"] == "30/07/2026 14:00"
+    dados.loc[18, "TEM_MAX"] = 33.0  # leitura das 18 UTC
+    indice = calculos.indice_extremo(dados, "TEM_MAX", minimo=False)
+    assert dados.at[indice, "TEM_MAX"] == 33.0
+    assert calculos.data_hora(dados, indice) == {"Data/Hora (UTC)": "30/07/2026 18:00", "Data/Hora (MS)": "30/07/2026 14:00"}
 
 
-def test_rajada_em_km_h_com_a_direcao_do_mesmo_horario(serie):
-    dados = serie("2026-07-30", "2026-07-31")
-    dados.loc[10, ["VEN_RAJ", "VEN_DIR"]] = [20.0, 225.0]
-    linha = calculos.resumir_estacao(dados, ESTACAO, DIA)["Vento"]
-    assert linha["Rajada (km/h)"] == 72.0
-    assert linha["Direção (°)"] == 225.0
-
-
-def test_chuva_do_dia_soma_os_24_registros(serie):
-    dados = serie("2026-07-29", "2026-08-01")
-    assert calculos.resumir_estacao(dados, ESTACAO, DIA)["Chuva"]["Acumulado Dia"] == 24.0
-
-
-def test_acumulados_de_chuva_do_tempo_real(serie):
-    agora = datetime(2026, 9, 14, 13, 25, tzinfo=FUSO_UTC)
-    dados = serie("2026-09-10", "2026-09-14 14:00")  # 1 mm por hora; última leitura às 13 UTC
-    chuva = calculos.resumir_estacao(dados, ESTACAO, Periodo.tempo_real(agora))["Chuva"]
-    assert chuva["Chuva Hoje (desde 00h UTC)"] == 14.0  # leituras das 00 às 13 UTC
-    assert chuva["Acumulado 12h"] == 12.0
-    assert chuva["Acumulado 24h"] == 24.0
-    assert chuva["Acumulado 48h"] == 48.0
-    assert chuva["Acumulado 72h"] == 72.0
-
-
-def test_variavel_sem_dados_validos_fica_fora_do_resumo(serie):
+def test_extremo_sem_dados_validos(serie):
     dados = serie("2026-07-30", "2026-07-31", TEM_MIN=np.nan)
-    resumo = calculos.resumir_estacao(dados, ESTACAO, DIA)
-    assert "Temp_Min" not in resumo
-    assert {"Temp_Max", "Umidade", "Vento", "Chuva"} <= set(resumo)
-
-
-def test_tabelas_ordenadas_pelo_valor(serie):
-    resumos = []
-    for nome, minima in (("A", 15.0), ("B", 10.0), ("C", 12.0)):
-        dados = serie("2026-07-30", "2026-07-31", TEM_MIN=minima, TEM_MAX=minima + 10)
-        estacao = pd.Series({"Estação": nome, "VL_LATITUDE": -20.0, "VL_LONGITUDE": -55.0})
-        resumos.append(calculos.resumir_estacao(dados, estacao, DIA))
-
-    tabelas = calculos.montar_tabelas(resumos, DIA)
-
-    assert list(tabelas) == ["Temp_Min", "Temp_Max", "Umidade", "Vento", "Chuva"]
-    assert tabelas["Temp_Min"]["Estação"].tolist() == ["B", "C", "A"]
-    assert tabelas["Temp_Max"]["Estação"].tolist() == ["A", "C", "B"]
+    assert calculos.indice_extremo(dados, "TEM_MIN", minimo=True) is None
+    assert calculos.indice_extremo(dados, "COLUNA_INEXISTENTE", minimo=True) is None
 
 
 def test_idw_reproduz_o_valor_na_posicao_da_estacao():

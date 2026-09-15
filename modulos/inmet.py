@@ -1,4 +1,5 @@
 """Acesso à API do INMET (apitempo.inmet.gov.br)."""
+import time
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -87,3 +88,24 @@ def baixar_dados_estacao(codigo: str, inicio: datetime, fim: datetime) -> pd.Dat
         return None
 
     return dados.dropna(subset=["dt_utc"])
+
+
+def baixar_estacoes(inicio: datetime, fim: datetime, uf: str = config.UF) -> list[tuple[pd.Series, pd.DataFrame]]:
+    """Lista as estações da UF e baixa os dados horários de cada uma cobrindo [início, fim).
+
+    Retorna (estação, dados) das estações que têm dados. Levanta ErroINMET se a lista de estações falhar.
+    """
+    estacoes = listar_estacoes(uf)
+    print(f"✅ Encontradas {len(estacoes)} estações em {uf}")
+
+    coletados = []
+    for _, estacao in estacoes.iterrows():
+        print(f"🛰️ Lendo: {estacao['Estação']}...")
+        dados = baixar_dados_estacao(estacao["CD_ESTACAO"], inicio, fim)
+        time.sleep(config.PAUSA_ENTRE_REQUISICOES)
+        if dados is not None:
+            print(f"    📊 {len(dados)} registros")
+            coletados.append((estacao, dados))
+
+    print(f"\n📊 Estações com dados: {len(coletados)} de {len(estacoes)}")
+    return coletados
