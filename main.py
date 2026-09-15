@@ -6,11 +6,13 @@ COMO USAR
          - datas iguais      -> consulta de data específica
          - datas diferentes  -> consulta de período
          - ambas None        -> monitoramento em tempo real (últimas 24 h)
+       Para começar ou terminar fora da 00 h, use HORA_INICIAL e HORA_FINAL (horas cheias de MS).
     3. Execute:  python main.py
 
     Produto e datas também podem ser informados na linha de comando, sem editar o arquivo:
         python main.py --inicio 30/07/2026                   # data específica
         python main.py --inicio 01/08/2026 --fim 31/08/2026  # período
+        python main.py --inicio 14/09/2026 --hrini 8 --fim 15/09/2026 --hrfim 8  # das 08 h às 08 h
         python main.py --tempo-real                          # monitoramento
         python main.py --produto relatorio_inmet --tempo-real
 
@@ -34,6 +36,8 @@ PRODUTOS = {produto.NOME: produto for produto in (relatorio_inmet,)}
 PRODUTO = "relatorio_inmet"
 DATA_INICIAL = date(2026, 8, 1)
 DATA_FINAL = date(2026, 8, 31)
+HORA_INICIAL = None  # hora de início (0 a 24, horário de MS); None = 00 h da data inicial
+HORA_FINAL = None    # hora de fim (0 a 24, horário de MS); None = 24 h da data final
 
 
 def ler_data(texto: str) -> date:
@@ -46,12 +50,22 @@ def ler_data(texto: str) -> date:
     raise argparse.ArgumentTypeError(f"data inválida: {texto!r} (use DD/MM/AAAA ou AAAA-MM-DD)")
 
 
+def ler_hora(texto: str) -> int:
+    """Converte '8', '08', '8h', '08h' ou '08:00' em hora cheia (0 a 24)."""
+    limpo = texto.strip().lower().removesuffix("h").removesuffix(":00")
+    if limpo.isdigit() and 0 <= int(limpo) <= 24:
+        return int(limpo)
+    raise argparse.ArgumentTypeError(f"hora inválida: {texto!r} (use uma hora cheia de 0 a 24, ex.: 8, 08h ou 08:00)")
+
+
 def ler_consulta(argumentos: list[str] | None = None) -> tuple[ModuleType, Periodo]:
     """Produto e período da linha de comando ou, no que ela não informar, das variáveis acima."""
     parser = argparse.ArgumentParser(description="Produtos meteorológicos INMET — Mato Grosso do Sul.")
     parser.add_argument("--produto", choices=sorted(PRODUTOS), help=f"produto a gerar (padrão: {PRODUTO})")
     parser.add_argument("--inicio", type=ler_data, help="data inicial (DD/MM/AAAA)")
     parser.add_argument("--fim", type=ler_data, help="data final (DD/MM/AAAA); se omitida, igual à inicial")
+    parser.add_argument("--hrini", type=ler_hora, help="hora de início, horário de MS (0 a 24; padrão: 0)")
+    parser.add_argument("--hrfim", type=ler_hora, help="hora de fim, horário de MS (0 a 24; padrão: 24)")
     parser.add_argument("--tempo-real", action="store_true", help="monitoramento das últimas 24 h")
     args = parser.parse_args(argumentos)
 
@@ -60,13 +74,18 @@ def ler_consulta(argumentos: list[str] | None = None) -> tuple[ModuleType, Perio
         parser.error(f"produto desconhecido: {nome_produto!r} (disponíveis: {', '.join(sorted(PRODUTOS))})")
     produto = PRODUTOS[nome_produto]
 
-    if args.tempo_real:
-        return produto, Periodo.tempo_real()
     inicio, fim = (args.inicio, args.fim) if (args.inicio or args.fim) else (DATA_INICIAL, DATA_FINAL)
-    if inicio is None and fim is None:
+    if args.tempo_real or (inicio is None and fim is None):
+        if args.hrini is not None or args.hrfim is not None:
+            parser.error("--hrini e --hrfim só valem com datas (--inicio e --fim), não no tempo real")
         return produto, Periodo.tempo_real()
+
+    hora_inicial = args.hrini if args.hrini is not None else HORA_INICIAL
+    hora_final = args.hrfim if args.hrfim is not None else HORA_FINAL
     try:
-        return produto, Periodo.de_datas(inicio or fim, fim or inicio)
+        return produto, Periodo.de_datas(inicio or fim, fim or inicio,
+                                         0 if hora_inicial is None else hora_inicial,
+                                         24 if hora_final is None else hora_final)
     except ValueError as erro:
         parser.error(str(erro))
 
@@ -81,5 +100,6 @@ def executar(produto: ModuleType, periodo: Periodo) -> int:
 
 
 if __name__ == "__main__":
-    sys.stdout.reconfigure(encoding="utf-8")  # emojis também em logs redirecionados no Windows
+    sys.stdout.reconfigure(encoding="utf-8")  # emojis e acentos também em logs redirecionados no Windows
+    sys.stderr.reconfigure(encoding="utf-8")  # idem para as mensagens de erro da linha de comando
     sys.exit(executar(*ler_consulta()))
