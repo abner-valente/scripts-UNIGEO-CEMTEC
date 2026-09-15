@@ -31,7 +31,7 @@ def janelas_chuva(periodo: Periodo) -> dict[str, tuple[datetime, datetime]]:
         for horas in (12, 24, 48, 72):
             janelas[f"Acumulado {horas}h"] = (periodo.fim - timedelta(hours=horas), periodo.fim)
         return janelas
-    rotulo = "Acumulado Dia" if periodo.modo == "dia" else "Acumulado Período"
+    rotulo = "Acumulado Dia" if periodo.modo == "dia" and periodo.dias_inteiros else "Acumulado Período"
     return {rotulo: periodo.janela}
 
 
@@ -134,11 +134,13 @@ def especificacoes_mapas(periodo: Periodo) -> list[EspecMapa]:
 
     # (coluna, duração no título, sufixo do arquivo, paleta)
     if periodo.modo == "tempo_real":
-        chuvas = [("Acumulado 24h", "24 horas", "24h", "Blues"), ("Acumulado 48h", "48 horas", "48h", "Purples")]
-    elif periodo.modo == "dia":
+        chuvas = [("Acumulado 24h", "24 horas", "24h", "Blues"), ("Acumulado 48h", "48 horas", "48h", "Purples"),
+                  ("Acumulado 72h", "72 horas", "72h", "Blues")]
+    elif periodo.modo == "dia" and periodo.dias_inteiros:
         chuvas = [(coluna_chuva_principal(periodo), "24 horas", "24h", "Blues")]
     else:
-        chuvas = [(coluna_chuva_principal(periodo), f"{periodo.num_dias} dias", "Periodo", "Blues")]
+        duracao = f"{periodo.num_dias} dias" if periodo.dias_inteiros else f"{periodo.horas} horas"
+        chuvas = [(coluna_chuva_principal(periodo), duracao, "Periodo", "Blues")]
     for coluna, duracao, sufixo, cmap in chuvas:
         especificacoes.append(EspecMapa(
             "Chuva", coluna, f"Chuva acumulada em {duracao} - {uf}",

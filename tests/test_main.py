@@ -1,11 +1,11 @@
 """Ponto de entrada: escolha do produto e das datas, e verificação do token."""
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
 import main
 from modulos import config, inmet
-from modulos.config import Periodo
+from modulos.config import FUSO_UTC, Periodo
 from modulos.produtos import relatorio_inmet
 
 
@@ -36,10 +36,32 @@ def test_produto_pela_linha_de_comando():
     assert produto is relatorio_inmet
 
 
+def test_horas_pela_linha_de_comando():
+    _, periodo = main.ler_consulta(["--inicio", "14/09/2026", "--hrini", "8", "--fim", "15/09/2026", "--hrfim", "08h"])
+    assert periodo.janela == (datetime(2026, 9, 14, 12, tzinfo=FUSO_UTC), datetime(2026, 9, 15, 12, tzinfo=FUSO_UTC))
+
+
+def test_so_a_hora_inicial_vai_ate_o_fim_do_dia():
+    _, periodo = main.ler_consulta(["--inicio", "15/09/2026", "--hrini", "06:00"])
+    assert periodo.horas == 18
+
+
+def test_horas_pelas_variaveis_do_main(monkeypatch):
+    variaveis = {"DATA_INICIAL": date(2026, 9, 14), "DATA_FINAL": date(2026, 9, 15), "HORA_INICIAL": 12, "HORA_FINAL": 12}
+    for nome, valor in variaveis.items():
+        monkeypatch.setattr(main, nome, valor)
+    assert main.ler_consulta([])[1].identificador == "20260914_12h_a_20260915_12h"
+    assert main.ler_consulta(["--tempo-real"])[1].modo == "tempo_real"  # horas do arquivo não atrapalham o tempo real
+
+
 @pytest.mark.parametrize("argumentos", [
     ["--inicio", "31/02/2026"],
     ["--inicio", "31/08/2026", "--fim", "01/08/2026"],
     ["--produto", "nao_existe"],
+    ["--inicio", "15/09/2026", "--hrini", "25"],
+    ["--inicio", "15/09/2026", "--hrini", "8:30"],
+    ["--inicio", "15/09/2026", "--hrini", "18", "--hrfim", "6"],
+    ["--tempo-real", "--hrini", "8"],
 ])
 def test_argumentos_invalidos(argumentos):
     with pytest.raises(SystemExit):

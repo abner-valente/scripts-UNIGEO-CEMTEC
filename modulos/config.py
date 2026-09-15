@@ -89,6 +89,7 @@ class Periodo:
     Crie com um dos construtores:
         Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30))  -> data específica
         Periodo.de_datas(date(2026, 8, 1), date(2026, 8, 31))   -> período
+        Periodo.de_datas(date(2026, 9, 14), date(2026, 9, 15), 8, 8)  -> das 08 h de 14/09 às 08 h de 15/09
         Periodo.tempo_real()                                     -> últimas 24 h
 
     Os dias seguem o horário de MS (da 00 h às 24 h locais); início e fim ficam guardados em
@@ -102,13 +103,22 @@ class Periodo:
     modo: str         # "dia", "periodo" ou "tempo_real"
 
     @classmethod
-    def de_datas(cls, data_inicial: date, data_final: date) -> "Periodo":
-        """Dias inteiros no horário de MS, da 00 h da data inicial às 24 h da data final."""
+    def de_datas(cls, data_inicial: date, data_final: date, hora_inicial: int = 0, hora_final: int = 24) -> "Periodo":
+        """Da hora inicial da data inicial até a hora final da data final, no horário de MS.
+
+        Sem horas, são dias inteiros: da 00 h da data inicial às 24 h da data final.
+        """
+        for hora in (hora_inicial, hora_final):
+            if not 0 <= hora <= 24:
+                raise ValueError(f"Hora inválida: {hora} (use uma hora cheia de 0 a 24).")
         if data_final < data_inicial:
             raise ValueError("A data final deve ser igual ou posterior à data inicial.")
-        inicio = datetime.combine(data_inicial, time.min, tzinfo=FUSO_MS).astimezone(FUSO_UTC)
-        fim = datetime.combine(data_final + timedelta(days=1), time.min, tzinfo=FUSO_MS).astimezone(FUSO_UTC)
-        return cls(inicio, fim, "dia" if data_inicial == data_final else "periodo")
+        inicio = datetime.combine(data_inicial, time.min, tzinfo=FUSO_MS) + timedelta(hours=hora_inicial)
+        fim = datetime.combine(data_final, time.min, tzinfo=FUSO_MS) + timedelta(hours=hora_final)
+        if fim <= inicio:
+            raise ValueError("O fim da consulta precisa ser depois do início.")
+        return cls(inicio.astimezone(FUSO_UTC), fim.astimezone(FUSO_UTC),
+                   "dia" if data_inicial == data_final else "periodo")
 
     @classmethod
     def tempo_real(cls, agora: datetime | None = None) -> "Periodo":
@@ -133,6 +143,16 @@ class Periodo:
     @property
     def num_dias(self) -> int:
         return (self.ultimo_dia - self.primeiro_dia).days + 1
+
+    @property
+    def horas(self) -> int:
+        """Duração da consulta, em horas."""
+        return round((self.fim - self.inicio).total_seconds() / 3600)
+
+    @property
+    def dias_inteiros(self) -> bool:
+        """True quando a consulta começa e termina à 00 h de MS (sem horários informados)."""
+        return all(momento.astimezone(FUSO_MS).time() == time.min for momento in (self.inicio, self.fim))
 
     @property
     def inicio_do_dia(self) -> datetime:
@@ -161,6 +181,9 @@ class Periodo:
         """Trecho usado nos nomes de pastas e arquivos."""
         if self.modo == "tempo_real":
             return f"{self.fim.astimezone(FUSO_MS):%Y%m%d_%H%M}"
+        if not self.dias_inteiros:
+            inicio, fim = self.inicio.astimezone(FUSO_MS), self.fim.astimezone(FUSO_MS)
+            return f"{inicio:%Y%m%d_%H}h_a_{fim:%Y%m%d_%H}h"
         if self.modo == "dia":
             return f"{self.primeiro_dia:%Y%m%d}"
         return f"{self.primeiro_dia:%Y%m%d}_a_{self.ultimo_dia:%Y%m%d}"
@@ -169,6 +192,9 @@ class Periodo:
     def descricao(self) -> str:
         if self.modo == "tempo_real":
             return f"Últimas 24 horas: {self.descrever_janela(self.inicio, self.fim)}"
+        if not self.dias_inteiros:
+            inicio, fim = self.inicio.astimezone(FUSO_MS), self.fim.astimezone(FUSO_MS)
+            return f"{inicio:%d/%m/%Y %H}h a {fim:%d/%m/%Y %H}h ({self.horas} horas, horário de MS)"
         if self.modo == "dia":
             return f"{self.primeiro_dia:%d/%m/%Y} (horário de MS)"
         return (
