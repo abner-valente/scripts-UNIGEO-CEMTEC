@@ -66,8 +66,9 @@ def test_baixar_dados_converte_valores_e_horarios(monkeypatch):
 
 
 @pytest.mark.parametrize("periodo, trecho_da_url", [
-    (Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30)), "/2026-07-30/2026-07-30/A702/"),
-    (Periodo.de_datas(date(2026, 8, 1), date(2026, 8, 31)), "/2026-08-01/2026-08-31/A702/"),
+    # Dia 30/07 em MS = leituras das 05 UTC de 30/07 às 04 UTC de 31/07
+    (Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30)), "/2026-07-30/2026-07-31/A702/"),
+    (Periodo.de_datas(date(2026, 8, 1), date(2026, 8, 31)), "/2026-08-01/2026-09-01/A702/"),
     (Periodo.tempo_real(datetime(2026, 9, 14, 13, 25, tzinfo=FUSO_UTC)), "/2026-09-10/2026-09-14/A702/"),
 ], ids=["dia", "periodo", "tempo_real"])
 def test_baixar_dados_pede_apenas_os_dias_necessarios(monkeypatch, periodo, trecho_da_url):
@@ -99,3 +100,15 @@ def test_falhas_da_api_retornam_none_sem_expor_o_token(monkeypatch, capsys, falh
     inicio, fim = Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30)).janela_busca
     assert inmet.baixar_dados_estacao("A702", inicio, fim) is None
     assert "TOKEN-SECRETO" not in capsys.readouterr().out
+
+
+def test_baixar_estacoes_deixa_de_fora_as_que_nao_tem_dados(monkeypatch):
+    estacoes = pd.DataFrame({"CD_ESTACAO": ["A1", "A2", "A3"], "Estação": ["Um", "Dois", "Tres"]})
+    monkeypatch.setattr(inmet, "listar_estacoes", lambda uf=config.UF: estacoes)
+    monkeypatch.setattr(inmet, "baixar_dados_estacao",
+                        lambda codigo, inicio, fim: None if codigo == "A2" else pd.DataFrame({"dt_utc": [1]}))
+    monkeypatch.setattr(config, "PAUSA_ENTRE_REQUISICOES", 0)
+
+    coletados = inmet.baixar_estacoes(*Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30)).janela_busca)
+
+    assert [estacao["CD_ESTACAO"] for estacao, _ in coletados] == ["A1", "A3"]

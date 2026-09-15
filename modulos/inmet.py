@@ -1,5 +1,6 @@
 """Acesso à API do INMET (apitempo.inmet.gov.br)."""
-from datetime import datetime, timedelta
+import time
+from datetime import datetime
 
 import pandas as pd
 import requests
@@ -46,13 +47,13 @@ def listar_estacoes(uf: str = config.UF) -> pd.DataFrame:
 
 
 def baixar_dados_estacao(codigo: str, inicio: datetime, fim: datetime) -> pd.DataFrame | None:
-    """Dados horários de uma estação cobrindo o intervalo [início, fim), em UTC.
+    """Dados horários de uma estação com as leituras da janela (início, fim].
 
-    A API trabalha com dias inteiros (data final inclusiva); o recorte exato por
+    A API trabalha com dias UTC inteiros (data final inclusiva); o recorte exato por
     horário é feito depois, em calculos.recortar. Retorna None se não houver dados.
     """
-    dia_inicial = inicio.date().isoformat()
-    dia_final = (fim - timedelta(microseconds=1)).date().isoformat()
+    dia_inicial = inicio.astimezone(config.FUSO_UTC).date().isoformat()
+    dia_final = fim.astimezone(config.FUSO_UTC).date().isoformat()
     url = config.URL_DADOS.format(inicio=dia_inicial, fim=dia_final, codigo=codigo, token=config.TOKEN_INMET)
 
     try:
@@ -87,3 +88,24 @@ def baixar_dados_estacao(codigo: str, inicio: datetime, fim: datetime) -> pd.Dat
         return None
 
     return dados.dropna(subset=["dt_utc"])
+
+
+def baixar_estacoes(inicio: datetime, fim: datetime, uf: str = config.UF) -> list[tuple[pd.Series, pd.DataFrame]]:
+    """Lista as estações da UF e baixa os dados horários de cada uma para a janela (início, fim].
+
+    Retorna (estação, dados) das estações que têm dados. Levanta ErroINMET se a lista de estações falhar.
+    """
+    estacoes = listar_estacoes(uf)
+    print(f"✅ Encontradas {len(estacoes)} estações em {uf}")
+
+    coletados = []
+    for _, estacao in estacoes.iterrows():
+        print(f"🛰️ Lendo: {estacao['Estação']}...")
+        dados = baixar_dados_estacao(estacao["CD_ESTACAO"], inicio, fim)
+        time.sleep(config.PAUSA_ENTRE_REQUISICOES)
+        if dados is not None:
+            print(f"    📊 {len(dados)} registros")
+            coletados.append((estacao, dados))
+
+    print(f"\n📊 Estações com dados: {len(coletados)} de {len(estacoes)}")
+    return coletados

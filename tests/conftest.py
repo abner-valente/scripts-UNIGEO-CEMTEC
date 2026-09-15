@@ -50,7 +50,9 @@ def api_simulada(monkeypatch, tmp_path):
         if codigo == CODIGO_SEM_DADOS:
             return None
         n = int(codigo[1:]) - 700
-        horas = pd.date_range(pd.Timestamp(inicio).floor("D"), pd.Timestamp(fim), freq="h", inclusive="left")
+        # Como a API: dias UTC inteiros, do dia do início ao dia do fim
+        horas = pd.date_range(pd.Timestamp(inicio).floor("D"), pd.Timestamp(fim).floor("D") + pd.Timedelta(days=1),
+                              freq="h", inclusive="left")
         hora = horas.hour.to_numpy()
         ciclo = np.sin((hora - 12) / 24 * 2 * np.pi)
         temperatura = 18 + n + 6 * ciclo
