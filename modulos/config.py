@@ -29,7 +29,9 @@ PASTA_IMG = RAIZ / "img"
 PASTA_SAIDA = RAIZ / "saida"
 
 SHAPE_UF = PASTA_SHP / "MS_UF_2022.shp"
-SHAPE_MUN = PASTA_SHP / "MS_mun.shp"
+# Versão simplificada (~100 m) de MS_mun.shp, gerada por ferramentas/simplificar_municipios.py:
+# visualmente idêntica nos mapas e bem mais leve para desenhar.
+SHAPE_MUN = PASTA_SHP / "MS_mun_simplificado.shp"
 
 # =====================================================
 # CREDENCIAIS
@@ -57,10 +59,12 @@ LON_MIN, LON_MAX = -58.5, -50.5
 LAT_MIN, LAT_MAX = -24.5, -17.0
 DPI = 300
 
-# Logos: (arquivo, zoom, posição (lon, lat), alinhamento da imagem em relação à posição)
+# Logos: (arquivo PNG com fundo transparente, retângulo [x, y, largura, altura] em fração da
+# moldura do mapa — (0, 0) é o canto inferior esquerdo e (1, 1) o superior direito).
+# Cada logo é ajustado ao seu retângulo mantendo a proporção e alinhado ao canto superior direito dele.
 LOGOS = [
-    (PASTA_IMG / "logo_semadesc.jpeg", 0.14, (LON_MAX - 2.7, LAT_MAX - 0.08), (0, 1)),
-    (PASTA_IMG / "logo_cemtec.jpeg", 0.12, (LON_MAX - 0.3, LAT_MAX - 1.0), (1, 1)),
+    (PASTA_IMG / "logo_semadesc.png", [0.705, 0.898, 0.28, 0.087]),
+    (PASTA_IMG / "logo_cemtec.png", [0.845, 0.793, 0.14, 0.085]),
 ]
 
 # =====================================================

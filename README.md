@@ -147,9 +147,26 @@ Sem o token configurado, o `main.py` para com uma mensagem de erro antes de cham
 
 > O `.env` contém credenciais e **nunca deve ser commitado** — ele já está no `.gitignore`. Em agendamentos ou servidores, o token também pode ser definido como variável de ambiente `TOKEN_INMET`, que tem prioridade sobre o `.env`.
 
+### Logos
+
+Os logos ficam em `img/`, em **PNG com fundo transparente** — uma imagem com fundo branco cobriria o mapa. A posição e o tamanho de cada um são definidos na lista `LOGOS`, em [`modulos/config.py`](modulos/config.py), como um retângulo `[x, y, largura, altura]` em fração da moldura do mapa: `(0, 0)` é o canto inferior esquerdo e `(1, 1)` o superior direito. O logo se ajusta ao retângulo mantendo a proporção e fica alinhado ao canto superior direito dele, no mesmo lugar em todos os mapas.
+
 ### Demais parâmetros
 
 Ficam em [`modulos/config.py`](modulos/config.py): UF, pastas, endereços e tempos limite da API, limites e resolução dos mapas, posição dos logos e parâmetros da interpolação.
+
+## Testes
+
+Os testes usam uma API do INMET simulada, então não precisam de token nem de internet:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+Rode os testes antes de cada commit: eles conferem as janelas de tempo, os cálculos, o acesso à API e a execução completa (Excel e mapas) nos três modos.
+
+Os testes também rodam automaticamente no GitHub (GitHub Actions, em Linux, com Python 3.10 e 3.14) a cada push e a cada pull request para a `main`. O resultado aparece como ✓ ou ✗ ao lado de cada commit e na aba **Actions** do repositório, onde também é possível rodá-los manualmente.
 
 ## Estrutura do repositório
 
@@ -162,11 +179,17 @@ Ficam em [`modulos/config.py`](modulos/config.py): UF, pastas, endereços e temp
 │   ├── calculos.py       # Extremos, acumulados de chuva e interpolação IDW
 │   ├── mapas.py          # Mapas pontuais e interpolados
 │   └── excel.py          # Relatório Excel
-├── shp/                  # Shapefiles: limite estadual (MS_UF_2022) e municípios (MS_mun)
-├── img/                  # Logos inseridos nos mapas
+├── ferramentas/          # Scripts auxiliares (ex.: gerar o shapefile simplificado dos municípios)
+├── tests/                # Testes automatizados (pytest), com a API do INMET simulada
+├── .github/workflows/    # Execução automática dos testes no GitHub (GitHub Actions)
+├── docs/                 # Documentos da equipe (ex.: questões em aberto para a meteorologia)
+├── shp/                  # Shapefiles: limite estadual e municípios (original e simplificado)
+├── img/                  # Logos inseridos nos mapas (PNG com fundo transparente)
 ├── saida/                # Resultados gerados (fora do controle de versão)
 ├── legado/               # Scripts originais, mantidos para comparação durante a validação
 ├── requirements.txt
+├── requirements-dev.txt  # Dependências de desenvolvimento (testes)
+├── pytest.ini            # Configuração dos testes
 ├── .env                  # Token do INMET (local, fora do controle de versão)
 ├── .env.example          # Modelo do arquivo .env
 └── README.md
@@ -179,14 +202,17 @@ Ficam em [`modulos/config.py`](modulos/config.py): UF, pastas, endereços e temp
 - **API do INMET** (`apitempo.inmet.gov.br`)
   - `/estacoes/T` — lista de estações automáticas (sem token)
   - `/token/estacao/{data_ini}/{data_fim}/{codigo}/{token}` — dados horários de uma estação
-- **Shapefiles** — `MS_UF_2022` (limite estadual, malha IBGE 2022) e `MS_mun` (79 municípios), em SIRGAS 2000 (EPSG:4674), reprojetados para WGS 84 (EPSG:4326) na execução.
+- **Shapefiles** (SIRGAS 2000, EPSG:4674, reprojetados para WGS 84/EPSG:4326 na execução):
+  - `MS_UF_2022` — limite estadual (malha IBGE 2022).
+  - `MS_mun` — limites dos 79 municípios, versão original e detalhada (~755 mil vértices).
+  - `MS_mun_simplificado` — versão usada nos mapas, simplificada com tolerância de 0,001° (~100 m, menos de meio pixel): ~5% dos vértices e sem diferença visível. Serve só para desenho; para cálculos de área ou análises espaciais, use o original. Se a malha municipal for atualizada, substitua os arquivos `MS_mun.*` e gere a versão simplificada de novo com `python ferramentas/simplificar_municipios.py`.
 
 ## Notas metodológicas
 
 - **Horários:** a API do INMET retorna os dados em UTC. As temperaturas mínima e máxima trazem a data/hora em UTC e no horário local de MS (`America/Campo_Grande`, UTC−4).
 - **Janelas de tempo:** todos os recortes usam o intervalo `[início, fim)` — a leitura das 00 UTC do dia inicial entra e a das 00 UTC do dia seguinte ao final não entra.
 - **Rajada:** `VEN_RAJ` é convertida de m/s para km/h (× 3,6). A direção registrada é a do horário da rajada máxima.
-- **Interpolação:** IDW (inverso do quadrado da distância) com os 8 vizinhos mais próximos, em uma grade de 100 × 100 pontos sobre longitude −58,5 a −50,5 e latitude −24,5 a −17,0. A distância é calculada em graus. São necessárias ao menos 3 estações.
+- **Interpolação:** IDW (inverso do quadrado da distância) com os 8 vizinhos mais próximos, em uma grade de 100 × 100 pontos sobre longitude −58,5 a −50,5 e latitude −24,5 a −17,0. A distância é calculada em graus. São necessárias ao menos 3 estações. A superfície é calculada até um pouco além da divisa e recortada exatamente pelo contorno de MS.
 - **Mapas de chuva:** consideram somente as estações com acumulado maior que zero.
 
 ## Mudanças em relação aos scripts legados
@@ -199,9 +225,13 @@ Os três scripts de `legado/` foram unificados no `main.py`. Diferenças nos res
 - **Coordenadas:** `Latitude` e `Longitude` em todas as abas; a associação é feita pela própria estação, não pelo nome.
 - **Mapa de rajadas com direção:** gerado em todos os modos (antes, só no tempo real).
 - **Títulos dos mapas no tempo real:** mostram a janela real de cada variável (ex.: a temperatura mínima indica "desde 00 UTC").
-- **Desempenho:** shapefiles, logos e máscara do estado são carregados uma única vez por execução.
+- **Logos:** em PNG com fundo transparente e posicionados em relação à moldura do mapa — mesmo lugar e proporção nos mapas pontuais e interpolados (antes, nos pontuais, um logo cobria o outro).
+- **Bordas dos mapas interpolados:** a cor preenche o estado até a divisa. Antes, a superfície era cortada pela grade de cálculo (células de ~8 km) e deixava falhas em degrau junto às bordas.
+- **Desempenho:** shapefiles, logos e máscara do estado são carregados uma única vez por execução, e os limites municipais usam uma versão simplificada (~5% dos vértices, sem diferença visível).
 
 ## Limitações conhecidas (em revisão)
+
+Estes pontos dependem de decisão da equipe de meteorologia e estão detalhados, com as opções, em [`docs/questoes_meteorologia.md`](docs/questoes_meteorologia.md).
 
 - Os mapas de chuva interpolados excluem as estações sem chuva, o que pode espalhar chuva sobre áreas secas.
 - A convenção de horário das leituras das 00 UTC (se pertencem ao dia anterior ou ao dia atual) precisa ser validada pela equipe de meteorologia.
