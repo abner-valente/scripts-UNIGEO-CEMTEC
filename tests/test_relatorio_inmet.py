@@ -40,6 +40,23 @@ def test_dia_no_horario_de_ms(serie):
     assert relatorio_inmet.resumir_estacao(dados, ESTACAO, DIA)["Chuva"]["Acumulado Dia"] == 10.0
 
 
+def test_consulta_com_horarios(serie):
+    """Das 08 h de 14/09 às 08 h de 15/09 em MS = leituras das 13 UTC de 14/09 às 12 UTC de 15/09."""
+    periodo = Periodo.de_datas(date(2026, 9, 14), date(2026, 9, 15), 8, 8)
+    dados = serie("2026-09-14", "2026-09-16", CHUVA=0.0)
+    dados.loc[dados["dt_utc"] == utc("2026-09-14 12:00"), "CHUVA"] = 50.0  # 07 h–08 h de 14/09: fica de fora
+    dados.loc[dados["dt_utc"] == utc("2026-09-14 13:00"), "CHUVA"] = 2.0   # 08 h–09 h de 14/09
+    dados.loc[dados["dt_utc"] == utc("2026-09-15 12:00"), "CHUVA"] = 5.0   # 07 h–08 h de 15/09
+    assert relatorio_inmet.resumir_estacao(dados, ESTACAO, periodo)["Chuva"]["Acumulado Período"] == 7.0
+
+
+def test_dia_com_horarios_mostra_a_duracao_em_horas():
+    periodo = Periodo.de_datas(date(2026, 9, 15), date(2026, 9, 15), 6, 18)
+    assert list(relatorio_inmet.janelas_chuva(periodo)) == ["Acumulado Período"]
+    titulos = [e.titulo for e in relatorio_inmet.especificacoes_mapas(periodo) if e.tabela == "Chuva"]
+    assert titulos == ["Chuva acumulada em 12 horas - Mato Grosso do Sul"]
+
+
 def test_chuva_do_dia_soma_24_leituras(serie):
     dados = serie("2026-07-29", "2026-08-01")
     assert relatorio_inmet.resumir_estacao(dados, ESTACAO, DIA)["Chuva"]["Acumulado Dia"] == 24.0
@@ -113,8 +130,9 @@ def test_tabelas_ordenadas_pelo_valor(serie):
 @pytest.mark.parametrize("periodo, colunas_chuva, mapas_esperados", [
     (DIA, ["Acumulado Dia"], 11),
     (Periodo.de_datas(date(2026, 8, 1), date(2026, 8, 3)), ["Acumulado Período"], 11),
-    (TEMPO_REAL, COLUNAS_TEMPO_REAL, 13),
-], ids=["dia", "periodo", "tempo_real"])
+    (Periodo.de_datas(date(2026, 9, 14), date(2026, 9, 15), 8, 8), ["Acumulado Período"], 11),
+    (TEMPO_REAL, COLUNAS_TEMPO_REAL, 15),
+], ids=["dia", "periodo", "periodo_com_horas", "tempo_real"])
 def test_execucao_completa(api_simulada, periodo, colunas_chuva, mapas_esperados):
     assert relatorio_inmet.executar(periodo) == 0
 

@@ -19,6 +19,8 @@ Desenvolvido pela equipe de meteorologia do **CEMTEC** — Centro de Monitoramen
    PRODUTO = "relatorio_inmet"
    DATA_INICIAL = date(2026, 8, 1)
    DATA_FINAL = date(2026, 8, 31)
+   HORA_INICIAL = None  # opcional: hora de início (0 a 24); None = 00 h
+   HORA_FINAL = None    # opcional: hora de fim (0 a 24); None = 24 h
    ```
 
    | Datas | Modo | O que é calculado |
@@ -38,9 +40,12 @@ O produto e as datas também podem ser passados pela linha de comando, sem edita
 ```bash
 python main.py --inicio 30/07/2026
 python main.py --inicio 01/08/2026 --fim 31/08/2026
+python main.py --inicio 14/09/2026 --hrini 8 --fim 15/09/2026 --hrfim 8
 python main.py --tempo-real
 python main.py --produto relatorio_inmet --tempo-real
 ```
+
+`--hrini` e `--hrfim` (ou `HORA_INICIAL` e `HORA_FINAL`) definem a hora de início e de fim, em horas cheias de 0 a 24 no horário de MS — aceitam `8`, `08h` ou `08:00`. O exemplo acima cobre das 08 h de 14/09 às 08 h de 15/09. Sem elas, a consulta vai da 00 h da data inicial às 24 h da data final. Não valem com `--tempo-real`.
 
 ### O que o `relatorio_inmet` calcula
 
@@ -88,9 +93,11 @@ saida/
         └── 20260914_0925/
 ```
 
+Quando a consulta usa horários, o nome da pasta inclui as horas — por exemplo, `periodo/20260914_08h_a_20260915_08h/` — e a chuva aparece como "Acumulado Período", com a duração em horas no título do mapa.
+
 | Modo | Mapas gerados |
 |---|---|
-| Tempo real | 13 — temperatura mínima e máxima, umidade, chuva 24 h e 48 h (pontual + interpolado), rajadas (pontual + interpolado) e rajadas com direção |
+| Tempo real | 15 — temperatura mínima e máxima, umidade, chuva 24 h, 48 h e 72 h (pontual + interpolado), rajadas (pontual + interpolado) e rajadas com direção |
 | Data específica / Período | 11 — os mesmos, com um único mapa de chuva (do dia ou do período) |
 
 O conteúdo de `saida/` fica fora do controle de versão.
@@ -239,6 +246,7 @@ Os três scripts de `legado/relatorio_inmet/` foram unificados no produto `relat
 - **Temperaturas:** sempre com data e hora completas, em UTC e em horário de MS.
 - **Coordenadas:** `Latitude` e `Longitude` em todas as abas; a associação é feita pela própria estação, não pelo nome.
 - **Mapa de rajadas com direção:** gerado em todos os modos (antes, só no tempo real).
+- **Mapa de chuva de 72 h no tempo real:** novo (antes, só 24 h e 48 h).
 - **Dia no horário de MS:** data específica e período usam o dia da 00 h às 24 h de MS (antes, o dia em UTC, com as leituras das 00 às 23 UTC).
 - **Temperatura mínima no tempo real:** usa as últimas 24 horas, como as demais variáveis (antes, desde as 00 UTC do dia).
 - **"Chuva Hoje" no tempo real:** conta desde a 00 h de MS (antes, desde as 00 UTC).
