@@ -42,9 +42,13 @@ Antes de escrever código novo, confira se a peça já existe:
    NOME = "<nome>"   # igual ao nome do arquivo; usado no main.py e na pasta de saída
    TITULO = "..."    # descrição curta, exibida ao rodar
 
-   def executar(periodo: Periodo) -> int:
+   def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
        """Gera o produto. Retorna 0 se deu certo e 1 se falhou."""
    ```
+
+   `opcoes` traz os argumentos de linha de comando que valem só para alguns produtos (por exemplo,
+   `--hrtodas`, do `risco_fogo`). Cada produto usa as opções que conhece e ignora o resto; um produto
+   sem opções próprias apenas aceita o parâmetro e não o consulta.
 
 2. Dentro de `executar`, siga o mesmo roteiro do `relatorio_inmet`: baixar os dados → calcular por estação → montar as tabelas → salvar a planilha e os mapas em `periodo.pasta_saida(NOME)`.
 3. Registre o produto na lista `PRODUTOS`, no `main.py`.
