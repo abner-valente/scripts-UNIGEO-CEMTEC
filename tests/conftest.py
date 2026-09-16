@@ -39,6 +39,13 @@ def serie():
     return serie_horaria
 
 
+@pytest.fixture(autouse=True)
+def sem_esperas(monkeypatch):
+    """Nenhum teste dorme: as pausas entre requisições e entre tentativas ficam em zero."""
+    monkeypatch.setattr(config, "PAUSA_ENTRE_REQUISICOES", 0)
+    monkeypatch.setattr(config, "PAUSA_ENTRE_TENTATIVAS", 0)
+
+
 @pytest.fixture
 def api_simulada(monkeypatch, tmp_path):
     """Troca a API do INMET por dados sintéticos e grava as saídas numa pasta temporária."""
@@ -72,6 +79,5 @@ def api_simulada(monkeypatch, tmp_path):
     monkeypatch.setattr(inmet, "baixar_dados_estacao", baixar)
     monkeypatch.setattr(config, "TOKEN_INMET", "token-de-teste")
     monkeypatch.setattr(config, "PASTA_SAIDA", tmp_path)
-    monkeypatch.setattr(config, "PAUSA_ENTRE_REQUISICOES", 0)
     monkeypatch.setattr(config, "DPI", 40)  # mapas pequenos, para o teste ser rápido
     return SimpleNamespace(estacoes_com_dados=len(ESTACOES) - 1)

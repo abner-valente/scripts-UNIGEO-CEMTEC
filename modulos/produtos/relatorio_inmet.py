@@ -173,6 +173,10 @@ def executar(periodo: Periodo) -> int:
         print(f"❌ Erro ao listar estações: {erro}")
         return 1
 
+    if not coletados:
+        print("❌ Nenhuma estação retornou dados. Confira o token e a conexão e tente de novo.")
+        return 1
+
     tabelas = montar_tabelas([resumir_estacao(dados, estacao, periodo) for estacao, dados in coletados], periodo)
     for aba, tabela in tabelas.items():
         print(f"   - {aba}: {len(tabela)} estações")

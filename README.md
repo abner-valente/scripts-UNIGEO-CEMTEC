@@ -169,7 +169,16 @@ Os logos ficam em `img/`, em **PNG com fundo transparente** — uma imagem com f
 
 ### Demais parâmetros
 
-Ficam em [`modulos/config.py`](modulos/config.py): UF, pastas, endereços e tempos limite da API, limites e resolução dos mapas, posição dos logos e parâmetros da interpolação.
+Ficam em [`modulos/config.py`](modulos/config.py): UF, pastas, endereços, tempos limite e tentativas da API, limites e resolução dos mapas, posição dos logos e parâmetros da interpolação.
+
+### Quando a API do INMET falha
+
+É comum a API encerrar a conexão sem responder no meio de uma consulta. Nesse caso, a estação é consultada de novo até `TENTATIVAS` vezes (padrão: 3), dobrando a espera a cada tentativa. Se ainda assim não der certo, a execução continua com as demais estações e o resumo do fim separa as que ficaram de fora:
+
+- **Sem leituras no período** — a estação respondeu, mas não tem dados nessas horas.
+- **Falha na consulta** — não foi possível ler a estação. Ela pode ter dados: vale repetir a consulta mais tarde.
+
+Erros de token (HTTP 4xx) não são repetidos, porque novas tentativas não resolvem.
 
 ## Testes
 
