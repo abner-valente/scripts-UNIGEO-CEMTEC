@@ -50,6 +50,8 @@ URL_DADOS = "https://apitempo.inmet.gov.br/token/estacao/{inicio}/{fim}/{codigo}
 TIMEOUT_ESTACOES = 20          # segundos
 TIMEOUT_DADOS = 60             # segundos
 PAUSA_ENTRE_REQUISICOES = 0.1  # segundos
+TENTATIVAS = 3                 # tentativas por requisição quando a API falha por um instante
+PAUSA_ENTRE_TENTATIVAS = 2     # segundos antes de repetir; dobra a cada tentativa (2 s, 4 s, ...)
 HORAS_BUSCA_TEMPO_REAL = 96    # histórico baixado no modo tempo real (cobre o acumulado de 72 h)
 
 # =====================================================
