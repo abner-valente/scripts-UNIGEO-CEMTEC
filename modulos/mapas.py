@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import shapely
 from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 
 from . import calculos, config
 
@@ -31,6 +32,21 @@ class EspecMapa:
     ranking: str
     maiores: bool = True         # ranking dos maiores (True) ou dos menores (False)
     direcao_vento: bool = False  # desenha as setas de direção do vento
+
+
+@dataclass(frozen=True)
+class EspecClasses:
+    """Mapa de classes discretas (ex.: níveis de risco): uma cor e um rótulo para cada classe.
+
+    Diferente do EspecMapa, o valor não vem de uma coluna contínua com barra de cores: as classes
+    são desenhadas com cores fixas e uma legenda nomeada.
+    """
+
+    titulo: str
+    subtitulo: str
+    arquivo: str
+    cores: list[str]
+    rotulos: list[str]
 
 
 @dataclass
@@ -119,12 +135,20 @@ def mapa_interpolado(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartogra
 
     grade = calculos.interpolar_idw(gdf["Longitude"], gdf["Latitude"], gdf[espec.coluna],
                                     base.lon_grade, base.lat_grade, config.IDW_VIZINHOS, config.IDW_POTENCIA)
-    grade = np.ma.masked_where(~base.dentro_uf, grade)
-
-    fig, ax = _nova_figura((14, 12))
     valores = gdf[espec.coluna]
     niveis = 20 if valores.max() > valores.min() else np.linspace(*_faixa_de_cores(valores), 11)
-    superficie = ax.contourf(base.lon_grade, base.lat_grade, grade, levels=niveis, cmap=espec.cmap, alpha=0.8)
+    mapa_de_grade(grade, gdf, espec, base, caminho, niveis)
+
+
+def mapa_de_grade(grade, gdf, espec: EspecMapa, base: BaseCartografica, caminho: Path, niveis=20) -> None:
+    """Desenha uma superfície já calculada, recortada ao estado, com as estações por cima.
+
+    Separado do mapa_interpolado porque nem toda superfície vem do IDW de uma única coluna: o
+    risco de fogo, por exemplo, combina três variáveis interpoladas em cada hora.
+    """
+    fig, ax = _nova_figura((14, 12))
+    superficie = ax.contourf(base.lon_grade, base.lat_grade, _recortar(grade, base),
+                             levels=niveis, cmap=espec.cmap, alpha=0.8)
     superficie.set_clip_path(base.contorno_uf, transform=ax.transData)
     fig.colorbar(superficie, ax=ax, label=espec.unidade, shrink=0.75)
     _desenhar_limites(ax, base)
@@ -143,19 +167,77 @@ def mapa_interpolado(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartogra
     _finalizar(fig, ax, espec, base, caminho)
 
 
+def mapa_classes_pontual(gdf, coluna: str, espec: EspecClasses, base: BaseCartografica, caminho: Path) -> None:
+    """Estações coloridas pela classe, com legenda nomeada no lugar da barra de cores."""
+    fig, ax = _nova_figura((12, 12))
+    _desenhar_limites(ax, base)
+
+    classes = _classes(gdf[coluna], espec)
+    # Marcador grande e rótulo sem caixa: aqui a cor é a informação, e uma caixa de fundo a cobriria
+    ax.scatter(gdf.geometry.x, gdf.geometry.y, c=[espec.cores[classe] for classe in classes],
+               s=520, edgecolor="black", linewidth=1.0, zorder=5)
+    _rotular(ax, gdf, classes.map(str), tamanho_fonte=11, cor="black",
+             fundo="none", borda="none", opacidade=1.0)
+    _legenda_classes(ax, espec, classes)
+    _finalizar(fig, ax, espec, base, caminho)
+
+
+def mapa_classes_interpolado(grade, gdf, coluna: str, espec: EspecClasses, base: BaseCartografica,
+                             caminho: Path) -> None:
+    """Superfície já classificada (0 a n-1) recortada ao estado, com as estações por cima."""
+    fig, ax = _nova_figura((14, 12))
+    # Uma faixa por classe: as fronteiras ficam no meio do caminho entre dois níveis inteiros
+    limites = np.arange(len(espec.cores) + 1) - 0.5
+    superficie = ax.contourf(base.lon_grade, base.lat_grade, _recortar(grade, base),
+                             levels=limites, colors=espec.cores, alpha=0.85)
+    superficie.set_clip_path(base.contorno_uf, transform=ax.transData)
+    _desenhar_limites(ax, base)
+    gdf.plot(ax=ax, color="black", markersize=50, alpha=0.7, edgecolor="white", linewidth=1.5)
+
+    classes = _classes(gdf[coluna], espec)
+    _rotular(ax, gdf, classes.map(str), tamanho_fonte=9, cor="white",
+             fundo="black", borda="white", opacidade=0.8)
+    _legenda_classes(ax, espec, classes)
+    _finalizar(fig, ax, espec, base, caminho)
+
+
 # =====================================================
 # ELEMENTOS COMUNS DOS MAPAS
 # =====================================================
-def _preparar_dados(tabela: pd.DataFrame | None, espec: EspecMapa) -> gpd.GeoDataFrame | None:
+def preparar_pontos(tabela: pd.DataFrame | None, coluna: str, descricao: str = "") -> gpd.GeoDataFrame | None:
+    """Tabela de estações como GeoDataFrame, sem as linhas a que falta o valor ou as coordenadas."""
     if tabela is None or tabela.empty:
-        print(f"⚠️ Sem dados para o mapa: {espec.titulo}")
+        print(f"⚠️ Sem dados para o mapa: {descricao}")
         return None
-    dados = tabela.dropna(subset=[espec.coluna, "Latitude", "Longitude"])
+    dados = tabela.dropna(subset=[coluna, "Latitude", "Longitude"])
     if dados.empty:
-        print(f"⚠️ Sem valores para o mapa: {espec.titulo}")
+        print(f"⚠️ Sem valores para o mapa: {descricao}")
         return None
     return gpd.GeoDataFrame(dados, geometry=gpd.points_from_xy(dados["Longitude"], dados["Latitude"]),
                             crs="EPSG:4326")
+
+
+def _preparar_dados(tabela: pd.DataFrame | None, espec: EspecMapa) -> gpd.GeoDataFrame | None:
+    return preparar_pontos(tabela, espec.coluna, espec.titulo)
+
+
+def _recortar(grade, base: BaseCartografica):
+    """Esconde as células da grade que ficam fora do estado."""
+    return np.ma.masked_where(~base.dentro_uf, grade)
+
+
+def _classes(valores: pd.Series, espec: EspecClasses) -> pd.Series:
+    """Valores convertidos em índice de classe, sem sair da faixa de cores disponível."""
+    return valores.astype(int).clip(0, len(espec.cores) - 1)
+
+
+def _legenda_classes(ax, espec: EspecClasses, classes: pd.Series) -> None:
+    """Legenda com uma entrada por classe e quantas estações caíram em cada uma."""
+    entradas = [
+        Patch(facecolor=cor, edgecolor="black", label=f"{rotulo} — {int((classes == indice).sum())} estações")
+        for indice, (cor, rotulo) in enumerate(zip(espec.cores, espec.rotulos))
+    ]
+    ax.legend(handles=entradas, loc="lower left", fontsize=10, framealpha=0.9)
 
 
 def _faixa_de_cores(valores: pd.Series) -> tuple[float, float]:
@@ -217,7 +299,7 @@ def _desenhar_setas_vento(ax, gdf) -> None:
 
 def _finalizar(fig, ax, espec: EspecMapa, base: BaseCartografica, caminho: Path) -> None:
     """Título, limites, logos e gravação do PNG."""
-    ax.set_title(f"{espec.titulo}\n{espec.subtitulo} — dados INMET", fontsize=16, weight="bold", pad=20)
+    ax.set_title(f"{espec.titulo}\n{espec.subtitulo} — INMET/SEMADESC", fontsize=16, weight="bold", pad=20)
     ax.set_xlim(config.LON_MIN, config.LON_MAX)
     ax.set_ylim(config.LAT_MIN, config.LAT_MAX)
     ax.set_xlabel("Longitude")

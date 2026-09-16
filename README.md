@@ -5,6 +5,7 @@ Produtos meteorológicos gerados a partir dos dados horários das **estações a
 | Produto | O que gera |
 |---|---|
 | `relatorio_inmet` | Extremos de temperatura, umidade e rajada e chuva acumulada de cada estação: planilha Excel e mapas |
+| `risco_fogo` | Risco meteorológico de fogo pela regra 30-30-30, avaliada hora a hora: planilha Excel e mapas de nível de risco |
 
 Desenvolvido pela equipe de meteorologia do **CEMTEC** — Centro de Monitoramento do Tempo e do Clima de Mato Grosso do Sul (SEMADESC).
 
@@ -47,6 +48,10 @@ python main.py --produto relatorio_inmet --tempo-real
 
 `--hrini` e `--hrfim` (ou `HORA_INICIAL` e `HORA_FINAL`) definem a hora de início e de fim, em horas cheias de 0 a 24 no horário de MS — aceitam `8`, `08h` ou `08:00`. O exemplo acima cobre das 08 h de 14/09 às 08 h de 15/09. Sem elas, a consulta vai da 00 h da data inicial às 24 h da data final. Não valem com `--tempo-real`.
 
+**`--produto` e o modo de tempo são independentes.** O `--produto` diz *o que* gerar; `--inicio`/`--fim` ou `--tempo-real` dizem *de quando* são os dados. Nenhum dos dois obriga o outro: sem `--produto`, vale o `PRODUTO` do arquivo; sem argumento de data, valem o `DATA_INICIAL` e o `DATA_FINAL` do arquivo. Por isso `--produto risco_fogo --tempo-real` é só uma das combinações possíveis — `--produto risco_fogo --inicio 16/09/2026` roda o mesmo produto para um dia específico.
+
+`--hrtodas` vale só para o `risco_fogo`: gera o mapa de todas as horas, e não apenas das horas em que alguma estação chegou ao risco médio ou alto.
+
 ### O que o `relatorio_inmet` calcula
 
 | Variável | Tempo real | Data específica / Período |
@@ -58,6 +63,28 @@ python main.py --produto relatorio_inmet --tempo-real
 | Chuva acumulada | Hoje (desde a 00 h de MS), 12 h, 24 h, 48 h e 72 h | Total do dia/período |
 
 Os dias, os horários dos títulos e os nomes das pastas seguem o horário de MS.
+
+### O que o `risco_fogo` calcula
+
+Conta, **em cada hora**, quantas das três condições da regra 30-30-30 são atendidas:
+
+| Condição | Limiar |
+|---|---|
+| Temperatura máxima | ≥ 30 °C |
+| Umidade relativa mínima | ≤ 30 % |
+| Rajada de vento | ≥ 30 km/h |
+
+O resultado é um nível de 0 a 3: **sem condição** (cinza), **risco baixo** (amarelo), **risco médio** (laranja) e **risco alto** (vermelho).
+
+A regra é avaliada hora a hora, e não sobre os extremos do dia: os extremos acontecem em horários diferentes, e o que importa para fogo é calor, seca e vento **ao mesmo tempo**. No mapa interpolado, as três variáveis são interpoladas separadamente e a regra é aplicada célula a célula — interpolar o nível 0–3 diretamente produziria valores sem sentido físico ("1,7 condições") e espalharia risco médio onde nenhuma estação o registrou.
+
+São gerados quatro mapas de síntese — nível máximo e horas em risco alto, cada um pontual e interpolado — e um mapa interpolado por hora. Por padrão só ganham mapa as horas em que **alguma estação** chegou ao laranja; com `--hrtodas`, todas as horas entram. O critério olha as estações, e não a superfície: a superfície interpolada pode mostrar nível 2 numa célula onde nenhuma estação chegou a 2.
+
+Aceita **data específica** e **tempo real**. Período é recusado com mensagem — para período a equipe quer gráficos quantitativos, e não mapas.
+
+Estações a que falte qualquer uma das três variáveis ficam de fora e são listadas ao rodar: incluí-las subestimaria o risco, já que nunca poderiam alcançar o nível 3.
+
+As decisões de método estão registradas em [`docs/questoes_meteorologia.md`](docs/questoes_meteorologia.md) (questões 6 a 8).
 
 ## Como funciona
 
@@ -79,26 +106,42 @@ Cada execução gera uma pasta própria dentro de `saida/`, separada por produto
 
 ```
 saida/
-└── relatorio_inmet/
+├── relatorio_inmet/
+│   ├── dia/
+│   │   └── 20260730/
+│   │       ├── Relatorio_MS_20260730.xlsx
+│   │       └── mapas/
+│   │           ├── Mapa_Temp_Min_MS_20260730.png
+│   │           ├── Mapa_Temp_Min_MS_20260730_interpolado.png
+│   │           └── ...
+│   ├── periodo/
+│   │   └── 20260801_a_20260831/
+│   └── tempo_real/
+│       └── 20260914_0925/
+└── risco_fogo/
     ├── dia/
-    │   └── 20260730/
-    │       ├── Relatorio_MS_20260730.xlsx
+    │   └── 20260916/
+    │       ├── Risco_Fogo_MS_20260916.xlsx
     │       └── mapas/
-    │           ├── Mapa_Temp_Min_MS_20260730.png
-    │           ├── Mapa_Temp_Min_MS_20260730_interpolado.png
-    │           └── ...
-    ├── periodo/
-    │   └── 20260801_a_20260831/
+    │           ├── Mapa_Risco_Fogo_Nivel_MS_20260916.png
+    │           ├── Mapa_Risco_Fogo_Nivel_MS_20260916_interpolado.png
+    │           ├── Mapa_Risco_Fogo_Horas_MS_20260916.png
+    │           ├── Mapa_Risco_Fogo_Horas_MS_20260916_interpolado.png
+    │           └── horas/
+    │               ├── Mapa_Risco_Fogo_MS_20260916_14h.png
+    │               └── ...
     └── tempo_real/
-        └── 20260914_0925/
+        └── 20260916_0925/
 ```
 
 Quando a consulta usa horários, o nome da pasta inclui as horas — por exemplo, `periodo/20260914_08h_a_20260915_08h/` — e a chuva aparece como "Acumulado Período", com a duração em horas no título do mapa.
 
-| Modo | Mapas gerados |
+| Modo | Mapas do `relatorio_inmet` |
 |---|---|
 | Tempo real | 15 — temperatura mínima e máxima, umidade, chuva 24 h, 48 h e 72 h (pontual + interpolado), rajadas (pontual + interpolado) e rajadas com direção |
 | Data específica / Período | 11 — os mesmos, com um único mapa de chuva (do dia ou do período) |
+
+O `risco_fogo` gera sempre 4 mapas de síntese (nível máximo e horas em risco alto, cada um pontual e interpolado), mais um mapa interpolado por hora em `mapas/horas/`. A quantidade de mapas horários varia: por padrão, só as horas em que alguma estação chegou ao risco médio ou alto; com `--hrtodas`, até 24 num dia.
 
 O conteúdo de `saida/` fica fora do controle de versão.
 
@@ -209,7 +252,8 @@ Os scripts da equipe estão sendo migrados aos poucos. Cada um vira um produto e
 │   ├── mapas.py          # Mapas pontuais e interpolados
 │   ├── excel.py          # Planilha Excel
 │   └── produtos/         # Um arquivo por produto
-│       └── relatorio_inmet.py  # Extremos e chuva das estações automáticas
+│       ├── relatorio_inmet.py  # Extremos e chuva das estações automáticas
+│       └── risco_fogo.py       # Risco de fogo pela regra 30-30-30, hora a hora
 ├── ferramentas/          # Scripts auxiliares (ex.: gerar o shapefile simplificado dos municípios)
 ├── tests/                # Testes automatizados (pytest), com a API do INMET simulada
 ├── .github/workflows/    # Execução automática dos testes no GitHub (GitHub Actions)

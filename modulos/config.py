@@ -77,6 +77,18 @@ IDW_VIZINHOS = 8
 IDW_POTENCIA = 2
 MIN_ESTACOES_INTERPOLACAO = 3
 
+# =====================================================
+# RISCO DE FOGO (regra 30-30-30)
+# =====================================================
+# Cada condição atendida soma um nível: 0 (nenhuma), 1 (baixo), 2 (médio) e 3 (alto).
+LIMIAR_TEMP_MAX = 30.0     # °C   — condição atendida com temperatura máxima >= este valor
+LIMIAR_UMIDADE_MIN = 30.0  # %    — condição atendida com umidade relativa mínima <= este valor
+LIMIAR_RAJADA = 30.0       # km/h — condição atendida com rajada >= este valor
+
+CORES_RISCO = ["#bdbdbd", "#ffd54f", "#fb8c00", "#d32f2f"]  # cinza, amarelo, laranja, vermelho
+ROTULOS_RISCO = ["Sem condição", "Risco baixo", "Risco médio", "Risco alto"]
+NIVEL_MAPA_HORARIO = 2     # nível mínimo, em alguma estação, para gerar o mapa daquela hora
+
 
 # =====================================================
 # PERÍODO DA CONSULTA
