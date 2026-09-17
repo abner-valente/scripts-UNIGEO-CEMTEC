@@ -298,8 +298,8 @@ saida/risco_fogo/dia/20260903/
     ├── Mapa_Risco_Fogo_Horas_MS_20260903.png
     ├── Mapa_Risco_Fogo_Horas_MS_20260903_interpolado.png
     └── horas/
-        ├── Mapa_Risco_Fogo_MS_20260903_09h.png
         ├── Mapa_Risco_Fogo_MS_20260903_10h.png
+        ├── Mapa_Risco_Fogo_MS_20260903_11h.png
         └── ...
 ```
 
@@ -314,7 +314,7 @@ saida/risco_fogo/dia/20260903/
 
 O **nível máximo** mostra o pico; as **horas em risco alto** mostram a duração — ficar 6 horas em 30-30-30 é bem diferente de ficar 1 hora. Em dias em que nenhuma estação chega ao nível 3, os mapas de horas ficam zerados.
 
-**Quais horas ganham mapa próprio:** por padrão, só as horas em que **pelo menos uma estação** chegou ao risco médio ou alto (nível ≥ 2); num dia ameno, a pasta `horas/` nem é criada. Com `--hrtodas`, saem todas as horas, até 24 num dia. Cada mapa horário leva a hora em que a leitura termina: o das 14h mostra a hora das 13 h às 14 h.
+**Quais horas ganham mapa próprio:** por padrão, só as horas em que **pelo menos uma estação** chegou ao risco alto (nível 3); num dia sem risco alto, a pasta `horas/` nem é criada. Com `--hrtodas`, saem todas as horas, até 24 num dia. Cada mapa horário leva a hora em que a leitura termina: o das 14h mostra a hora das 13 h às 14 h.
 
 **Pontos das condições nos mapas horários:** o número de cada estação é o nível dela **naquela hora**, e abaixo dele aparece um ponto para cada condição atendida — roxo para temperatura, azul para umidade e verde para rajada. Cada condição ocupa sempre a mesma posição (temperatura à esquerda, umidade no meio, rajada à direita), então dá para identificá-la mesmo sem distinguir as cores. Os mapas de síntese não têm os pontos: eles juntam horas diferentes, e as condições de uma única hora não representariam o dia.
 
@@ -326,6 +326,7 @@ Colunas da planilha:
 | `Horas em Risco Alto`, `Horas Nível 2`, `Horas Nível 1` | Quantas horas a estação passou em cada nível |
 | `Horas com Dados` | Quantas horas tinham as três variáveis |
 | `Temp. Máxima (°C)`, `Umidade Mínima (%)`, `Rajada Máxima (km/h)` | Extremos da janela, para conferir por que a estação recebeu o seu nível |
+| `Primeiro Horário em Risco Médio (MS)` | Quando a estação chegou ao nível 2 pela primeira vez — mostra quando o risco começou a subir, mesmo nos dias que não chegam ao nível 3 |
 | `Primeiro Horário em Risco Alto (MS)` | Quando a estação chegou ao nível 3 pela primeira vez (vazio se não chegou) |
 | `Latitude`, `Longitude` | Posição da estação |
 
@@ -337,11 +338,11 @@ Mapas gerados com dados reais do INMET para **03/09/2026**.
 |---|---|---|
 | <img src="docs/img/risco_fogo/nivel_pontual.png" alt="Mapa pontual do nível máximo de risco de fogo por estação" width="245"> | <img src="docs/img/risco_fogo/nivel_interpolado.png" alt="Mapa interpolado do nível máximo de risco de fogo" width="245"> | <img src="docs/img/risco_fogo/horas_risco_alto_interpolado.png" alt="Mapa interpolado das horas em risco alto de fogo" width="245"> |
 
-A evolução ao longo do dia, nos mapas horários — o risco sobe pela manhã, atinge o pico no início da tarde e recua no fim do dia:
+A evolução ao longo do dia, nos mapas horários. Em 03/09 o risco alto apareceu às 10h, se espalhou à tarde e desapareceu depois das 16h — por isso o dia rendeu sete mapas horários:
 
-| 11h | 14h | 18h |
+| 10h | 13h | 16h |
 |---|---|---|
-| <img src="docs/img/risco_fogo/hora_11h.png" alt="Mapa de risco de fogo às 11h" width="245"> | <img src="docs/img/risco_fogo/hora_14h.png" alt="Mapa de risco de fogo às 14h" width="245"> | <img src="docs/img/risco_fogo/hora_18h.png" alt="Mapa de risco de fogo às 18h" width="245"> |
+| <img src="docs/img/risco_fogo/hora_10h.png" alt="Mapa de risco de fogo às 10h" width="245"> | <img src="docs/img/risco_fogo/hora_13h.png" alt="Mapa de risco de fogo às 13h" width="245"> | <img src="docs/img/risco_fogo/hora_16h.png" alt="Mapa de risco de fogo às 16h" width="245"> |
 
 #### Dados de referência
 
@@ -375,12 +376,15 @@ O método foi definido em **16/09/2026** a partir do pedido da equipe (questões
 - Regra avaliada hora a hora, e não sobre os extremos do período.
 - Três variáveis interpoladas separadamente, com a regra aplicada ponto a ponto.
 - Somente data específica e tempo real; período fica para os gráficos de uma etapa futura.
-- Mapas de síntese (nível máximo e horas em risco alto) em versão pontual e interpolada; mapas horários só interpolados, filtrados pelo nível ≥ 2 nas estações, ou todos com `--hrtodas`.
+- Mapas de síntese (nível máximo e horas em risco alto) em versão pontual e interpolada, sempre gerados; mapas horários só interpolados, apenas nas horas com alguma estação em risco alto, ou todos com `--hrtodas`.
+- A planilha conta as horas nos três níveis e traz o primeiro horário em risco médio e em risco alto: dá para acompanhar quando o risco começou a subir, mesmo nos dias que não chegam ao nível 3.
 - As três condições têm o mesmo peso; estações sem uma das variáveis ficam de fora.
 - Cores cinza, amarelo, laranja e vermelho (sem o par verde/vermelho, por causa do daltonismo).
 - Nos mapas horários, pontos das condições atendidas abaixo de cada estação, em posição fixa (definido em 17/09/2026).
 
-⚠️ **Ainda aguardam confirmação da meteorologia:** a aproximação de simultaneidade dentro da hora, a confiabilidade da rajada interpolada, os limiares (≥ 30 °C, ≤ 30 %, ≥ 30 km/h) e o critério do nível laranja para gerar mapa horário.
+Em **17/09/2026** a equipe confirmou duas aproximações do método: avaliar a simultaneidade dentro de cada hora (a janela mais fina que a API oferece) e manter a rajada na superfície interpolada, apesar de o vento ser muito local.
+
+⚠️ **Ainda aguardam confirmação da meteorologia:** os limiares (≥ 30 °C, ≤ 30 %, ≥ 30 km/h) e o critério de gerar mapa horário só a partir do risco alto.
 
 ---
 

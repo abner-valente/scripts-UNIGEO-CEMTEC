@@ -95,6 +95,7 @@ def test_horas_da_janela(periodo, quantidade, primeira, ultima):
 
 def test_resumo_conta_as_horas_de_cada_nivel(serie):
     dados = serie("2026-09-16", "2026-09-17 05:00", TEM_MAX=QUENTE, UMD_MIN=UMIDO, VEN_RAJ=CALMO)  # nível 1 o dia todo
+    dados.loc[dados["dt_utc"] == utc("2026-09-16 16:00"), "UMD_MIN"] = SECO  # nível 2 às 12 h de MS
     duas_horas = dados["dt_utc"].isin([utc("2026-09-16 18:00"), utc("2026-09-16 19:00")])
     dados.loc[duas_horas, ["UMD_MIN", "VEN_RAJ"]] = [SECO, VENTOSO]
 
@@ -102,8 +103,10 @@ def test_resumo_conta_as_horas_de_cada_nivel(serie):
 
     assert linha["Nível Máximo"] == 3
     assert linha["Horas em Risco Alto"] == 2
-    assert linha["Horas Nível 1"] == 22
+    assert linha["Horas Nível 2"] == 1
+    assert linha["Horas Nível 1"] == 21
     assert linha["Horas com Dados"] == 24
+    assert linha["Primeiro Horário em Risco Médio (MS)"] == "16/09/2026 12:00"  # 16 UTC, quando começou a subir
     assert linha["Primeiro Horário em Risco Alto (MS)"] == "16/09/2026 14:00"  # 18 UTC = 14 h em MS
 
 
@@ -111,6 +114,7 @@ def test_estacao_sem_risco_alto_fica_sem_horario(serie):
     dados = serie("2026-09-16", "2026-09-17 05:00", TEM_MAX=FRIO, UMD_MIN=UMIDO, VEN_RAJ=CALMO)
     linha = risco_fogo.resumir_estacao(risco_fogo.leituras_validas(dados, DIA), ESTACAO)
     assert linha["Nível Máximo"] == 0
+    assert linha["Primeiro Horário em Risco Médio (MS)"] == ""
     assert linha["Primeiro Horário em Risco Alto (MS)"] == ""
 
 
@@ -130,9 +134,9 @@ def _hora(nivel_estacoes, nivel_grade):
     return risco_fogo.HoraAvaliada(np.full((2, 2), nivel_grade), estacoes)
 
 
-def test_so_as_horas_de_nivel_laranja_ganham_mapa():
+def test_so_as_horas_com_risco_alto_ganham_mapa():
     horas = {1: _hora(0, 0), 2: _hora(2, 2), 3: _hora(3, 3)}
-    assert sorted(risco_fogo.horas_para_mapear(horas)) == [2, 3]
+    assert sorted(risco_fogo.horas_para_mapear(horas)) == [3]
 
 
 def test_hrtodas_mapeia_todas_as_horas():
@@ -141,9 +145,20 @@ def test_hrtodas_mapeia_todas_as_horas():
 
 
 def test_criterio_olha_as_estacoes_e_nao_a_superficie():
-    """A superfície pode chegar ao laranja por interpolação sem que nenhuma estação tenha chegado."""
-    horas = {1: _hora(nivel_estacoes=1, nivel_grade=2)}
+    """A superfície pode chegar ao risco alto por interpolação sem que nenhuma estação tenha chegado."""
+    horas = {1: _hora(nivel_estacoes=2, nivel_grade=3)}
     assert risco_fogo.horas_para_mapear(horas) == {}
+
+
+# ---------- Títulos ----------
+
+@pytest.mark.parametrize("periodo, subtitulo", [
+    (DIA, "16/09/2026"),                                           # data sozinha: sem fuso
+    (MANHA, "16/09/2026 06:00 a 16/09/2026 09:00 GMT-04"),         # com horário: com fuso
+    (TEMPO_REAL, "13/09/2026 09:25 até 14/09/2026 09:25 GMT-04"),
+], ids=["dia", "janela_curta", "tempo_real"])
+def test_subtitulo_traz_o_fuso_so_quando_ha_horario(periodo, subtitulo):
+    assert risco_fogo._subtitulo(periodo) == subtitulo
 
 
 # ---------- Mapas horários ----------

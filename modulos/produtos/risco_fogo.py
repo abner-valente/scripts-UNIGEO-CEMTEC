@@ -34,6 +34,7 @@ COLUNA_NIVEL = "Nível Máximo"
 COLUNA_HORAS_ALTO = "Horas em Risco Alto"
 COLUNA_NIVEL_HORA = "Nível na Hora"
 COLUNAS_CONDICOES = ["Temperatura Atendida", "Umidade Atendida", "Rajada Atendida"]
+NIVEL_MEDIO = 2
 NIVEL_ALTO = 3
 
 
@@ -90,7 +91,6 @@ def horas_da_janela(periodo: Periodo) -> pd.DatetimeIndex:
 def resumir_estacao(leituras: pd.DataFrame, estacao: pd.Series) -> dict:
     """Linha da planilha: nível máximo, horas em cada nível e os valores que dispararam as condições."""
     niveis = niveis_por_hora(leituras)
-    em_risco_alto = niveis[niveis == NIVEL_ALTO]
     return {
         "Estação": estacao["Estação"],
         COLUNA_NIVEL: int(niveis.max()),
@@ -101,7 +101,8 @@ def resumir_estacao(leituras: pd.DataFrame, estacao: pd.Series) -> dict:
         "Temp. Máxima (°C)": round(float(leituras["TEM_MAX"].max()), 1),
         "Umidade Mínima (%)": round(float(leituras["UMD_MIN"].min()), 1),
         "Rajada Máxima (km/h)": round(float(leituras["rajada_kmh"].max()), 1),
-        "Primeiro Horário em Risco Alto (MS)": _hora_ms(em_risco_alto.index.min() if len(em_risco_alto) else None),
+        "Primeiro Horário em Risco Médio (MS)": _primeiro_horario(niveis, NIVEL_MEDIO),
+        "Primeiro Horário em Risco Alto (MS)": _primeiro_horario(niveis, NIVEL_ALTO),
         "Latitude": estacao["VL_LATITUDE"],
         "Longitude": estacao["VL_LONGITUDE"],
     }
@@ -114,9 +115,15 @@ def montar_tabela(resumos: list[dict]) -> pd.DataFrame:
     )
 
 
-def _hora_ms(momento) -> str:
-    """Horário de uma leitura no fuso de MS, pronto para a planilha."""
-    return "" if momento is None else momento.tz_convert(config.FUSO_MS).strftime("%d/%m/%Y %H:%M")
+def _primeiro_horario(niveis: pd.Series, nivel: int) -> str:
+    """Primeira hora em que a estação alcançou esse nível, no horário de MS (vazio se nunca alcançou).
+
+    Serve para acompanhar quando o risco começou a subir, mesmo nos dias que não chegam ao nível alto.
+    """
+    alcancadas = niveis[niveis >= nivel]
+    if alcancadas.empty:
+        return ""
+    return alcancadas.index.min().tz_convert(config.FUSO_MS).strftime("%d/%m/%Y %H:%M")
 
 
 # =====================================================
@@ -198,6 +205,20 @@ def _espec_classes(titulo: str, subtitulo: str, arquivo: str) -> EspecClasses:
     return EspecClasses(titulo, subtitulo, arquivo, config.CORES_RISCO, config.ROTULOS_RISCO)
 
 
+def _subtitulo(periodo: Periodo) -> str:
+    """Data ou intervalo da consulta para o título do mapa.
+
+    O fuso (GMT-04, o horário de MS) só aparece quando o texto traz horário: numa data sozinha
+    ele não acrescenta nada. Não usa Periodo.descrever_janela para não mexer nos outros produtos.
+    """
+    inicio, fim = (momento.astimezone(config.FUSO_MS) for momento in periodo.janela)
+    if periodo.modo == "tempo_real":
+        return f"{inicio:%d/%m/%Y %H:%M} até {fim:%d/%m/%Y %H:%M} GMT-04"
+    if not periodo.dias_inteiros:
+        return f"{inicio:%d/%m/%Y %H:%M} a {fim:%d/%m/%Y %H:%M} GMT-04"
+    return f"{periodo.primeiro_dia:%d/%m/%Y}"
+
+
 def _indicadores_condicoes() -> Indicadores:
     """Pontos das condições atendidas nos mapas horários: temperatura à esquerda, umidade no meio, rajada à direita."""
     rotulos = [f"Temperatura máx. ≥ {config.LIMIAR_TEMP_MAX:g} °C",
@@ -220,13 +241,13 @@ def gerar_mapas(tabela: pd.DataFrame, horas: dict, periodo: Periodo, base: BaseC
         return
     pasta.mkdir(parents=True, exist_ok=True)
     identificador = periodo.identificador
-    subtitulo = periodo.descrever_janela(*periodo.janela)
+    subtitulo = _subtitulo(periodo)
 
-    espec = _espec_classes(f"Risco de fogo — nível máximo em {config.NOME_UF}", subtitulo,
+    espec = _espec_classes(f"Risco de Fogo — Nível Máx. em {config.UF}", subtitulo,
                            f"Mapa_Risco_Fogo_Nivel_{config.UF}")
     mapas.mapa_classes_pontual(gdf, COLUNA_NIVEL, espec, base, pasta / f"{espec.arquivo}_{identificador}.png")
 
-    exposicao = EspecMapa(ABA, COLUNA_HORAS_ALTO, f"Horas em risco alto de fogo em {config.NOME_UF}", subtitulo,
+    exposicao = EspecMapa(ABA, COLUNA_HORAS_ALTO, f"Horas Agregadas de risco alto de fogo em {config.UF}", subtitulo,
                           f"Mapa_Risco_Fogo_Horas_{config.UF}", "YlOrRd", "Horas em risco alto",
                           "5 MAIORES EXPOSIÇÕES")
     mapas.mapa_pontual(gdf, exposicao, base, pasta / f"{exposicao.arquivo}_{identificador}.png")
@@ -261,8 +282,8 @@ def _mapas_horarios(horas: dict, base: BaseCartografica, pasta: Path, todas_as_h
     print(f"\n🕐 Mapas horários: {len(selecionadas)} de {len(horas)} horas")
     for hora, avaliada in sorted(selecionadas.items()):
         local = hora.tz_convert(config.FUSO_MS)
-        espec = _espec_classes(f"Risco de fogo em {config.NOME_UF}",
-                               f"{local:%d/%m/%Y %H:%M} (horário de MS)",
+        espec = _espec_classes(f"Risco de Fogo em {config.UF}",
+                               f"{local:%d/%m/%Y %H:%M} GMT-04",
                                f"Mapa_Risco_Fogo_{config.UF}")
         estacoes = mapas.preparar_pontos(avaliada.estacoes, COLUNA_NIVEL_HORA, espec.subtitulo)
         mapas.mapa_classes_interpolado(avaliada.grade, estacoes, COLUNA_NIVEL_HORA, espec, base,
