@@ -1,6 +1,7 @@
 """Produto risco_fogo: a regra 30-30-30 hora a hora, as grades horárias e a execução completa."""
 from datetime import date, datetime
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -125,8 +126,8 @@ def test_tabela_ordena_do_maior_risco_para_o_menor():
 # ---------- Seleção das horas que ganham mapa ----------
 
 def _hora(nivel_estacoes, nivel_grade):
-    import numpy as np
-    return risco_fogo.HoraAvaliada(np.full((2, 2), nivel_grade), nivel_estacoes)
+    estacoes = pd.DataFrame({risco_fogo.COLUNA_NIVEL_HORA: [0, nivel_estacoes]})
+    return risco_fogo.HoraAvaliada(np.full((2, 2), nivel_grade), estacoes)
 
 
 def test_so_as_horas_de_nivel_laranja_ganham_mapa():
@@ -143,6 +144,32 @@ def test_criterio_olha_as_estacoes_e_nao_a_superficie():
     """A superfície pode chegar ao laranja por interpolação sem que nenhuma estação tenha chegado."""
     horas = {1: _hora(nivel_estacoes=1, nivel_grade=2)}
     assert risco_fogo.horas_para_mapear(horas) == {}
+
+
+# ---------- Mapas horários ----------
+
+def test_estacoes_da_hora_trazem_o_nivel_daquela_hora(serie):
+    """Nos mapas horários, cada estação leva o nível da hora, e não o máximo do dia."""
+    dados = serie("2026-09-16", "2026-09-17 05:00", TEM_MAX=FRIO, UMD_MIN=UMIDO, VEN_RAJ=CALMO)
+    dados.loc[dados["dt_utc"] == utc("2026-09-16 18:00"), ["TEM_MAX", "UMD_MIN", "VEN_RAJ"]] = [QUENTE, SECO, VENTOSO]
+    coletados = [(ESTACAO, risco_fogo.leituras_validas(dados, DIA))]
+
+    assert risco_fogo.estacoes_na_hora(coletados, utc("2026-09-16 18:00"))["Nível na Hora"].tolist() == [3]
+    assert risco_fogo.estacoes_na_hora(coletados, utc("2026-09-16 15:00"))["Nível na Hora"].tolist() == [0]
+
+
+def test_mapa_horario_recebe_as_estacoes_da_hora(monkeypatch, tmp_path):
+    """Rótulos e legenda do mapa horário vêm das estações daquela hora."""
+    desenhados = []
+    monkeypatch.setattr(risco_fogo.mapas, "mapa_classes_interpolado",
+                        lambda grade, gdf, coluna, espec, base, caminho: desenhados.append(gdf[coluna].tolist()))
+    estacoes = pd.DataFrame({"Estação": ["A", "B"], "Latitude": [-20.0, -21.0], "Longitude": [-55.0, -54.0],
+                             "Nível na Hora": [0, 2]})
+    horas = {utc("2026-09-16 15:00"): risco_fogo.HoraAvaliada(np.zeros((2, 2)), estacoes)}
+
+    risco_fogo._mapas_horarios(horas, base=None, pasta=tmp_path, todas_as_horas=True)
+
+    assert desenhados == [[0, 2]]
 
 
 # ---------- Execução completa ----------

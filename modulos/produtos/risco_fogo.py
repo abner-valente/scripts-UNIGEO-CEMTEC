@@ -32,6 +32,7 @@ COLUNAS_NECESSARIAS = ["TEM_MAX", "UMD_MIN", "VEN_RAJ"]
 ABA = "Risco"
 COLUNA_NIVEL = "Nível Máximo"
 COLUNA_HORAS_ALTO = "Horas em Risco Alto"
+COLUNA_NIVEL_HORA = "Nível na Hora"
 NIVEL_ALTO = 3
 
 
@@ -115,21 +116,25 @@ def _hora_ms(momento) -> str:
 # =====================================================
 # GRADES HORÁRIAS (as três variáveis interpoladas separadamente)
 # =====================================================
-def valores_na_hora(coletados: list, hora) -> pd.DataFrame:
-    """Valores das estações que têm leitura completa naquela hora."""
+def estacoes_na_hora(coletados: list, hora) -> pd.DataFrame:
+    """Estações com leitura completa naquela hora, com os valores e o nível de risco **da hora**."""
     linhas = []
     for estacao, leituras in coletados:
         leitura = leituras[leituras["dt_utc"] == hora]
         if leitura.empty:
             continue
         linhas.append({
+            "Estação": estacao["Estação"],
             "Longitude": estacao["VL_LONGITUDE"],
             "Latitude": estacao["VL_LATITUDE"],
             "TEM_MAX": leitura["TEM_MAX"].iloc[0],
             "UMD_MIN": leitura["UMD_MIN"].iloc[0],
             "rajada_kmh": leitura["rajada_kmh"].iloc[0],
         })
-    return pd.DataFrame(linhas)
+    estacoes = pd.DataFrame(linhas)
+    if not estacoes.empty:
+        estacoes[COLUNA_NIVEL_HORA] = contar_condicoes(estacoes["TEM_MAX"], estacoes["UMD_MIN"], estacoes["rajada_kmh"])
+    return estacoes
 
 
 def grade_da_hora(pontos: pd.DataFrame, base: BaseCartografica) -> np.ndarray:
@@ -144,21 +149,24 @@ def grade_da_hora(pontos: pd.DataFrame, base: BaseCartografica) -> np.ndarray:
 
 @dataclass(frozen=True)
 class HoraAvaliada:
-    """O que foi calculado para uma hora: a grade de níveis e o maior nível visto nas estações."""
+    """O que foi calculado para uma hora: a grade de níveis e as estações com o nível daquela hora."""
 
     grade: np.ndarray
-    nivel_estacoes: int
+    estacoes: pd.DataFrame
+
+    @property
+    def nivel_estacoes(self) -> int:
+        """Maior nível observado nas estações naquela hora."""
+        return int(self.estacoes[COLUNA_NIVEL_HORA].max())
 
 
 def analisar_horas(coletados: list, periodo: Periodo, base: BaseCartografica) -> dict:
     """Avalia cada hora da janela. Horas com poucas estações para interpolar ficam de fora."""
     horas = {}
     for hora in horas_da_janela(periodo):
-        pontos = valores_na_hora(coletados, hora)
-        if len(pontos) < config.MIN_ESTACOES_INTERPOLACAO:
-            continue
-        niveis = contar_condicoes(pontos["TEM_MAX"], pontos["UMD_MIN"], pontos["rajada_kmh"])
-        horas[hora] = HoraAvaliada(grade_da_hora(pontos, base), int(niveis.max()))
+        estacoes = estacoes_na_hora(coletados, hora)
+        if len(estacoes) >= config.MIN_ESTACOES_INTERPOLACAO:
+            horas[hora] = HoraAvaliada(grade_da_hora(estacoes, base), estacoes)
     return horas
 
 
@@ -217,11 +225,15 @@ def gerar_mapas(tabela: pd.DataFrame, horas: dict, periodo: Periodo, base: BaseC
                             pasta / f"{exposicao.arquivo}_{identificador}_interpolado.png",
                             _niveis_continuos(contagem))
 
-    _mapas_horarios(gdf, horas, base, pasta / "horas", todas_as_horas)
+    _mapas_horarios(horas, base, pasta / "horas", todas_as_horas)
 
 
-def _mapas_horarios(gdf, horas: dict, base: BaseCartografica, pasta: Path, todas_as_horas: bool) -> None:
-    """Um mapa interpolado por hora, nas horas selecionadas por horas_para_mapear."""
+def _mapas_horarios(horas: dict, base: BaseCartografica, pasta: Path, todas_as_horas: bool) -> None:
+    """Um mapa interpolado por hora, nas horas selecionadas por horas_para_mapear.
+
+    As estações de cada mapa (rótulos e contagem da legenda) são as daquela hora, com o nível
+    daquela hora — e não a tabela do dia, que traz o nível máximo.
+    """
     selecionadas = horas_para_mapear(horas, todas_as_horas)
     if not selecionadas:
         print(f"ℹ️ Nenhuma estação chegou ao {config.ROTULOS_RISCO[config.NIVEL_MAPA_HORARIO].lower()} "
@@ -235,7 +247,8 @@ def _mapas_horarios(gdf, horas: dict, base: BaseCartografica, pasta: Path, todas
         espec = _espec_classes(f"Risco de fogo em {config.NOME_UF}",
                                f"{local:%d/%m/%Y %H:%M} (horário de MS)",
                                f"Mapa_Risco_Fogo_{config.UF}")
-        mapas.mapa_classes_interpolado(avaliada.grade, gdf, COLUNA_NIVEL, espec, base,
+        estacoes = mapas.preparar_pontos(avaliada.estacoes, COLUNA_NIVEL_HORA, espec.subtitulo)
+        mapas.mapa_classes_interpolado(avaliada.grade, estacoes, COLUNA_NIVEL_HORA, espec, base,
                                        pasta / f"{espec.arquivo}_{local:%Y%m%d_%H}h.png")
 
 
