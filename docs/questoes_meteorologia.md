@@ -133,4 +133,6 @@ As decisões foram tomadas com o programador em 16/09/2026. Os pontos marcados c
 - **Cores:** cinza (0), amarelo (1), laranja (2), vermelho (3). O par verde/vermelho foi evitado por causa de daltonismo.
 - **Planilha:** por estação, o nível máximo, quantas horas em cada nível e os valores com horário que dispararam cada condição — é o que permite auditar por que uma estação ficou vermelha.
 
+**Decisão (17/09/2026):** nos mapas horários, cada estação mostra o seu nível **naquela hora** e, abaixo do número, um ponto para cada condição atendida — roxo para temperatura, azul para umidade e verde para rajada —, sempre na mesma posição (temperatura à esquerda, umidade no meio, rajada à direita), para que a condição seja identificável mesmo por quem não distingue as cores. Os mapas de síntese (nível máximo e horas em risco alto) não recebem os pontos, porque juntam horas diferentes.
+
 ⚠️ **A confirmar:** os limiares (≥ 30 °C, ≤ 30 %, ≥ 30 km/h) e o critério de gerar mapa horário a partir do nível laranja.

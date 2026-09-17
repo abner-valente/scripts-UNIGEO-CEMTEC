@@ -49,6 +49,25 @@ class EspecClasses:
     rotulos: list[str]
 
 
+@dataclass(frozen=True)
+class Indicadores:
+    """Pontos coloridos abaixo de cada estação, um para cada coluna verdadeira (ex.: condições atendidas).
+
+    Cada indicador ocupa sempre a mesma posição, da esquerda para a direita na ordem de `colunas`.
+    """
+
+    colunas: list[str]  # colunas booleanas da tabela de estações
+    rotulos: list[str]
+    cores: list[str]
+    titulo: str
+
+
+# Pontos dos indicadores: distância entre posições e descida abaixo do rótulo (em graus) e área de cada ponto (pt²)
+PASSO_INDICADORES = 0.08
+DESCIDA_INDICADORES = 0.16
+TAMANHO_INDICADORES = 30
+
+
 @dataclass
 class BaseCartografica:
     """Camadas, grade e logos carregados uma única vez e reaproveitados em todos os mapas."""
@@ -183,8 +202,11 @@ def mapa_classes_pontual(gdf, coluna: str, espec: EspecClasses, base: BaseCartog
 
 
 def mapa_classes_interpolado(grade, gdf, coluna: str, espec: EspecClasses, base: BaseCartografica,
-                             caminho: Path) -> None:
-    """Superfície já classificada (0 a n-1) recortada ao estado, com as estações por cima."""
+                             caminho: Path, indicadores: Indicadores | None = None) -> None:
+    """Superfície já classificada (0 a n-1) recortada ao estado, com as estações por cima.
+
+    Com `indicadores`, desenha também os pontos abaixo de cada estação e a legenda deles.
+    """
     fig, ax = _nova_figura((14, 12))
     # Uma faixa por classe: as fronteiras ficam no meio do caminho entre dois níveis inteiros
     limites = np.arange(len(espec.cores) + 1) - 0.5
@@ -198,6 +220,8 @@ def mapa_classes_interpolado(grade, gdf, coluna: str, espec: EspecClasses, base:
     _rotular(ax, gdf, classes.map(str), tamanho_fonte=9, cor="white",
              fundo="black", borda="white", opacidade=0.8)
     _legenda_classes(ax, espec, classes)
+    if indicadores is not None:
+        _desenhar_indicadores(ax, gdf, indicadores)
     _finalizar(fig, ax, espec, base, caminho)
 
 
@@ -238,6 +262,27 @@ def _legenda_classes(ax, espec: EspecClasses, classes: pd.Series) -> None:
         for indice, (cor, rotulo) in enumerate(zip(espec.cores, espec.rotulos))
     ]
     ax.legend(handles=entradas, loc="lower left", fontsize=10, framealpha=0.9)
+
+
+def _desenhar_indicadores(ax, gdf, indicadores: Indicadores) -> None:
+    """Um ponto por indicador verdadeiro, abaixo da estação, e a legenda dos indicadores no canto inferior direito.
+
+    A posição de cada indicador é fixa: mesmo quem não distingue as cores identifica qual ponto é qual.
+    """
+    quantidade = len(indicadores.colunas)
+    for posicao, (coluna, cor) in enumerate(zip(indicadores.colunas, indicadores.cores)):
+        marcadas = gdf[gdf[coluna].astype(bool)]
+        deslocamento = (posicao - (quantidade - 1) / 2) * PASSO_INDICADORES
+        ax.scatter(marcadas.geometry.x + deslocamento, marcadas.geometry.y - DESCIDA_INDICADORES,
+                   s=TAMANHO_INDICADORES, color=cor, linewidths=0, zorder=8)
+
+    legenda_existente = ax.get_legend()
+    if legenda_existente is not None:
+        ax.add_artist(legenda_existente)  # sem isso, a legenda nova substituiria a das classes
+    entradas = [Line2D([], [], linestyle="", marker="o", markersize=8, markerfacecolor=cor, markeredgewidth=0,
+                       label=rotulo) for rotulo, cor in zip(indicadores.rotulos, indicadores.cores)]
+    ax.legend(handles=entradas, loc="lower right", fontsize=10, title=indicadores.titulo, title_fontsize=10,
+              framealpha=0.9)
 
 
 def _faixa_de_cores(valores: pd.Series) -> tuple[float, float]:

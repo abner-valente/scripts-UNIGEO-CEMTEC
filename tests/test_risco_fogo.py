@@ -148,21 +148,28 @@ def test_criterio_olha_as_estacoes_e_nao_a_superficie():
 
 # ---------- Mapas horários ----------
 
-def test_estacoes_da_hora_trazem_o_nivel_daquela_hora(serie):
-    """Nos mapas horários, cada estação leva o nível da hora, e não o máximo do dia."""
+def test_estacoes_da_hora_trazem_as_condicoes_e_o_nivel_daquela_hora(serie):
+    """Nos mapas horários, cada estação leva as condições e o nível da hora, e não o máximo do dia."""
     dados = serie("2026-09-16", "2026-09-17 05:00", TEM_MAX=FRIO, UMD_MIN=UMIDO, VEN_RAJ=CALMO)
     dados.loc[dados["dt_utc"] == utc("2026-09-16 18:00"), ["TEM_MAX", "UMD_MIN", "VEN_RAJ"]] = [QUENTE, SECO, VENTOSO]
+    dados.loc[dados["dt_utc"] == utc("2026-09-16 20:00"), "UMD_MIN"] = SECO
     coletados = [(ESTACAO, risco_fogo.leituras_validas(dados, DIA))]
 
-    assert risco_fogo.estacoes_na_hora(coletados, utc("2026-09-16 18:00"))["Nível na Hora"].tolist() == [3]
-    assert risco_fogo.estacoes_na_hora(coletados, utc("2026-09-16 15:00"))["Nível na Hora"].tolist() == [0]
+    def na_hora(texto):
+        linha = risco_fogo.estacoes_na_hora(coletados, utc(texto)).iloc[0]
+        return [bool(linha[coluna]) for coluna in risco_fogo.COLUNAS_CONDICOES], linha["Nível na Hora"]
+
+    assert na_hora("2026-09-16 18:00") == ([True, True, True], 3)
+    assert na_hora("2026-09-16 20:00") == ([False, True, False], 1)  # só a umidade
+    assert na_hora("2026-09-16 15:00") == ([False, False, False], 0)
 
 
 def test_mapa_horario_recebe_as_estacoes_da_hora(monkeypatch, tmp_path):
     """Rótulos e legenda do mapa horário vêm das estações daquela hora."""
     desenhados = []
     monkeypatch.setattr(risco_fogo.mapas, "mapa_classes_interpolado",
-                        lambda grade, gdf, coluna, espec, base, caminho: desenhados.append(gdf[coluna].tolist()))
+                        lambda grade, gdf, coluna, espec, base, caminho, indicadores=None:
+                        desenhados.append(gdf[coluna].tolist()))
     estacoes = pd.DataFrame({"Estação": ["A", "B"], "Latitude": [-20.0, -21.0], "Longitude": [-55.0, -54.0],
                              "Nível na Hora": [0, 2]})
     horas = {utc("2026-09-16 15:00"): risco_fogo.HoraAvaliada(np.zeros((2, 2)), estacoes)}

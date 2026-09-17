@@ -1,4 +1,5 @@
-"""Base cartográfica dos mapas interpolados: máscara da grade e recorte pelo contorno do estado."""
+"""Mapas: base cartográfica (máscara da grade e recorte pelo estado), estações e indicadores."""
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
@@ -41,6 +42,31 @@ def test_recorte_segue_o_contorno_do_estado(base):
 def test_estacoes_com_zero_entram_no_mapa():
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 0.0, 12.5, 0.0]})
     assert len(mapas._preparar_dados(tabela, CHUVA)) == 5
+
+
+def test_indicadores_ocupam_sempre_a_mesma_posicao():
+    """Cada indicador tem posição fixa sob a estação, mesmo quando os outros não aparecem."""
+    tabela = pd.DataFrame({
+        "Latitude": [-20.0, -22.0], "Longitude": [-55.0, -53.0], "Nível": [2, 1],
+        "A": [True, False], "B": [False, True], "C": [True, False],
+    })
+    indicadores = mapas.Indicadores(["A", "B", "C"], ["a", "b", "c"], ["purple", "blue", "green"], "teste")
+    fig, ax = plt.subplots()
+    mapas._desenhar_indicadores(ax, mapas.preparar_pontos(tabela, "Nível"), indicadores)
+    posicoes = [colecao.get_offsets() for colecao in ax.collections]
+    plt.close(fig)
+
+    passo, descida = mapas.PASSO_INDICADORES, mapas.DESCIDA_INDICADORES
+    # A primeira estação tem A e C: se os pontos fossem centralizados, ficariam a meio passo da estação,
+    # e não a um passo inteiro para cada lado
+    esperadas = [
+        [(-55.0 - passo, -20.0 - descida)],  # A: só a primeira estação, à esquerda
+        [(-53.0, -22.0 - descida)],          # B: só a segunda, no meio
+        [(-55.0 + passo, -20.0 - descida)],  # C: só a primeira, à direita
+    ]
+    assert len(posicoes) == 3
+    for obtida, esperada in zip(posicoes, esperadas):
+        np.testing.assert_allclose(obtida, esperada)
 
 
 def test_dia_sem_chuva_em_nenhuma_estacao_ainda_gera_os_mapas(monkeypatch, tmp_path):

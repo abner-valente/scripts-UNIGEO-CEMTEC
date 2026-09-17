@@ -310,11 +310,13 @@ saida/risco_fogo/dia/20260903/
 | `Mapa_Risco_Fogo_Nivel_MS_<datas>_interpolado.png` | **Nível máximo — interpolado:** o mesmo, sobre o estado inteiro |
 | `Mapa_Risco_Fogo_Horas_MS_<datas>.png` | **Horas em risco alto — pontual:** quantas horas cada estação passou no nível 3 |
 | `Mapa_Risco_Fogo_Horas_MS_<datas>_interpolado.png` | **Horas em risco alto — interpolado:** o mesmo, sobre o estado inteiro |
-| `horas/Mapa_Risco_Fogo_MS_<data>_<hora>h.png` | **Mapa horário** (só interpolado): o nível de risco naquela hora |
+| `horas/Mapa_Risco_Fogo_MS_<data>_<hora>h.png` | **Mapa horário** (só interpolado): o nível de risco naquela hora, com o nível de cada estação e os pontos das condições que ela atendeu |
 
 O **nível máximo** mostra o pico; as **horas em risco alto** mostram a duração — ficar 6 horas em 30-30-30 é bem diferente de ficar 1 hora. Em dias em que nenhuma estação chega ao nível 3, os mapas de horas ficam zerados.
 
 **Quais horas ganham mapa próprio:** por padrão, só as horas em que **pelo menos uma estação** chegou ao risco médio ou alto (nível ≥ 2); num dia ameno, a pasta `horas/` nem é criada. Com `--hrtodas`, saem todas as horas, até 24 num dia. Cada mapa horário leva a hora em que a leitura termina: o das 14h mostra a hora das 13 h às 14 h.
+
+**Pontos das condições nos mapas horários:** o número de cada estação é o nível dela **naquela hora**, e abaixo dele aparece um ponto para cada condição atendida — roxo para temperatura, azul para umidade e verde para rajada. Cada condição ocupa sempre a mesma posição (temperatura à esquerda, umidade no meio, rajada à direita), então dá para identificá-la mesmo sem distinguir as cores. Os mapas de síntese não têm os pontos: eles juntam horas diferentes, e as condições de uma única hora não representariam o dia.
 
 Colunas da planilha:
 
@@ -347,7 +349,7 @@ A evolução ao longo do dia, nos mapas horários — o risco sobe pela manhã, 
   - `/estacoes/T` — lista de estações automáticas (sem token)
   - `/token/estacao/{data_ini}/{data_fim}/{codigo}/{token}` — dados horários de uma estação
   - Variáveis usadas: `TEM_MAX`, `UMD_MIN` e `VEN_RAJ`
-- **Limiares, cores e rótulos** ficam em [`modulos/config.py`](modulos/config.py): `LIMIAR_TEMP_MAX`, `LIMIAR_UMIDADE_MIN`, `LIMIAR_RAJADA`, `CORES_RISCO`, `ROTULOS_RISCO` e `NIVEL_MAPA_HORARIO`.
+- **Limiares, cores e rótulos** ficam em [`modulos/config.py`](modulos/config.py): `LIMIAR_TEMP_MAX`, `LIMIAR_UMIDADE_MIN`, `LIMIAR_RAJADA`, `CORES_RISCO`, `ROTULOS_RISCO`, `NIVEL_MAPA_HORARIO` e `CORES_CONDICOES` (cores dos pontos das condições).
 - **Shapefiles**: `MS_UF_2022` (limite estadual, malha IBGE 2022) e `MS_mun_simplificado` (limites dos 79 municípios). Detalhes em [Estrutura do repositório](#shapefiles).
 
 #### Notas metodológicas
@@ -376,6 +378,7 @@ O método foi definido em **16/09/2026** a partir do pedido da equipe (questões
 - Mapas de síntese (nível máximo e horas em risco alto) em versão pontual e interpolada; mapas horários só interpolados, filtrados pelo nível ≥ 2 nas estações, ou todos com `--hrtodas`.
 - As três condições têm o mesmo peso; estações sem uma das variáveis ficam de fora.
 - Cores cinza, amarelo, laranja e vermelho (sem o par verde/vermelho, por causa do daltonismo).
+- Nos mapas horários, pontos das condições atendidas abaixo de cada estação, em posição fixa (definido em 17/09/2026).
 
 ⚠️ **Ainda aguardam confirmação da meteorologia:** a aproximação de simultaneidade dentro da hora, a confiabilidade da rajada interpolada, os limiares (≥ 30 °C, ≤ 30 %, ≥ 30 km/h) e o critério do nível laranja para gerar mapa horário.
 
