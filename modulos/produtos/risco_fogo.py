@@ -23,7 +23,7 @@ import pandas as pd
 
 from .. import calculos, config, excel, inmet, mapas
 from ..config import Periodo
-from ..mapas import BaseCartografica, EspecClasses, EspecMapa
+from ..mapas import BaseCartografica, EspecClasses, EspecMapa, Indicadores
 
 NOME = "risco_fogo"
 TITULO = "Risco meteorológico de fogo — regra 30-30-30"
@@ -33,17 +33,23 @@ ABA = "Risco"
 COLUNA_NIVEL = "Nível Máximo"
 COLUNA_HORAS_ALTO = "Horas em Risco Alto"
 COLUNA_NIVEL_HORA = "Nível na Hora"
+COLUNAS_CONDICOES = ["Temperatura Atendida", "Umidade Atendida", "Rajada Atendida"]
 NIVEL_ALTO = 3
 
 
 # =====================================================
 # A REGRA 30-30-30
 # =====================================================
+def condicoes_atendidas(temp_max, umidade_min, rajada_kmh) -> tuple:
+    """Cada uma das três condições (True onde é atendida), na ordem temperatura, umidade e rajada."""
+    return (np.asarray(temp_max) >= config.LIMIAR_TEMP_MAX,
+            np.asarray(umidade_min) <= config.LIMIAR_UMIDADE_MIN,
+            np.asarray(rajada_kmh) >= config.LIMIAR_RAJADA)
+
+
 def contar_condicoes(temp_max, umidade_min, rajada_kmh):
     """Quantas das três condições são atendidas (0 a 3). Funciona com números, séries ou grades."""
-    return ((np.asarray(temp_max) >= config.LIMIAR_TEMP_MAX).astype(int)
-            + (np.asarray(umidade_min) <= config.LIMIAR_UMIDADE_MIN).astype(int)
-            + (np.asarray(rajada_kmh) >= config.LIMIAR_RAJADA).astype(int))
+    return sum(condicao.astype(int) for condicao in condicoes_atendidas(temp_max, umidade_min, rajada_kmh))
 
 
 def leituras_validas(dados: pd.DataFrame, periodo: Periodo) -> pd.DataFrame:
@@ -133,7 +139,10 @@ def estacoes_na_hora(coletados: list, hora) -> pd.DataFrame:
         })
     estacoes = pd.DataFrame(linhas)
     if not estacoes.empty:
-        estacoes[COLUNA_NIVEL_HORA] = contar_condicoes(estacoes["TEM_MAX"], estacoes["UMD_MIN"], estacoes["rajada_kmh"])
+        atendidas = condicoes_atendidas(estacoes["TEM_MAX"], estacoes["UMD_MIN"], estacoes["rajada_kmh"])
+        for coluna, atendida in zip(COLUNAS_CONDICOES, atendidas):
+            estacoes[coluna] = atendida
+        estacoes[COLUNA_NIVEL_HORA] = estacoes[COLUNAS_CONDICOES].sum(axis=1)
     return estacoes
 
 
@@ -187,6 +196,14 @@ def horas_para_mapear(horas: dict, todas_as_horas: bool = False) -> dict:
 # =====================================================
 def _espec_classes(titulo: str, subtitulo: str, arquivo: str) -> EspecClasses:
     return EspecClasses(titulo, subtitulo, arquivo, config.CORES_RISCO, config.ROTULOS_RISCO)
+
+
+def _indicadores_condicoes() -> Indicadores:
+    """Pontos das condições atendidas nos mapas horários: temperatura à esquerda, umidade no meio, rajada à direita."""
+    rotulos = [f"Temperatura máx. ≥ {config.LIMIAR_TEMP_MAX:g} °C",
+               f"Umidade mín. ≤ {config.LIMIAR_UMIDADE_MIN:g} %",
+               f"Rajada ≥ {config.LIMIAR_RAJADA:g} km/h"]
+    return Indicadores(COLUNAS_CONDICOES, rotulos, config.CORES_CONDICOES, "Condições atendidas (esquerda → direita)")
 
 
 def _niveis_continuos(grade: np.ndarray):
@@ -249,7 +266,7 @@ def _mapas_horarios(horas: dict, base: BaseCartografica, pasta: Path, todas_as_h
                                f"Mapa_Risco_Fogo_{config.UF}")
         estacoes = mapas.preparar_pontos(avaliada.estacoes, COLUNA_NIVEL_HORA, espec.subtitulo)
         mapas.mapa_classes_interpolado(avaliada.grade, estacoes, COLUNA_NIVEL_HORA, espec, base,
-                                       pasta / f"{espec.arquivo}_{local:%Y%m%d_%H}h.png")
+                                       pasta / f"{espec.arquivo}_{local:%Y%m%d_%H}h.png", _indicadores_condicoes())
 
 
 # =====================================================
