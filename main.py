@@ -10,10 +10,10 @@ COMO USAR
     3. Execute:  python main.py
 
     Produto e datas também podem ser informados na linha de comando, sem editar o arquivo:
-        python main.py --inicio 30/07/2026                   # data específica
-        python main.py --inicio 01/08/2026 --fim 31/08/2026  # período
-        python main.py --inicio 14/09/2026 --hrini 8 --fim 15/09/2026 --hrfim 8  # das 08 h às 08 h
-        python main.py --tempo-real                          # monitoramento
+        python main.py --dataini 30/07/2026                        # data específica
+        python main.py --dataini 01/08/2026 --datafim 31/08/2026   # período
+        python main.py --dataini 14/09/2026 --hrini 8 --datafim 15/09/2026 --hrfim 8  # das 08 h às 08 h
+        python main.py --tempo-real                                # monitoramento
         python main.py --produto relatorio_inmet --tempo-real
 
 Os resultados ficam em saida/<produto>/<modo>/<datas>/.
@@ -66,8 +66,8 @@ def ler_consulta(argumentos: list[str] | None = None) -> tuple[ModuleType, Perio
     """
     parser = argparse.ArgumentParser(description="Produtos meteorológicos INMET — Mato Grosso do Sul.")
     parser.add_argument("--produto", choices=sorted(PRODUTOS), help=f"produto a gerar (padrão: {PRODUTO})")
-    parser.add_argument("--inicio", type=ler_data, help="data inicial (DD/MM/AAAA)")
-    parser.add_argument("--fim", type=ler_data, help="data final (DD/MM/AAAA); se omitida, igual à inicial")
+    parser.add_argument("--dataini", type=ler_data, help="data inicial (DD/MM/AAAA)")
+    parser.add_argument("--datafim", type=ler_data, help="data final (DD/MM/AAAA); se omitida, igual à inicial")
     parser.add_argument("--hrini", type=ler_hora, help="hora de início, horário de MS (0 a 24; padrão: 0)")
     parser.add_argument("--hrfim", type=ler_hora, help="hora de fim, horário de MS (0 a 24; padrão: 24)")
     parser.add_argument("--tempo-real", action="store_true", help="monitoramento das últimas 24 h")
@@ -82,10 +82,10 @@ def ler_consulta(argumentos: list[str] | None = None) -> tuple[ModuleType, Perio
 
     opcoes = {"hrtodas": args.hrtodas}
 
-    inicio, fim = (args.inicio, args.fim) if (args.inicio or args.fim) else (DATA_INICIAL, DATA_FINAL)
+    inicio, fim = (args.dataini, args.datafim) if (args.dataini or args.datafim) else (DATA_INICIAL, DATA_FINAL)
     if args.tempo_real or (inicio is None and fim is None):
         if args.hrini is not None or args.hrfim is not None:
-            parser.error("--hrini e --hrfim só valem com datas (--inicio e --fim), não no tempo real")
+            parser.error("--hrini e --hrfim só valem com datas (--dataini e --datafim), não no tempo real")
         return produto, Periodo.tempo_real(), opcoes
 
     hora_inicial = args.hrini if args.hrini is not None else HORA_INICIAL

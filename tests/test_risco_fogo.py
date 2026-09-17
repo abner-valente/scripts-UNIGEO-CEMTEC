@@ -11,6 +11,7 @@ from modulos.produtos import risco_fogo
 
 ESTACAO = pd.Series({"Estação": "Teste", "VL_LATITUDE": -20.0, "VL_LONGITUDE": -55.0})
 DIA = Periodo.de_datas(date(2026, 9, 16), date(2026, 9, 16))
+PERIODO = Periodo.de_datas(date(2026, 9, 14), date(2026, 9, 16))
 MANHA = Periodo.de_datas(date(2026, 9, 16), date(2026, 9, 16), 6, 9)  # janela curta, para o teste ser rápido
 AGORA = datetime(2026, 9, 14, 13, 25, tzinfo=FUSO_UTC)  # 9h25 em MS
 TEMPO_REAL = Periodo.tempo_real(AGORA)
@@ -99,7 +100,7 @@ def test_resumo_conta_as_horas_de_cada_nivel(serie):
     duas_horas = dados["dt_utc"].isin([utc("2026-09-16 18:00"), utc("2026-09-16 19:00")])
     dados.loc[duas_horas, ["UMD_MIN", "VEN_RAJ"]] = [SECO, VENTOSO]
 
-    linha = risco_fogo.resumir_estacao(risco_fogo.leituras_validas(dados, DIA), ESTACAO)
+    linha = risco_fogo.resumir_estacao(risco_fogo.leituras_validas(dados, DIA), ESTACAO, DIA)
 
     assert linha["Nível Máximo"] == 3
     assert linha["Horas em Risco Alto"] == 2
@@ -112,7 +113,7 @@ def test_resumo_conta_as_horas_de_cada_nivel(serie):
 
 def test_estacao_sem_risco_alto_fica_sem_horario(serie):
     dados = serie("2026-09-16", "2026-09-17 05:00", TEM_MAX=FRIO, UMD_MIN=UMIDO, VEN_RAJ=CALMO)
-    linha = risco_fogo.resumir_estacao(risco_fogo.leituras_validas(dados, DIA), ESTACAO)
+    linha = risco_fogo.resumir_estacao(risco_fogo.leituras_validas(dados, DIA), ESTACAO, DIA)
     assert linha["Nível Máximo"] == 0
     assert linha["Primeiro Horário em Risco Médio (MS)"] == ""
     assert linha["Primeiro Horário em Risco Alto (MS)"] == ""
@@ -154,9 +155,10 @@ def test_criterio_olha_as_estacoes_e_nao_a_superficie():
 
 @pytest.mark.parametrize("periodo, subtitulo", [
     (DIA, "16/09/2026"),                                           # data sozinha: sem fuso
+    (PERIODO, "14/09/2026 a 16/09/2026"),                          # período de dias inteiros: sem fuso
     (MANHA, "16/09/2026 06:00 a 16/09/2026 09:00 GMT-04"),         # com horário: com fuso
     (TEMPO_REAL, "13/09/2026 09:25 até 14/09/2026 09:25 GMT-04"),
-], ids=["dia", "janela_curta", "tempo_real"])
+], ids=["dia", "periodo", "janela_curta", "tempo_real"])
 def test_subtitulo_traz_o_fuso_so_quando_ha_horario(periodo, subtitulo):
     assert risco_fogo._subtitulo(periodo) == subtitulo
 
@@ -196,8 +198,33 @@ def test_mapa_horario_recebe_as_estacoes_da_hora(monkeypatch, tmp_path):
 
 # ---------- Execução completa ----------
 
-def test_periodo_e_recusado(api_simulada):
-    assert risco_fogo.executar(Periodo.de_datas(date(2026, 9, 14), date(2026, 9, 16))) == 1
+def test_periodo_conta_os_dias_de_cada_nivel(serie):
+    """Num período, a planilha diz em quantos dias a estação chegou a cada nível."""
+    dados = serie("2026-09-14", "2026-09-17 05:00", TEM_MAX=QUENTE, UMD_MIN=UMIDO, VEN_RAJ=CALMO)  # nível 1
+    dados.loc[dados["dt_utc"] == utc("2026-09-14 18:00"), ["UMD_MIN", "VEN_RAJ"]] = [SECO, VENTOSO]  # 14/09: nível 3
+    dados.loc[dados["dt_utc"] == utc("2026-09-15 18:00"), "UMD_MIN"] = SECO                          # 15/09: nível 2
+
+    linha = risco_fogo.resumir_estacao(risco_fogo.leituras_validas(dados, PERIODO), ESTACAO, PERIODO)
+
+    assert linha["Dias com Risco Alto"] == 1
+    assert linha["Dias com Risco Médio"] == 1  # o terceiro dia ficou no nível 1
+
+
+def test_dia_nao_traz_as_colunas_de_dias(serie):
+    dados = serie("2026-09-16", "2026-09-17 05:00")
+    linha = risco_fogo.resumir_estacao(risco_fogo.leituras_validas(dados, DIA), ESTACAO, DIA)
+    assert "Dias com Risco Alto" not in linha
+
+
+def test_execucao_completa_de_periodo(api_simulada):
+    periodo = Periodo.de_datas(date(2026, 9, 14), date(2026, 9, 15))
+    assert risco_fogo.executar(periodo) == 0
+
+    pasta = periodo.pasta_saida(risco_fogo.NOME)
+    tabela = pd.read_excel(pasta / f"Risco_Fogo_{config.UF}_{periodo.identificador}.xlsx")
+    assert {"Dias com Risco Alto", "Dias com Risco Médio"} <= set(tabela.columns)
+    assert tabela["Dias com Risco Alto"].max() <= periodo.num_dias
+    assert (pasta / "mapas" / f"Mapa_Risco_Fogo_Nivel_{config.UF}_{periodo.identificador}_interpolado.png").exists()
 
 
 def test_execucao_completa(api_simulada, tmp_path):
