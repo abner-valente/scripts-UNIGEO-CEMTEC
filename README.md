@@ -42,14 +42,14 @@ Todos os produtos são gerados pelo mesmo arquivo, o [`main.py`](main.py). Há d
 **1. Pela linha de comando** (sem editar nada):
 
 ```bash
-python main.py --produto relatorio_inmet --inicio 15/09/2026
+python main.py --produto relatorio_inmet --dataini 15/09/2026
 ```
 
 | Opção | O que faz | Exemplo |
 |---|---|---|
 | `--produto` | Escolhe o produto | `--produto risco_fogo` |
-| `--inicio` | Data inicial (DD/MM/AAAA) | `--inicio 15/09/2026` |
-| `--fim` | Data final; se omitida, igual à inicial | `--fim 20/09/2026` |
+| `--dataini` | Data inicial (DD/MM/AAAA) | `--dataini 15/09/2026` |
+| `--datafim` | Data final; se omitida, igual à inicial | `--datafim 20/09/2026` |
 | `--hrini` | Hora de início, no horário de MS (0 a 24) | `--hrini 8` |
 | `--hrfim` | Hora de fim, no horário de MS (0 a 24) | `--hrfim 18` |
 | `--tempo-real` | Últimas 24 horas até o momento em que roda | `--tempo-real` |
@@ -75,18 +75,18 @@ O modo é definido pelas datas:
 
 | Modo | Como pedir | Janela de tempo (horário de MS) |
 |---|---|---|
-| **Data específica** | `--inicio 15/09/2026` (ou `DATA_INICIAL` igual a `DATA_FINAL`) | O dia, da 00 h às 24 h |
-| **Período** | `--inicio 01/08/2026 --fim 31/08/2026` (ou datas diferentes) | Da 00 h da data inicial às 24 h da data final |
+| **Data específica** | `--dataini 15/09/2026` (ou `DATA_INICIAL` igual a `DATA_FINAL`) | O dia, da 00 h às 24 h |
+| **Período** | `--dataini 01/08/2026 --datafim 31/08/2026` (ou datas diferentes) | Da 00 h da data inicial às 24 h da data final |
 | **Tempo real** | `--tempo-real` (ou as duas datas `None`) | As últimas 24 horas, até o momento em que roda |
 
-Com `--hrini` e `--hrfim`, a janela passa a começar e terminar nessas horas — por exemplo, `--inicio 14/09/2026 --hrini 8 --fim 15/09/2026 --hrfim 8` cobre das 08 h de 14/09 às 08 h de 15/09. O modo continua definido pelas datas (mesmo dia = data específica; datas diferentes = período). As horas não valem com `--tempo-real`.
+Com `--hrini` e `--hrfim`, a janela passa a começar e terminar nessas horas — por exemplo, `--dataini 14/09/2026 --hrini 8 --datafim 15/09/2026 --hrfim 8` cobre das 08 h de 14/09 às 08 h de 15/09. O modo continua definido pelas datas (mesmo dia = data específica; datas diferentes = período). As horas não valem com `--tempo-real`.
 
-**`--produto` e o modo de tempo são independentes.** O `--produto` diz *o que* gerar; `--inicio`/`--fim` ou `--tempo-real` dizem *de quando* são os dados. Qualquer produto pode ser combinado com qualquer modo que ele aceite:
+**`--produto` e o modo de tempo são independentes.** O `--produto` diz *o que* gerar; `--dataini`/`--datafim` ou `--tempo-real` dizem *de quando* são os dados. Qualquer produto pode ser combinado com qualquer modo que ele aceite:
 
 | Produto | Data específica | Período | Tempo real |
 |---|:---:|:---:|:---:|
 | `relatorio_inmet` | ✅ | ✅ | ✅ |
-| `risco_fogo` | ✅ | — | ✅ |
+| `risco_fogo` | ✅ | ✅ | ✅ |
 
 #### Onde ficam os resultados
 
@@ -130,9 +130,9 @@ Passo a passo de uma execução:
 #### Como rodar
 
 ```bash
-python main.py --produto relatorio_inmet --inicio 15/09/2026                                   # data específica
-python main.py --produto relatorio_inmet --inicio 01/08/2026 --fim 31/08/2026                  # período
-python main.py --produto relatorio_inmet --inicio 14/09/2026 --hrini 8 --fim 15/09/2026 --hrfim 8  # com horas
+python main.py --produto relatorio_inmet --dataini 15/09/2026                                   # data específica
+python main.py --produto relatorio_inmet --dataini 01/08/2026 --datafim 31/08/2026                  # período
+python main.py --produto relatorio_inmet --dataini 14/09/2026 --hrini 8 --datafim 15/09/2026 --hrfim 8  # com horas
 python main.py --produto relatorio_inmet --tempo-real                                          # tempo real
 ```
 
@@ -272,20 +272,22 @@ Passo a passo de uma execução:
 
 ```bash
 python main.py --produto risco_fogo --tempo-real                          # últimas 24 horas
-python main.py --produto risco_fogo --inicio 03/09/2026                   # um dia
-python main.py --produto risco_fogo --inicio 03/09/2026 --hrini 12 --hrfim 18  # trecho de um dia
-python main.py --produto risco_fogo --inicio 03/09/2026 --hrtodas         # um dia, com o mapa de todas as horas
+python main.py --produto risco_fogo --dataini 03/09/2026                   # um dia
+python main.py --produto risco_fogo --dataini 03/09/2026 --hrini 12 --hrfim 18  # trecho de um dia
+python main.py --produto risco_fogo --dataini 03/09/2026 --hrtodas         # um dia, com o mapa de todas as horas
 ```
 
-#### Tempo real e data específica
+#### Tempo real, data específica e período
 
 | | Tempo real | Data específica |
 |---|---|---|
 | **Janela** | As últimas 24 horas cheias até o momento em que roda | O dia, da 00 h às 24 h de MS — ou o trecho entre `--hrini` e `--hrfim` |
-| **Exemplo** | Rodando às 16h10 de 16/09: das 16 h de 15/09 às 16 h de 16/09 | `--inicio 03/09/2026`: da 00 h às 24 h de 03/09 |
+| **Exemplo** | Rodando às 16h10 de 16/09: das 16 h de 15/09 às 16 h de 16/09 | `--dataini 03/09/2026`: da 00 h às 24 h de 03/09 |
 | **Pasta** | `tempo_real/20260916_1610/` | `dia/20260903/` |
 
-**Período não é aceito.** Uma consulta com datas diferentes — inclusive com horas que atravessam dois dias, como das 08 h de 14/09 às 08 h de 15/09 — é recusada com uma mensagem. Para período, a equipe prevê gráficos quantitativos (estação × condições atendidas) numa etapa futura, e não mapas.
+**No período** (datas diferentes, ou horas que atravessam dois dias) tudo funciona igual, somando os dias: o mapa de nível máximo mostra o pior nível que cada lugar alcançou em todo o período, e o de horas agregadas soma as horas em risco alto de todos os dias. A planilha ganha duas colunas — `Dias com Risco Alto` e `Dias com Risco Médio` —, porque num período "5 dias em risco alto" diz mais do que "20 horas no total".
+
+> **Atenção ao volume:** os mapas horários continuam saindo em todas as horas com risco alto, e quanto maior o período, mais arquivos e mais tempo de execução. Como referência, 01 a 03/09/2026 rendeu 9 mapas horários, 15 MB e 15 segundos — mas só o dia 03/09, sozinho, rendeu 7 deles. Num mês de seca, espere algumas dezenas de mapas.
 
 #### Saídas
 
@@ -325,6 +327,7 @@ Colunas da planilha:
 | `Nível Máximo` | Pior nível alcançado na janela (0 a 3) |
 | `Horas em Risco Alto`, `Horas Nível 2`, `Horas Nível 1` | Quantas horas a estação passou em cada nível |
 | `Horas com Dados` | Quantas horas tinham as três variáveis |
+| `Dias com Risco Alto`, `Dias com Risco Médio` | Só no período: em quantos dias o pior nível da estação foi o alto e em quantos foi o médio |
 | `Temp. Máxima (°C)`, `Umidade Mínima (%)`, `Rajada Máxima (km/h)` | Extremos da janela, para conferir por que a estação recebeu o seu nível |
 | `Primeiro Horário em Risco Médio (MS)` | Quando a estação chegou ao nível 2 pela primeira vez — mostra quando o risco começou a subir, mesmo nos dias que não chegam ao nível 3 |
 | `Primeiro Horário em Risco Alto (MS)` | Quando a estação chegou ao nível 3 pela primeira vez (vazio se não chegou) |

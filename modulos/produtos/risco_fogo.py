@@ -88,16 +88,23 @@ def horas_da_janela(periodo: Periodo) -> pd.DatetimeIndex:
 # =====================================================
 # CÁLCULOS POR ESTAÇÃO
 # =====================================================
-def resumir_estacao(leituras: pd.DataFrame, estacao: pd.Series) -> dict:
-    """Linha da planilha: nível máximo, horas em cada nível e os valores que dispararam as condições."""
+def resumir_estacao(leituras: pd.DataFrame, estacao: pd.Series, periodo: Periodo) -> dict:
+    """Linha da planilha: nível máximo, horas em cada nível e os valores que dispararam as condições.
+
+    Num período, acrescenta também em quantos dias a estação chegou a cada nível.
+    """
     niveis = niveis_por_hora(leituras)
-    return {
+    linha = {
         "Estação": estacao["Estação"],
         COLUNA_NIVEL: int(niveis.max()),
-        COLUNA_HORAS_ALTO: int((niveis == 3).sum()),
-        "Horas Nível 2": int((niveis == 2).sum()),
+        COLUNA_HORAS_ALTO: int((niveis == NIVEL_ALTO).sum()),
+        "Horas Nível 2": int((niveis == NIVEL_MEDIO).sum()),
         "Horas Nível 1": int((niveis == 1).sum()),
         "Horas com Dados": int(len(niveis)),
+    }
+    if periodo.modo == "periodo":
+        linha.update(_dias_por_nivel(niveis))
+    linha.update({
         "Temp. Máxima (°C)": round(float(leituras["TEM_MAX"].max()), 1),
         "Umidade Mínima (%)": round(float(leituras["UMD_MIN"].min()), 1),
         "Rajada Máxima (km/h)": round(float(leituras["rajada_kmh"].max()), 1),
@@ -105,7 +112,15 @@ def resumir_estacao(leituras: pd.DataFrame, estacao: pd.Series) -> dict:
         "Primeiro Horário em Risco Alto (MS)": _primeiro_horario(niveis, NIVEL_ALTO),
         "Latitude": estacao["VL_LATITUDE"],
         "Longitude": estacao["VL_LONGITUDE"],
-    }
+    })
+    return linha
+
+
+def _dias_por_nivel(niveis: pd.Series) -> dict:
+    """Em quantos dias (no horário de MS) o pior nível da estação foi o alto e em quantos foi o médio."""
+    por_dia = niveis.groupby(niveis.index.tz_convert(config.FUSO_MS).date).max()
+    return {"Dias com Risco Alto": int((por_dia == NIVEL_ALTO).sum()),
+            "Dias com Risco Médio": int((por_dia == NIVEL_MEDIO).sum())}
 
 
 def montar_tabela(resumos: list[dict]) -> pd.DataFrame:
@@ -160,7 +175,8 @@ def grade_da_hora(pontos: pd.DataFrame, base: BaseCartografica) -> np.ndarray:
                                 base.lon_grade, base.lat_grade, config.IDW_VIZINHOS, config.IDW_POTENCIA)
         for coluna in ("TEM_MAX", "UMD_MIN", "rajada_kmh")
     ]
-    return contar_condicoes(*campos)
+    # int8 basta para valores de 0 a 3 e mantém a memória baixa: um mês guarda 720 grades destas
+    return contar_condicoes(*campos).astype(np.int8)
 
 
 @dataclass(frozen=True)
@@ -216,6 +232,8 @@ def _subtitulo(periodo: Periodo) -> str:
         return f"{inicio:%d/%m/%Y %H:%M} até {fim:%d/%m/%Y %H:%M} GMT-04"
     if not periodo.dias_inteiros:
         return f"{inicio:%d/%m/%Y %H:%M} a {fim:%d/%m/%Y %H:%M} GMT-04"
+    if periodo.primeiro_dia != periodo.ultimo_dia:
+        return f"{periodo.primeiro_dia:%d/%m/%Y} a {periodo.ultimo_dia:%d/%m/%Y}"
     return f"{periodo.primeiro_dia:%d/%m/%Y}"
 
 
@@ -249,7 +267,7 @@ def gerar_mapas(tabela: pd.DataFrame, horas: dict, periodo: Periodo, base: BaseC
 
     exposicao = EspecMapa(ABA, COLUNA_HORAS_ALTO, f"Horas Agregadas de risco alto de fogo em {config.UF}", subtitulo,
                           f"Mapa_Risco_Fogo_Horas_{config.UF}", "YlOrRd", "Horas em risco alto",
-                          "5 MAIORES EXPOSIÇÕES")
+                          "5 MAIORES EXPOSIÇÕES", decimais=0)  # horas são contagens: sem casas decimais
     mapas.mapa_pontual(gdf, exposicao, base, pasta / f"{exposicao.arquivo}_{identificador}.png")
 
     if horas:
@@ -302,11 +320,6 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
     print(f"📅 {periodo.descricao}")
     print("=" * 60)
 
-    if periodo.modo == "periodo":
-        print("❌ Este produto gera mapas de um dia ou do tempo real, não de período.")
-        print("   Use uma data específica (--inicio) ou --tempo-real.")
-        return 1
-
     try:
         coletados = inmet.baixar_estacoes(*periodo.janela)
     except inmet.ErroINMET as erro:
@@ -325,7 +338,7 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
         print("❌ Nenhuma estação tem as três variáveis no período. Nada a calcular.")
         return 1
 
-    tabela = montar_tabela([resumir_estacao(leituras, estacao) for estacao, leituras in completas])
+    tabela = montar_tabela([resumir_estacao(leituras, estacao, periodo) for estacao, leituras in completas])
     print("\n🔥 Estações por nível de risco:")
     for nivel in range(len(config.ROTULOS_RISCO) - 1, -1, -1):
         print(f"   {config.ROTULOS_RISCO[nivel]}: {(tabela[COLUNA_NIVEL] == nivel).sum()} estações")

@@ -125,7 +125,7 @@ As decisões foram tomadas com o programador em 16/09/2026. Os pontos marcados c
 
 **Decisões (16/09/2026):**
 
-- **Modos:** somente **tempo real** e **data específica**. Consultas de período são recusadas com mensagem explicativa — para período, a equipe quer dados quantitativos em gráfico (estação × condições atendidas), e não mapas. Fica para uma etapa seguinte.
+- **Modos:** **tempo real** e **data específica**. *(Revisto em 17/09/2026: o período passou a ser aceito também — veja a decisão no fim desta questão.)*
 - **Mapas de síntese** (sempre gerados): **nível máximo atingido** e **número de horas em risco alto**, cada um em versão pontual e interpolada.
 - **Mapas horários:** apenas interpolados — gerar pontual e interpolado por hora dobraria para 48 arquivos num único dia. Por padrão, só são gerados nas horas em que **pelo menos uma estação** atingiu o nível 3 (risco alto); com a opção `--hrtodas`, saem todas as horas disponíveis, independentemente do nível. *(Até 17/09/2026 o critério era o nível 2; veja a decisão no fim desta questão.)*
 - **Peso das condições:** as três pesam igual.
@@ -136,5 +136,7 @@ As decisões foram tomadas com o programador em 16/09/2026. Os pontos marcados c
 **Decisão (17/09/2026):** nos mapas horários, cada estação mostra o seu nível **naquela hora** e, abaixo do número, um ponto para cada condição atendida — roxo para temperatura, azul para umidade e verde para rajada —, sempre na mesma posição (temperatura à esquerda, umidade no meio, rajada à direita), para que a condição seja identificável mesmo por quem não distingue as cores. Os mapas de síntese (nível máximo e horas em risco alto) não recebem os pontos, porque juntam horas diferentes.
 
 **Decisão (17/09/2026):** os mapas horários passam a ser gerados **só nas horas com alguma estação em risco alto** (nível 3) — antes bastava o nível 2. A opção `--hrtodas` continua gerando todas as horas. Em compensação, o acompanhamento dos níveis intermediários fica na planilha, que conta as horas nos três níveis e ganhou a coluna `Primeiro Horário em Risco Médio (MS)`, ao lado da que já existia para o risco alto: assim dá para ver quando o risco começou a subir, mesmo nos dias que não chegam ao nível 3. Os mapas de "horas em risco alto" continuam sendo gerados sempre, mesmo zerados.
+
+**Decisão (17/09/2026):** o produto passa a aceitar **período** também. Tudo funciona como no dia, somando os dias: o mapa de nível máximo traz o pior nível de cada lugar em todo o período, o de horas agregadas soma as horas em risco alto, e os mapas horários continuam saindo em todas as horas com risco alto — um mês movimentado pode passar de 200 arquivos. A planilha ganha, só no período, as colunas `Dias com Risco Alto` e `Dias com Risco Médio`. Os gráficos quantitativos (estação × condições atendidas) continuam previstos, como uma entrega à parte.
 
 ⚠️ **A confirmar:** os limiares (≥ 30 °C, ≤ 30 %, ≥ 30 km/h) e o critério de gerar mapa horário só a partir do risco alto.

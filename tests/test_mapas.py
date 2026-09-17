@@ -44,6 +44,13 @@ def test_estacoes_com_zero_entram_no_mapa():
     assert len(mapas._preparar_dados(tabela, CHUVA)) == 5
 
 
+def test_casas_decimais_dos_rotulos():
+    """Contagens (como horas) saem inteiras; medidas continuam com uma casa."""
+    horas = mapas.EspecMapa("Risco", "Horas", "t", "s", "a", "YlOrRd", "h", "r", decimais=0)
+    assert mapas._formato(horas)(5.0) == "5"
+    assert mapas._formato(CHUVA)(5.0) == "5.0"
+
+
 def test_indicadores_ocupam_sempre_a_mesma_posicao():
     """Cada indicador tem posição fixa sob a estação, mesmo quando os outros não aparecem."""
     tabela = pd.DataFrame({

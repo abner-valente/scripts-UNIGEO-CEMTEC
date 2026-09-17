@@ -32,6 +32,7 @@ class EspecMapa:
     ranking: str
     maiores: bool = True         # ranking dos maiores (True) ou dos menores (False)
     direcao_vento: bool = False  # desenha as setas de direção do vento
+    decimais: int = 1            # casas decimais dos rótulos e do ranking (0 para contagens, como horas)
 
 
 @dataclass(frozen=True)
@@ -139,7 +140,7 @@ def mapa_pontual(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartografica
     gdf.plot(ax=ax, column=espec.coluna, cmap=espec.cmap, vmin=vmin, vmax=vmax, markersize=tamanho,
              edgecolor="black", linewidth=0.8, legend=True, legend_kwds={"label": espec.unidade, "shrink": 0.75})
 
-    _rotular(ax, gdf, valores.map("{:.1f}".format), tamanho_fonte=8, cor="black",
+    _rotular(ax, gdf, valores.map(_formato(espec)), tamanho_fonte=8, cor="black",
              fundo="white", borda="none", opacidade=0.75)
     _ranking(ax, gdf, espec, tamanho_fonte=10)
     _finalizar(fig, ax, espec, base, caminho)
@@ -173,7 +174,7 @@ def mapa_de_grade(grade, gdf, espec: EspecMapa, base: BaseCartografica, caminho:
     _desenhar_limites(ax, base)
     gdf.plot(ax=ax, color="black", markersize=50, alpha=0.7, edgecolor="white", linewidth=1.5)
 
-    rotulos = gdf[espec.coluna].map("{:.1f}".format)
+    rotulos = gdf[espec.coluna].map(_formato(espec))
     sufixos_ranking = None
     if espec.direcao_vento:
         _desenhar_setas_vento(ax, gdf)
@@ -285,6 +286,11 @@ def _desenhar_indicadores(ax, gdf, indicadores: Indicadores) -> None:
               framealpha=0.9)
 
 
+def _formato(espec: EspecMapa):
+    """Formatação dos números do mapa (rótulos e ranking), com as casas decimais da especificação."""
+    return f"{{:.{espec.decimais}f}}".format
+
+
 def _faixa_de_cores(valores: pd.Series) -> tuple[float, float]:
     """Mínimo e máximo da escala de cores. Se todos os valores forem iguais (ex.: dia sem chuva), abre a escala em 1."""
     vmin, vmax = float(valores.min()), float(valores.max())
@@ -324,7 +330,7 @@ def _ranking(ax, gdf, espec: EspecMapa, tamanho_fonte, sufixos=None) -> None:
     texto = f"{espec.ranking}:\n"
     for indice, linha in extremos.iterrows():
         sufixo = sufixos[indice] if sufixos is not None else ""
-        texto += f"{linha['Estação']}: {linha[espec.coluna]:.1f}{sufixo}\n"
+        texto += f"{linha['Estação']}: {_formato(espec)(linha[espec.coluna])}{sufixo}\n"
     ax.text(0.97, 0.04, texto, transform=ax.transAxes, ha="right", va="bottom",
             fontsize=tamanho_fonte, weight="bold",
             bbox=dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor="black", alpha=0.9))
