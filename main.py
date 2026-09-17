@@ -72,7 +72,7 @@ def ler_consulta(argumentos: list[str] | None = None) -> tuple[ModuleType, Perio
     parser.add_argument("--hrfim", type=ler_hora, help="hora de fim, horário de MS (0 a 24; padrão: 24)")
     parser.add_argument("--tempo-real", action="store_true", help="monitoramento das últimas 24 h")
     parser.add_argument("--hrtodas", action="store_true",
-                        help="risco_fogo: gera o mapa de todas as horas, e não só as de risco médio ou alto")
+                        help="risco_fogo: gera o mapa de todas as horas, e não só as de risco alto")
     args = parser.parse_args(argumentos)
 
     nome_produto = args.produto or PRODUTO

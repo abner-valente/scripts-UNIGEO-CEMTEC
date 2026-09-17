@@ -87,7 +87,7 @@ LIMIAR_RAJADA = 30.0       # km/h — condição atendida com rajada >= este val
 
 CORES_RISCO = ["#bdbdbd", "#ffd54f", "#fb8c00", "#d32f2f"]  # cinza, amarelo, laranja, vermelho
 ROTULOS_RISCO = ["Sem condição", "Risco baixo", "Risco médio", "Risco alto"]
-NIVEL_MAPA_HORARIO = 2     # nível mínimo, em alguma estação, para gerar o mapa daquela hora
+NIVEL_MAPA_HORARIO = 3     # nível mínimo, em alguma estação, para gerar o mapa daquela hora (3 = risco alto)
 # Pontos das condições atendidas nos mapas horários, na ordem temperatura, umidade e rajada (fora da paleta de risco)
 CORES_CONDICOES = ["#7b1fa2", "#1565c0", "#1b5e20"]  # roxo, azul, verde-escuro
 
