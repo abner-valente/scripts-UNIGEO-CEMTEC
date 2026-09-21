@@ -219,11 +219,16 @@ class Periodo:
         )
 
     def descrever_janela(self, inicio: datetime, fim: datetime) -> str:
-        """Texto de uma janela para os subtítulos dos mapas."""
-        if self.modo == "tempo_real":
-            return (f"{inicio.astimezone(FUSO_MS):%d/%m/%Y %H:%M} até "
-                    f"{fim.astimezone(FUSO_MS):%d/%m/%Y %H:%M} (horário de MS)")
-        return self.descricao
+        """Texto de uma janela para os subtítulos dos mapas, igual em todos os produtos.
+
+        Só as datas quando a janela cobre dias inteiros; com horário e fuso (GMT-04, o horário
+        de MS) quando começa ou termina no meio de um dia, que é quando a hora faz diferença.
+        """
+        inicio, fim = inicio.astimezone(FUSO_MS), fim.astimezone(FUSO_MS)
+        if inicio.time() == time.min and fim.time() == time.min:
+            primeiro, ultimo = inicio.date(), (fim - timedelta(microseconds=1)).date()
+            return f"{primeiro:%d/%m/%Y}" if primeiro == ultimo else f"{primeiro:%d/%m/%Y} a {ultimo:%d/%m/%Y}"
+        return f"{inicio:%d/%m/%Y %H:%M} a {fim:%d/%m/%Y %H:%M} GMT-04"
 
     def pasta_saida(self, produto: str) -> Path:
         """Pasta dos resultados: saida/<produto>/<modo>/<identificador>/."""
