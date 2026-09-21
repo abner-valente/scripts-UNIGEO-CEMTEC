@@ -198,6 +198,23 @@ def test_periodo_conta_os_dias_de_cada_nivel(serie):
     assert linha["Dias com Risco Médio"] == 1  # o terceiro dia ficou no nível 1
 
 
+def test_a_leitura_da_meia_noite_pertence_ao_dia_que_terminou():
+    """Sem isso, uma consulta de sete dias produz oito dias, o último com uma hora só."""
+    horas = pd.DatetimeIndex([utc("2026-09-16 04:00"), utc("2026-09-16 05:00")])  # 00 h e 01 h de MS
+    assert [str(dia) for dia in risco_fogo.dia_da_leitura(horas)] == ["2026-09-15", "2026-09-16"]
+
+
+def test_tabela_horaria_traz_uma_linha_por_estacao_e_hora(serie):
+    dados = serie("2026-09-14", "2026-09-17 05:00", TEM_MAX=QUENTE, UMD_MIN=UMIDO, VEN_RAJ=CALMO)
+    completas = [(ESTACAO, risco_fogo.leituras_validas(dados, PERIODO))]
+
+    tabela = risco_fogo.tabela_horaria(completas)
+
+    assert len(tabela) == 72  # três dias de 24 horas
+    assert tabela["Nível na Hora"].eq(1).all()  # só a temperatura é atendida
+    assert sorted({str(dia) for dia in tabela["dia"]}) == ["2026-09-14", "2026-09-15", "2026-09-16"]
+
+
 def test_dia_nao_traz_as_colunas_de_dias(serie):
     dados = serie("2026-09-16", "2026-09-17 05:00")
     linha = risco_fogo.resumir_estacao(risco_fogo.leituras_validas(dados, DIA), ESTACAO, DIA)
@@ -213,6 +230,12 @@ def test_execucao_completa_de_periodo(api_simulada):
     assert {"Dias com Risco Alto", "Dias com Risco Médio"} <= set(tabela.columns)
     assert tabela["Dias com Risco Alto"].max() <= periodo.num_dias
     assert (pasta / "mapas" / f"Mapa_Risco_Fogo_Nivel_{config.UF}_{periodo.identificador}_interpolado.png").exists()
+
+    assert (pasta / f"Grafico_Risco_Fogo_Niveis_{config.UF}_{periodo.identificador}.png").exists()
+    assert (pasta / f"Grafico_Risco_Fogo_Calendario_{config.UF}_{periodo.identificador}.png").exists()
+    condicoes = sorted(arquivo.name for arquivo in (pasta / "graficosDeCondicoes").glob("*.png"))
+    assert condicoes == [f"Grafico_Risco_Fogo_Condicoes_{config.UF}_20260914.png",   # um por dia do período
+                         f"Grafico_Risco_Fogo_Condicoes_{config.UF}_20260915.png"]
 
 
 def test_execucao_completa(api_simulada, tmp_path):
@@ -231,3 +254,4 @@ def test_execucao_completa(api_simulada, tmp_path):
         f"Mapa_Risco_Fogo_Nivel_{config.UF}_{MANHA.identificador}_interpolado.png",
     ]
     assert len(list((pasta / "mapas" / "horas").glob("*.png"))) == 3  # uma por hora, com --hrtodas
+    assert not list(pasta.glob("Grafico_*.png"))  # gráficos são só do período

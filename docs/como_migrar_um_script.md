@@ -31,6 +31,7 @@ Antes de escrever código novo, confira se a peça já existe:
 | Estações de MS e seus dados horários | `inmet.baixar_estacoes(inicio, fim)` |
 | Recortar um intervalo, achar extremos, somar chuva | `calculos.recortar`, `calculos.indice_extremo`, `calculos.data_hora`, `calculos.acumulado_chuva` |
 | Mapas pontuais e interpolados | `mapas.EspecMapa` + `mapas.gerar_mapas` (a interpolação IDW já vem junto) |
+| Gráficos de barras ou calendário | `graficos.barras_empilhadas`, `graficos.barras_agrupadas` e `graficos.calendario` |
 | Planilha formatada | `excel.salvar_relatorio` |
 | Pastas, limites do mapa, logos e parâmetros | `config` |
 
