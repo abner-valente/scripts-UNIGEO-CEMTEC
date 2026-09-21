@@ -120,38 +120,38 @@ def montar_tabelas(resumos: list[dict[str, dict]], periodo: Periodo) -> dict[str
 # =====================================================
 def especificacoes_mapas(periodo: Periodo) -> list[EspecMapa]:
     """Mapas gerados pelo relatório, conforme o modo da consulta."""
-    uf, sigla = config.NOME_UF, config.UF
+    sigla = config.UF
     subtitulo = periodo.descrever_janela(*periodo.janela)
 
     especificacoes = [
-        EspecMapa("Temp_Min", "Temperatura Mínima (°C)", f"Temperatura mínima em {uf}", subtitulo,
+        EspecMapa("Temp_Min", "Temperatura Mínima (°C)", f"Temperatura Mín. em {sigla}", subtitulo,
                   f"Mapa_Temp_Min_{sigla}", "coolwarm", "Temperatura (°C)", "5 MENORES TEMPERATURAS", maiores=False),
-        EspecMapa("Temp_Max", "Temperatura Máxima (°C)", f"Temperatura máxima em {uf}", subtitulo,
+        EspecMapa("Temp_Max", "Temperatura Máxima (°C)", f"Temperatura Máx. em {sigla}", subtitulo,
                   f"Mapa_Temp_Max_{sigla}", "YlOrRd", "Temperatura (°C)", "5 MAIORES TEMPERATURAS"),
-        EspecMapa("Umidade", "Umidade Mín (%)", f"Umidade relativa mínima em {uf}", subtitulo,
+        EspecMapa("Umidade", "Umidade Mín (%)", f"Umidade Rel. Mín. em {sigla}", subtitulo,
                   f"Mapa_Umidade_{sigla}", "YlGnBu", "Umidade (%)", "5 MENORES UMIDADES", maiores=False),
     ]
 
     # (coluna, duração no título, sufixo do arquivo, paleta)
     if periodo.modo == "tempo_real":
-        chuvas = [("Acumulado 24h", "24 horas", "24h", "Blues"), ("Acumulado 48h", "48 horas", "48h", "Purples"),
-                  ("Acumulado 72h", "72 horas", "72h", "Blues")]
+        chuvas = [("Acumulado 24h", "24 h", "24h", "Blues"), ("Acumulado 48h", "48 h", "48h", "Purples"),
+                  ("Acumulado 72h", "72 h", "72h", "Blues")]
     elif periodo.modo == "dia" and periodo.dias_inteiros:
-        chuvas = [(coluna_chuva_principal(periodo), "24 horas", "24h", "Blues")]
+        chuvas = [(coluna_chuva_principal(periodo), "24 h", "24h", "Blues")]
     else:
-        duracao = f"{periodo.num_dias} dias" if periodo.dias_inteiros else f"{periodo.horas} horas"
+        duracao = f"{periodo.num_dias} dias" if periodo.dias_inteiros else f"{periodo.horas} h"
         chuvas = [(coluna_chuva_principal(periodo), duracao, "Periodo", "Blues")]
     for coluna, duracao, sufixo, cmap in chuvas:
         especificacoes.append(EspecMapa(
-            "Chuva", coluna, f"Chuva acumulada em {duracao} - {uf}",
+            "Chuva", coluna, f"Chuva Acumulada em {duracao} em {sigla}",
             periodo.descrever_janela(*janelas_chuva(periodo)[coluna]), f"Mapa_Chuva_{sufixo}_{sigla}",
             cmap, "Chuva (mm)", "5 MAIORES ACUMULADOS",
         ))
 
-    rajadas = EspecMapa("Vento", "Rajada (km/h)", f"Rajadas de vento em {uf}", subtitulo,
+    rajadas = EspecMapa("Vento", "Rajada (km/h)", f"Rajadas de Vento em {sigla}", subtitulo,
                         f"Mapa_Rajadas_{sigla}", "turbo", "Velocidade (km/h)", "5 MAIORES RAJADAS")
     especificacoes.append(rajadas)
-    especificacoes.append(replace(rajadas, titulo=f"Rajadas de vento com direção em {uf}",
+    especificacoes.append(replace(rajadas, titulo=f"Rajadas de Vento com Direção em {sigla}",
                                   arquivo=f"Mapa_Rajadas_Direcao_{sigla}", direcao_vento=True))
     return especificacoes
 

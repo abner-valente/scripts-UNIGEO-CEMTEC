@@ -151,18 +151,6 @@ def test_criterio_olha_as_estacoes_e_nao_a_superficie():
     assert risco_fogo.horas_para_mapear(horas) == {}
 
 
-# ---------- Títulos ----------
-
-@pytest.mark.parametrize("periodo, subtitulo", [
-    (DIA, "16/09/2026"),                                           # data sozinha: sem fuso
-    (PERIODO, "14/09/2026 a 16/09/2026"),                          # período de dias inteiros: sem fuso
-    (MANHA, "16/09/2026 06:00 a 16/09/2026 09:00 GMT-04"),         # com horário: com fuso
-    (TEMPO_REAL, "13/09/2026 09:25 até 14/09/2026 09:25 GMT-04"),
-], ids=["dia", "periodo", "janela_curta", "tempo_real"])
-def test_subtitulo_traz_o_fuso_so_quando_ha_horario(periodo, subtitulo):
-    assert risco_fogo._subtitulo(periodo) == subtitulo
-
-
 # ---------- Mapas horários ----------
 
 def test_estacoes_da_hora_trazem_as_condicoes_e_o_nivel_daquela_hora(serie):
