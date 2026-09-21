@@ -54,7 +54,7 @@ def test_dia_com_horarios_mostra_a_duracao_em_horas():
     periodo = Periodo.de_datas(date(2026, 9, 15), date(2026, 9, 15), 6, 18)
     assert list(relatorio_inmet.janelas_chuva(periodo)) == ["Acumulado Período"]
     titulos = [e.titulo for e in relatorio_inmet.especificacoes_mapas(periodo) if e.tabela == "Chuva"]
-    assert titulos == ["Chuva acumulada em 12 horas - Mato Grosso do Sul"]
+    assert titulos == ["Chuva Acumulada em 12 h em MS"]
 
 
 def test_chuva_do_dia_soma_24_leituras(serie):
