@@ -20,6 +20,7 @@ Desenvolvido pela equipe de meteorologia do **CEMTEC** — Centro de Monitoramen
   - [Produto `risco_fogo`](#produto-risco_fogo)
 - [Requisitos](#requisitos)
 - [Instalação](#instalação)
+- [Como atualizar](#como-atualizar)
 - [Configuração](#configuração)
 - [Testes](#testes)
 - [Novos produtos](#novos-produtos)
@@ -427,6 +428,52 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+## Como atualizar
+
+Quem usa os scripts trabalha com uma cópia local do repositório, feita uma única vez com `git clone`. Quando sair uma versão nova, essa cópia não se atualiza sozinha: é preciso pedir.
+
+Abra o terminal **dentro da pasta do projeto** e rode:
+
+```bash
+git pull
+```
+
+Pronto — os arquivos passam a ser os da versão nova. A pasta `saida/`, com os seus resultados, e o arquivo `.env`, com o token, não são tocados: os dois ficam fora do controle de versão.
+
+Para ver em que versão você está:
+
+```bash
+git log --oneline -1
+```
+
+### Se o `git pull` reclamar de alterações locais
+
+Se aparecer algo como *"Your local changes to the following files would be overwritten by merge: main.py"*, significa que o arquivo foi editado na sua máquina — normalmente para trocar o produto ou as datas no topo do `main.py`. O git não sobrescreve isso sem a sua autorização.
+
+Para descartar a sua edição e ficar com a versão nova:
+
+```bash
+git checkout -- main.py
+```
+
+Depois, repita o `git pull`.
+
+Para não passar por isso toda vez, prefira informar produto e datas **pela linha de comando**, em vez de editar o arquivo. Assim o `main.py` nunca muda na sua máquina:
+
+```bash
+python main.py --produto risco_fogo --dataini 20/09/2026
+```
+
+### Depois de atualizar
+
+Se a atualização mexeu no `requirements.txt`, instale o que faltar, com o ambiente virtual ativo:
+
+```bash
+pip install -r requirements.txt
+```
+
+Vale também conferir a seção [Como usar](#como-usar): uma versão nova pode trazer produtos novos ou mudar o nome de alguma opção.
 
 ## Configuração
 
