@@ -159,8 +159,12 @@ def especificacoes_mapas(periodo: Periodo) -> list[EspecMapa]:
 # =====================================================
 # EXECUÇÃO
 # =====================================================
-def executar(periodo: Periodo) -> int:
-    """Coleta os dados, calcula e grava a planilha e os mapas. Retorna 0 se deu certo e 1 se falhou."""
+def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
+    """Coleta os dados, calcula e grava a planilha e os mapas. Retorna 0 se deu certo e 1 se falhou.
+
+    Este produto não tem opções próprias de linha de comando; `opcoes` existe para manter a mesma
+    assinatura em todos os produtos.
+    """
     print("=" * 60)
     print(f"📊 {TITULO} — {config.NOME_UF}")
     print(f"📅 Modo: {periodo.nome_modo}")
@@ -171,6 +175,10 @@ def executar(periodo: Periodo) -> int:
         coletados = inmet.baixar_estacoes(*periodo.janela_busca)
     except inmet.ErroINMET as erro:
         print(f"❌ Erro ao listar estações: {erro}")
+        return 1
+
+    if not coletados:
+        print("❌ Nenhuma estação retornou dados. Confira o token e a conexão e tente de novo.")
         return 1
 
     tabelas = montar_tabelas([resumir_estacao(dados, estacao, periodo) for estacao, dados in coletados], periodo)

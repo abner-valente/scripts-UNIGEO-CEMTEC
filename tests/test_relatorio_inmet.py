@@ -150,3 +150,9 @@ def test_falha_ao_listar_as_estacoes(api_simulada, monkeypatch):
 
     monkeypatch.setattr(inmet, "listar_estacoes", fora_do_ar)
     assert relatorio_inmet.executar(DIA) == 1
+
+
+def test_nenhuma_estacao_com_dados_interrompe_o_relatorio(api_simulada, monkeypatch):
+    """Sem nenhuma estação (token errado, INMET instável) não faz sentido gerar planilha e mapas vazios."""
+    monkeypatch.setattr(inmet, "baixar_estacoes", lambda inicio, fim, uf=config.UF: [])
+    assert relatorio_inmet.executar(DIA) == 1
