@@ -8,6 +8,8 @@ import requests
 from modulos import config, inmet
 from modulos.config import FUSO_UTC, Periodo
 
+DIA = Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30))
+
 
 class RespostaFalsa:
     def __init__(self, conteudo=None, status_code=200, text=""):
@@ -56,7 +58,7 @@ def test_baixar_dados_converte_valores_e_horarios(monkeypatch):
         {"DT_MEDICAO": "2026-07-30", "HR_MEDICAO": "1300", "TEM_MIN": None, "CHUVA": "0"},
     ]
     monkeypatch.setattr(inmet.requests, "get", lambda url, timeout: RespostaFalsa(registros))
-    dados = inmet.baixar_dados_estacao("A702", *Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30)).janela_busca)
+    dados = inmet.baixar_dados_estacao("A702", *DIA.janela_busca)
 
     assert dados["dt_utc"].tolist() == [pd.Timestamp("2026-07-30 00:00", tz="UTC"), pd.Timestamp("2026-07-30 13:00", tz="UTC")]
     assert dados["dt_local"].iloc[1].hour == 9  # 13 UTC = 9 h em MS
@@ -83,8 +85,8 @@ def test_baixar_dados_pede_apenas_os_dias_necessarios(monkeypatch, periodo, trec
     assert trecho_da_url in urls[0]
 
 
-@pytest.mark.parametrize("falha", ["http_500", "lista_vazia", "json_invalido", "sem_conexao"])
-def test_falhas_da_api_retornam_none_sem_expor_o_token(monkeypatch, capsys, falha):
+@pytest.mark.parametrize("falha", ["http_500", "json_invalido", "sem_conexao"])
+def test_falhas_da_api_viram_erro_sem_expor_o_token(monkeypatch, capsys, falha):
     monkeypatch.setattr(config, "TOKEN_INMET", "TOKEN-SECRETO")
 
     def get_falso(url, timeout):
@@ -92,23 +94,68 @@ def test_falhas_da_api_retornam_none_sem_expor_o_token(monkeypatch, capsys, falh
             raise requests.ConnectionError(f"falha ao acessar {url}")
         if falha == "http_500":
             return RespostaFalsa(status_code=500, text=f"erro interno em {url}")
-        if falha == "lista_vazia":
-            return RespostaFalsa([])
-        return RespostaFalsa(ValueError("resposta não é JSON"))
+        return RespostaFalsa(ValueError(f"resposta não é JSON: {url}"))
 
     monkeypatch.setattr(inmet.requests, "get", get_falso)
-    inicio, fim = Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30)).janela_busca
-    assert inmet.baixar_dados_estacao("A702", inicio, fim) is None
+    with pytest.raises(inmet.ErroINMET) as erro:
+        inmet.baixar_dados_estacao("A702", *DIA.janela_busca)
+    assert "TOKEN-SECRETO" not in str(erro.value)
     assert "TOKEN-SECRETO" not in capsys.readouterr().out
 
 
-def test_baixar_estacoes_deixa_de_fora_as_que_nao_tem_dados(monkeypatch):
+def test_estacao_sem_leituras_no_periodo_retorna_none(monkeypatch):
+    monkeypatch.setattr(inmet.requests, "get", lambda url, timeout: RespostaFalsa([]))
+    assert inmet.baixar_dados_estacao("A702", *DIA.janela_busca) is None
+
+
+def test_falha_passageira_e_repetida(monkeypatch):
+    """A API do INMET às vezes encerra a conexão sem responder; a tentativa seguinte costuma funcionar."""
+    tentativas = []
+
+    def get_falso(url, timeout):
+        tentativas.append(url)
+        if len(tentativas) < config.TENTATIVAS:
+            raise requests.ConnectionError("Remote end closed connection without response")
+        return RespostaFalsa([{"DT_MEDICAO": "2026-07-30", "HR_MEDICAO": "1300", "CHUVA": "1,0"}])
+
+    monkeypatch.setattr(inmet.requests, "get", get_falso)
+    dados = inmet.baixar_dados_estacao("A702", *DIA.janela_busca)
+
+    assert len(tentativas) == config.TENTATIVAS
+    assert dados["CHUVA"].tolist() == [1.0]
+
+
+def test_erro_de_token_nao_e_repetido(monkeypatch):
+    """Erros 4xx (token inválido, estação inexistente) não melhoram com novas tentativas."""
+    tentativas = []
+
+    def get_falso(url, timeout):
+        tentativas.append(url)
+        return RespostaFalsa(status_code=401, text="token inválido")
+
+    monkeypatch.setattr(inmet.requests, "get", get_falso)
+    with pytest.raises(inmet.ErroINMET):
+        inmet.baixar_dados_estacao("A702", *DIA.janela_busca)
+    assert len(tentativas) == 1
+
+
+def test_resumo_da_coleta_separa_sem_dados_de_falha(monkeypatch, capsys):
     estacoes = pd.DataFrame({"CD_ESTACAO": ["A1", "A2", "A3"], "Estação": ["Um", "Dois", "Tres"]})
+
+    def baixar(codigo, inicio, fim):
+        if codigo == "A2":
+            return None
+        if codigo == "A3":
+            raise inmet.ErroINMET("conexão encerrada")
+        return pd.DataFrame({"dt_utc": [1]})
+
     monkeypatch.setattr(inmet, "listar_estacoes", lambda uf=config.UF: estacoes)
-    monkeypatch.setattr(inmet, "baixar_dados_estacao",
-                        lambda codigo, inicio, fim: None if codigo == "A2" else pd.DataFrame({"dt_utc": [1]}))
-    monkeypatch.setattr(config, "PAUSA_ENTRE_REQUISICOES", 0)
+    monkeypatch.setattr(inmet, "baixar_dados_estacao", baixar)
 
-    coletados = inmet.baixar_estacoes(*Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30)).janela_busca)
+    coletados = inmet.baixar_estacoes(*DIA.janela_busca)
+    saida = capsys.readouterr().out
 
-    assert [estacao["CD_ESTACAO"] for estacao, _ in coletados] == ["A1", "A3"]
+    assert [estacao["CD_ESTACAO"] for estacao, _ in coletados] == ["A1"]
+    assert "Estações com dados: 1 de 3" in saida
+    assert "Sem leituras no período (1): Dois" in saida
+    assert "Falha na consulta (1): Tres" in saida

@@ -2,7 +2,7 @@
 
 Durante a reestruturação dos scripts (versão 0.1.1), alguns pontos ficaram em aberto porque **mudam os resultados** e dependem de uma decisão meteorológica. Para cada um estão a situação atual, o problema e as opções. As respostas podem ser anotadas no campo **Decisão**.
 
-> **Situação em 15/09/2026:** todas as questões foram respondidas. As decisões estão anotadas abaixo e aplicadas no código (versão 0.1.1).
+> **Situação em 17/09/2026:** as questões 1 a 5 (versão 0.1.1) foram respondidas e já estão aplicadas no código. Nas questões 6 a 8, do produto `risco_fogo`, a equipe confirmou as aproximações de método (questões 6 e 7); continuam marcados com ⚠️ apenas os limiares e o critério de gerar mapa horário, na questão 8.
 
 Nas descrições abaixo, os horários estão em UTC (horário de MS = UTC−4).
 
@@ -86,3 +86,57 @@ Estas mudanças já estão no código (detalhes no README, seção "Mudanças em
 - **Scripts originais:** estão em `legado/` para comparação. Depois da validação, podem ser removidos?
 
 **Decisão (15/09/2026):** extremos do período confirmados; sem o acumulado de 48 h por enquanto; mapa de rajadas com direção confirmado; `legado/` mantido até decisão sobre a exclusão.
+
+---
+
+# Produto `risco_fogo` (versão 0.1.4)
+
+Produto **novo**, pedido pela equipe de meteorologia: mapa de risco meteorológico de fogo pela regra apelidada de **30-30-30**. Não veio de script legado — foi desenhado do zero, então as questões abaixo registram o desenho, e não uma migração.
+
+A regra: **temperatura máxima ≥ 30 °C**, **umidade relativa mínima ≤ 30 %** e **rajada ≥ 30 km/h**. Cada condição atendida soma um nível: 0 (sem condição), 1 (baixo), 2 (médio), 3 (alto).
+
+As decisões foram tomadas com o programador em 16/09/2026. Os pontos marcados com ⚠️ **precisam de confirmação da meteorologia**. Nesta parte, os horários citados estão no horário de MS.
+
+---
+
+## 6. Simultaneidade das três condições
+
+**O problema:** os extremos de um período acontecem em horários diferentes. Uma estação pode marcar 32 °C às 15 h, 28 % de umidade às 18 h e rajada de 35 km/h às 03 h da madrugada. Contando os extremos do dia, ela seria classificada como "risco alto" — mas em nenhum momento houve calor, seca e vento ao mesmo tempo, que é o que importa para fogo.
+
+**Decisão (16/09/2026):** avaliar a regra **hora a hora**. Cada leitura horária do INMET traz a temperatura máxima, a umidade mínima e a rajada **daquela hora**; as três condições são testadas dentro de cada hora e só depois agregadas na janela consultada.
+
+**Confirmado (17/09/2026):** a equipe aceita a aproximação. Dentro de uma mesma hora o resultado não é rigorosamente simultâneo — a máxima e a mínima daquela hora podem estar separadas por dezenas de minutos —, mas é a janela mais fina que a API oferece.
+
+---
+
+## 7. Como interpolar o nível de risco
+
+**O problema:** interpolar diretamente o nível 0–3 de cada estação produz valores sem significado físico ("1,7 condições atendidas") e borra o mapa — uma estação em nível 3 ao lado de outra em nível 0 gera ~1,5, pintando "risco médio" num lugar onde nenhuma das duas indicou risco médio.
+
+**Decisão (16/09/2026):** interpolar as **três variáveis separadamente** — cada uma é um campo físico contínuo, que é para o que o IDW serve — e aplicar a regra 30-30-30 **célula a célula** na grade. As fronteiras entre as classes passam a cair exatamente onde cada limiar é cruzado.
+
+**Confirmado (17/09/2026):** a equipe aceita a limitação, e a condição de vento continua entrando na superfície interpolada. Fica o registro: vento de rajada é muito local (convectivo), então a superfície de vento é bastante menos confiável que as de temperatura e umidade.
+
+**Consequência visual, para não ser confundida com erro:** o mapa pontual e o interpolado podem discordar. A superfície pode mostrar nível 2 numa célula onde nenhuma estação está em nível 2, porque ela deriva dos campos físicos interpolados, e não dos níveis das estações.
+
+---
+
+## 8. Modos, mapas e planilha
+
+**Decisões (16/09/2026):**
+
+- **Modos:** **tempo real** e **data específica**. *(Revisto em 17/09/2026: o período passou a ser aceito também — veja a decisão no fim desta questão.)*
+- **Mapas de síntese** (sempre gerados): **nível máximo atingido** e **número de horas em risco alto**, cada um em versão pontual e interpolada.
+- **Mapas horários:** apenas interpolados — gerar pontual e interpolado por hora dobraria para 48 arquivos num único dia. Por padrão, só são gerados nas horas em que **pelo menos uma estação** atingiu o nível 3 (risco alto); com a opção `--hrtodas`, saem todas as horas disponíveis, independentemente do nível. *(Até 17/09/2026 o critério era o nível 2; veja a decisão no fim desta questão.)*
+- **Peso das condições:** as três pesam igual.
+- **Estação sem uma das três variáveis:** fica de fora do mapa e é listada no resumo. Incluí-la subestimaria o risco, já que ela nunca poderia alcançar o nível 3.
+- **Cores:** cinza (0), amarelo (1), laranja (2), vermelho (3). O par verde/vermelho foi evitado por causa de daltonismo.
+- **Planilha:** por estação, o nível máximo, quantas horas em cada nível e os valores com horário que dispararam cada condição — é o que permite auditar por que uma estação ficou vermelha.
+
+**Decisão (17/09/2026):** nos mapas horários, cada estação mostra o seu nível **naquela hora** e, abaixo do número, um ponto para cada condição atendida — roxo para temperatura, azul para umidade e verde para rajada —, sempre na mesma posição (temperatura à esquerda, umidade no meio, rajada à direita), para que a condição seja identificável mesmo por quem não distingue as cores. Os mapas de síntese (nível máximo e horas em risco alto) não recebem os pontos, porque juntam horas diferentes.
+
+**Decisão (17/09/2026):** os mapas horários passam a ser gerados **só nas horas com alguma estação em risco alto** (nível 3) — antes bastava o nível 2. A opção `--hrtodas` continua gerando todas as horas. Em compensação, o acompanhamento dos níveis intermediários fica na planilha, que conta as horas nos três níveis e ganhou a coluna `Primeiro Horário em Risco Médio (MS)`, ao lado da que já existia para o risco alto: assim dá para ver quando o risco começou a subir, mesmo nos dias que não chegam ao nível 3. Os mapas de "horas em risco alto" continuam sendo gerados sempre, mesmo zerados.
+
+**Decisão (17/09/2026):** o produto passa a aceitar **período** também. Tudo funciona como no dia, somando os dias: o mapa de nível máximo traz o pior nível de cada lugar em todo o período, o de horas agregadas soma as horas em risco alto, e os mapas horários continuam saindo em todas as horas com risco alto — um mês movimentado pode passar de 200 arquivos. A planilha ganha, só no período, as colunas `Dias com Risco Alto` e `Dias com Risco Médio`. Os gráficos quantitativos (estação × condições atendidas) continuam previstos, como uma entrega à parte.
+
+⚠️ **A confirmar:** os limiares (≥ 30 °C, ≤ 30 %, ≥ 30 km/h) e o critério de gerar mapa horário só a partir do risco alto.
