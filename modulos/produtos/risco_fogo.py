@@ -221,22 +221,6 @@ def _espec_classes(titulo: str, subtitulo: str, arquivo: str) -> EspecClasses:
     return EspecClasses(titulo, subtitulo, arquivo, config.CORES_RISCO, config.ROTULOS_RISCO)
 
 
-def _subtitulo(periodo: Periodo) -> str:
-    """Data ou intervalo da consulta para o título do mapa.
-
-    O fuso (GMT-04, o horário de MS) só aparece quando o texto traz horário: numa data sozinha
-    ele não acrescenta nada. Não usa Periodo.descrever_janela para não mexer nos outros produtos.
-    """
-    inicio, fim = (momento.astimezone(config.FUSO_MS) for momento in periodo.janela)
-    if periodo.modo == "tempo_real":
-        return f"{inicio:%d/%m/%Y %H:%M} até {fim:%d/%m/%Y %H:%M} GMT-04"
-    if not periodo.dias_inteiros:
-        return f"{inicio:%d/%m/%Y %H:%M} a {fim:%d/%m/%Y %H:%M} GMT-04"
-    if periodo.primeiro_dia != periodo.ultimo_dia:
-        return f"{periodo.primeiro_dia:%d/%m/%Y} a {periodo.ultimo_dia:%d/%m/%Y}"
-    return f"{periodo.primeiro_dia:%d/%m/%Y}"
-
-
 def _indicadores_condicoes() -> Indicadores:
     """Pontos das condições atendidas nos mapas horários: temperatura à esquerda, umidade no meio, rajada à direita."""
     rotulos = [f"Temperatura máx. ≥ {config.LIMIAR_TEMP_MAX:g} °C",
@@ -259,7 +243,7 @@ def gerar_mapas(tabela: pd.DataFrame, horas: dict, periodo: Periodo, base: BaseC
         return
     pasta.mkdir(parents=True, exist_ok=True)
     identificador = periodo.identificador
-    subtitulo = _subtitulo(periodo)
+    subtitulo = periodo.descrever_janela(*periodo.janela)
 
     espec = _espec_classes(f"Risco de Fogo — Nível Máx. em {config.UF}", subtitulo,
                            f"Mapa_Risco_Fogo_Nivel_{config.UF}")

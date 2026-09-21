@@ -69,12 +69,23 @@ def test_tempo_real():
     assert periodo.janela_busca == (agora - timedelta(hours=96), agora)
     assert periodo.inicio_do_dia == utc(2026, 9, 14, 4)  # 00 h de hoje em MS
     assert periodo.identificador == "20260914_0925"
-    assert periodo.descricao == "Últimas 24 horas: 13/09/2026 09:25 até 14/09/2026 09:25 (horário de MS)"
+    assert periodo.descricao == "Últimas 24 horas: 13/09/2026 09:25 a 14/09/2026 09:25 GMT-04"
 
 
 def test_hoje_do_tempo_real_segue_o_horario_de_ms():
     """Às 02 UTC ainda são 22 h do dia anterior em MS."""
     assert Periodo.tempo_real(utc(2026, 9, 14, 2, 0)).inicio_do_dia == utc(2026, 9, 13, 4)
+
+
+@pytest.mark.parametrize("periodo, texto", [
+    (Periodo.de_datas(date(2026, 9, 15), date(2026, 9, 15)), "15/09/2026"),
+    (Periodo.de_datas(date(2026, 8, 1), date(2026, 8, 31)), "01/08/2026 a 31/08/2026"),
+    (Periodo.de_datas(date(2026, 9, 15), date(2026, 9, 15), 6, 18), "15/09/2026 06:00 a 15/09/2026 18:00 GMT-04"),
+    (Periodo.tempo_real(utc(2026, 9, 14, 13, 25)), "13/09/2026 09:25 a 14/09/2026 09:25 GMT-04"),
+], ids=["dia", "periodo", "com_horas", "tempo_real"])
+def test_subtitulo_dos_mapas_traz_o_fuso_so_quando_ha_horario(periodo, texto):
+    """Subtítulo igual em todos os produtos: datas sozinhas sem fuso, horários com GMT-04."""
+    assert periodo.descrever_janela(*periodo.janela) == texto
 
 
 def test_pasta_de_saida_separada_por_produto_e_modo(monkeypatch, tmp_path):
