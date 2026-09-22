@@ -562,7 +562,8 @@ O navegador abre em `http://localhost:8501`. Na barra lateral ficam o período, 
 
 | | |
 |---|---|
-| **Variáveis** | Temperatura (instantânea, máxima e mínima), umidade, chuva, radiação global, vento, rajada, pressão e ponto de orvalho — todas da mesma API do INMET usada pelos produtos |
+| **Variáveis** | Temperatura (instantânea, máxima e mínima), umidade, chuva, radiação global, vento, rajada, direção do vento, pressão e ponto de orvalho — todas da mesma API do INMET usada pelos produtos |
+| **Vento** | Velocidade e rajada aparecem em **km/h**, como nos produtos (a API manda em m/s). A **direção** sai em pontos, e não em linha: entre 350° e 10° o vento mal mudou, mas uma linha desceria o gráfico inteiro. Para o período há uma **rosa dos ventos** por estação, com as horas de cada rumo separadas por faixa de velocidade |
 | **Cache** | O que já foi baixado fica em `cache/`, fora do controle de versão, para a tela responder rápido a cada filtro. O botão **Limpar cache** apaga tudo; o que faltar é baixado de novo |
 | **Onde roda** | Na sua máquina. Não é um serviço: cada pessoa abre o seu |
 
