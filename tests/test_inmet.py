@@ -54,8 +54,8 @@ def test_listar_estacoes_com_falha_levanta_erro(monkeypatch):
 
 def test_baixar_dados_converte_valores_e_horarios(monkeypatch):
     registros = [
-        {"DT_MEDICAO": "2026-07-30", "HR_MEDICAO": "0000", "TEM_MIN": "18,5", "CHUVA": "0.2"},
-        {"DT_MEDICAO": "2026-07-30", "HR_MEDICAO": "1300", "TEM_MIN": None, "CHUVA": "0"},
+        {"DT_MEDICAO": "2026-07-30", "HR_MEDICAO": "0000", "TEM_MIN": "18,5", "CHUVA": "0.2", "RAD_GLO": "-3,5"},
+        {"DT_MEDICAO": "2026-07-30", "HR_MEDICAO": "1300", "TEM_MIN": None, "CHUVA": "0", "RAD_GLO": "1520"},
     ]
     monkeypatch.setattr(inmet.requests, "get", lambda url, timeout: RespostaFalsa(registros))
     dados = inmet.baixar_dados_estacao("A702", *DIA.janela_busca)
@@ -65,6 +65,7 @@ def test_baixar_dados_converte_valores_e_horarios(monkeypatch):
     assert dados["TEM_MIN"].iloc[0] == 18.5
     assert pd.isna(dados["TEM_MIN"].iloc[1])
     assert dados["CHUVA"].tolist() == [0.2, 0.0]
+    assert dados["RAD_GLO"].tolist() == [-3.5, 1520.0]  # toda coluna que não é texto vira número
 
 
 @pytest.mark.parametrize("periodo, trecho_da_url", [
