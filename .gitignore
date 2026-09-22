@@ -32,3 +32,9 @@ env/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Cache local do explorador (regenerável: é só baixar de novo)
+cache/
+
+# Configuração local do Claude Code (não faz parte do projeto)
+.claude/

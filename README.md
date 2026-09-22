@@ -23,6 +23,7 @@ Desenvolvido pela equipe de meteorologia do **CEMTEC** — Centro de Monitoramen
 - [Como atualizar](#como-atualizar)
 - [Configuração](#configuração)
 - [Testes](#testes)
+- [Explorador (Streamlit)](#explorador-streamlit)
 - [Novos produtos](#novos-produtos)
 - [Estrutura do repositório](#estrutura-do-repositório)
 
@@ -541,6 +542,32 @@ Rode os testes antes de cada commit: eles conferem as janelas de tempo, os cálc
 
 Os testes também rodam automaticamente no GitHub (GitHub Actions, em Linux, com Python 3.10 e 3.14) a cada push e a cada pull request para a `main`. O resultado aparece como ✓ ou ✗ ao lado de cada commit e na aba **Actions** do repositório, onde também é possível rodá-los manualmente.
 
+## Explorador (Streamlit)
+
+Ferramenta de **análise**, separada dos produtos: aqui não se gera planilha nem mapa — olha-se o dado para entender tendências e conferir a qualidade da medição. Os produtos continuam saindo pelo `main.py`, e o explorador não altera nada do que eles produzem.
+
+Instale as dependências dele uma vez (quem só gera os produtos não precisa disto):
+
+```bash
+pip install -r requirements-app.txt
+```
+
+E abra:
+
+```bash
+streamlit run app/explorador.py
+```
+
+O navegador abre em `http://localhost:8501`. Na barra lateral ficam o período, as estações e as variáveis. Cada variável ganha o seu próprio gráfico — escalas diferentes nunca se misturam num eixo só —, com zoom por arrasto e valor ao passar o mouse. Dá para resumir por dia (média, máxima, mínima ou soma) e baixar tudo em CSV.
+
+| | |
+|---|---|
+| **Variáveis** | Temperatura (instantânea, máxima e mínima), umidade, chuva, radiação global, vento, rajada, pressão e ponto de orvalho — todas da mesma API do INMET usada pelos produtos |
+| **Cache** | O que já foi baixado fica em `cache/`, fora do controle de versão, para a tela responder rápido a cada filtro. O botão **Limpar cache** apaga tudo; o que faltar é baixado de novo |
+| **Onde roda** | Na sua máquina. Não é um serviço: cada pessoa abre o seu |
+
+> Para o dia em curso, as horas mais recentes podem não estar no cache. Se precisar do dado de agora, limpe o cache ou consulte de novo mais tarde.
+
 ## Novos produtos
 
 Os scripts da equipe estão sendo migrados aos poucos. Cada um vira um produto em `modulos/produtos/`, reaproveitando as peças compartilhadas (API do INMET, períodos, cálculos, mapas e Excel). O passo a passo está em [`docs/como_migrar_um_script.md`](docs/como_migrar_um_script.md).
@@ -562,6 +589,9 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │   └── produtos/         # Um arquivo por produto
 │       ├── relatorio_inmet.py  # Extremos e chuva das estações automáticas
 │       └── risco_fogo.py       # Risco de fogo pela regra 30-30-30, hora a hora
+├── app/                  # Explorador em Streamlit (análise), com o seu cache local em cache/
+│   ├── explorador.py     # A tela: filtros e gráficos de séries temporais
+│   └── dados.py          # Coleta com cache, usada só pelo explorador
 ├── ferramentas/          # Scripts auxiliares (ex.: gerar o shapefile simplificado dos municípios)
 ├── tests/                # Testes automatizados (pytest), com a API do INMET simulada
 ├── .github/workflows/    # Execução automática dos testes no GitHub (GitHub Actions)
@@ -573,6 +603,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 ├── legado/               # Scripts originais de cada produto (ex.: legado/relatorio_inmet/), para comparação
 ├── requirements.txt
 ├── requirements-dev.txt  # Dependências de desenvolvimento (testes)
+├── requirements-app.txt  # Dependências do explorador (Streamlit)
 ├── pytest.ini            # Configuração dos testes
 ├── .env                  # Token do INMET (local, fora do controle de versão)
 ├── .env.example          # Modelo do arquivo .env

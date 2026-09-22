@@ -7,7 +7,9 @@ import requests
 
 from . import config
 
-COLUNAS_NUMERICAS = ["TEM_MAX", "TEM_MIN", "UMD_MIN", "UMD_MAX", "VEN_RAJ", "VEN_DIR", "CHUVA"]
+# A API devolve tudo como texto. Estas são as colunas que continuam texto; todas as outras
+# (temperatura, umidade, chuva, vento, pressão, radiação, ponto de orvalho...) viram número.
+COLUNAS_TEXTO = ["DC_NOME", "UF", "CD_ESTACAO", "DT_MEDICAO", "HR_MEDICAO"]
 PALAVRAS_MINUSCULAS = {"da", "das", "de", "do", "dos", "e"}
 
 
@@ -80,9 +82,8 @@ def baixar_dados_estacao(codigo: str, inicio: datetime, fim: datetime) -> pd.Dat
 
     try:
         dados = pd.DataFrame(registros)
-        for coluna in COLUNAS_NUMERICAS:
-            if coluna in dados:
-                dados[coluna] = pd.to_numeric(dados[coluna].astype(str).str.replace(",", "."), errors="coerce")
+        for coluna in dados.columns.difference(COLUNAS_TEXTO):
+            dados[coluna] = pd.to_numeric(dados[coluna].astype(str).str.replace(",", "."), errors="coerce")
 
         # HR_MEDICAO vem como "HHMM" (ex.: "1300"), em UTC
         horas = dados["HR_MEDICAO"].map(lambda hora: f"{str(hora).zfill(4)[:2]}:00")
