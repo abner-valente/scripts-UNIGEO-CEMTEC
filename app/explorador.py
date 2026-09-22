@@ -24,6 +24,7 @@ import pandas as pd
 import streamlit as st
 
 from app import dados as coleta
+from app import qualidade
 from modulos import config, inmet
 
 # Nome que aparece na tela -> coluna da API. A ordem é a que aparece na lista.
@@ -48,6 +49,12 @@ COLUNAS_CIRCULARES = {"VEN_DIR"}
 FAIXAS_VENTO = [(0, 10), (10, 20), (20, 30), (30, float("inf"))]
 CORES_VENTO = ["#c6dbef", "#6baed6", "#2171b5", "#08306b"]  # sequencial: claro = fraco, escuro = forte
 FUNCOES = {"Média": "mean", "Máxima": "max", "Mínima": "min", "Soma": "sum"}
+# Nomes curtos para o eixo dos mapas de calor da qualidade, onde os códigos da API não ajudam
+NOMES_CURTOS = {
+    "TEM_INS": "Temperatura", "TEM_MAX": "Temp. máx.", "TEM_MIN": "Temp. mín.", "PTO_INS": "Orvalho",
+    "UMD_INS": "Umidade", "UMD_MAX": "Umid. máx.", "UMD_MIN": "Umid. mín.", "CHUVA": "Chuva",
+    "RAD_GLO": "Radiação", "PRE_INS": "Pressão", "VEN_VEL": "Vento", "VEN_RAJ": "Rajada", "VEN_DIR": "Direção",
+}
 # Variáveis em que o zero é uma referência de verdade (não chover é zero). Nas outras, forçar o
 # eixo a começar no zero achataria a variação: 25 a 30 °C viraria um risco reto.
 ZERO_NA_BASE = {"CHUVA", "RAD_GLO", "VEN_VEL", "VEN_RAJ"}
@@ -181,7 +188,7 @@ with st.sidebar:
     st.divider()
     guardadas, megabytes = coleta.tamanho_do_cache()
     st.caption(f"Cache local: {guardadas} estações, {megabytes:.1f} MB")
-    if st.button("Limpar cache", use_container_width=True):
+    if st.button("Limpar cache", width="stretch"):
         st.cache_data.clear()
         st.success(f"{coleta.limpar_cache()} arquivos removidos.")
 
@@ -206,44 +213,128 @@ if tabela.empty:
 if falharam:
     st.warning(f"Sem dados ou falha na consulta: {', '.join(falharam)}")
 
-esperadas = int((fim - inicio).total_seconds() // 3600) * len(nomes)
-st.caption(f"{len(tabela)} leituras de {tabela['Estação'].nunique()} estações · "
-           f"{len(tabela) / esperadas:.0%} das horas do período têm registro")
+horas_esperadas = int((fim - inicio).total_seconds() // 3600)
+aba_series, aba_qualidade = st.tabs(["Séries temporais", "Qualidade dos dados"])
 
 # =====================================================
-# GRÁFICOS
+# SÉRIES TEMPORAIS
 # =====================================================
-for nome_variavel in escolhidas:
-    coluna = VARIAVEIS[nome_variavel]
-    if coluna not in tabela:
-        st.warning(f"{nome_variavel}: a API não devolveu essa coluna no período.")
-        continue
-    circular = coluna in COLUNAS_CIRCULARES
-    if circular and por_dia:
+with aba_series:
+    st.caption(f"{len(tabela)} leituras de {tabela['Estação'].nunique()} estações · "
+               f"{len(tabela) / (horas_esperadas * len(nomes)):.0%} das horas do período têm registro")
+
+    for nome_variavel in escolhidas:
+        coluna = VARIAVEIS[nome_variavel]
+        if coluna not in tabela:
+            st.warning(f"{nome_variavel}: a API não devolveu essa coluna no período.")
+            continue
+        circular = coluna in COLUNAS_CIRCULARES
+        if circular and por_dia:
+            st.subheader(nome_variavel)
+            st.info("A direção não é resumida por dia: a média entre 350° e 10° daria 180°, que é o oposto. "
+                    "Veja hora a hora ou use a rosa dos ventos abaixo.")
+            continue
+        serie = agregar(tabela, coluna, por_dia, funcao)
+        if serie.empty:
+            st.warning(f"{nome_variavel}: nenhuma estação escolhida tem essa medição no período.")
+            continue
         st.subheader(nome_variavel)
-        st.info("A direção não é resumida por dia: a média entre 350° e 10° daria 180°, que é o oposto. "
-                "Veja hora a hora ou use a rosa dos ventos abaixo.")
-        continue
-    serie = agregar(tabela, coluna, por_dia, funcao)
-    if serie.empty:
-        st.warning(f"{nome_variavel}: nenhuma estação escolhida tem essa medição no período.")
-        continue
-    st.subheader(nome_variavel)
-    st.altair_chart(desenhar(serie, nome_variavel, coluna in ZERO_NA_BASE, circular), use_container_width=True)
+        st.altair_chart(desenhar(serie, nome_variavel, coluna in ZERO_NA_BASE, circular), width="stretch")
 
-if "VEN_DIR" in tabela and "VEN_VEL" in tabela:
-    with st.expander("Rosa dos ventos do período"):
-        st.caption("De onde o vento veio, em horas. Cada anel é uma faixa de velocidade; a faixa mais escura "
-                   f"é a que interessa ao risco de fogo (≥ {FAIXAS_VENTO[-1][0]:g} km/h).")
-        for coluna_tela, nome_estacao in zip(st.columns(min(len(nomes), 4)), nomes[:4]):
-            with coluna_tela:
-                st.pyplot(rosa_dos_ventos(tabela, nome_estacao), use_container_width=True)
-        if len(nomes) > 4:
-            st.caption(f"Mostrando as 4 primeiras de {len(nomes)} estações escolhidas.")
+    if "VEN_DIR" in tabela and "VEN_VEL" in tabela:
+        with st.expander("Rosa dos ventos do período"):
+            st.caption("De onde o vento veio, em horas. Cada anel é uma faixa de velocidade; a faixa mais escura "
+                       f"é a que interessa ao risco de fogo (≥ {FAIXAS_VENTO[-1][0]:g} km/h).")
+            for coluna_tela, nome_estacao in zip(st.columns(min(len(nomes), 4)), nomes[:4]):
+                with coluna_tela:
+                    st.pyplot(rosa_dos_ventos(tabela, nome_estacao), width="stretch")
+            if len(nomes) > 4:
+                st.caption(f"Mostrando as 4 primeiras de {len(nomes)} estações escolhidas.")
 
-with st.expander("Ver e baixar os dados"):
-    colunas = ["Estação", "dt_local"] + [VARIAVEIS[nome] for nome in escolhidas if VARIAVEIS[nome] in tabela]
-    visivel = tabela[colunas].rename(columns={"dt_local": "Data/Hora (MS)"})
-    st.dataframe(visivel, use_container_width=True, height=300)
-    st.download_button("Baixar CSV", visivel.to_csv(index=False).encode("utf-8-sig"),
-                       file_name=f"leituras_{intervalo[0]:%Y%m%d}_a_{intervalo[1]:%Y%m%d}.csv", mime="text/csv")
+    with st.expander("Ver e baixar os dados"):
+        colunas = ["Estação", "dt_local"] + [VARIAVEIS[nome] for nome in escolhidas if VARIAVEIS[nome] in tabela]
+        visivel = tabela[colunas].rename(columns={"dt_local": "Data/Hora (MS)"})
+        st.dataframe(visivel, width="stretch", height=300)
+        st.download_button("Baixar CSV", visivel.to_csv(index=False).encode("utf-8-sig"),
+                           file_name=f"leituras_{intervalo[0]:%Y%m%d}_a_{intervalo[1]:%Y%m%d}.csv", mime="text/csv")
+
+# =====================================================
+# QUALIDADE DOS DADOS
+# =====================================================
+with aba_qualidade:
+    todas = st.checkbox("Analisar todas as estações de MS", value=False,
+                        help="Ignora a seleção da barra lateral. Na primeira vez demora, porque baixa tudo; "
+                             "depois vem do cache.")
+    if todas:
+        with st.spinner(f"Consultando as {len(estacoes)} estações do estado..."):
+            base, ausentes = carregar_leituras(tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]), inicio, fim)
+    else:
+        base, ausentes = tabela, falharam
+
+    if base.empty:
+        st.warning("Sem dados para analisar nesse período.")
+    else:
+        resumo = qualidade.resumo_por_estacao(base, horas_esperadas)
+        impossiveis = qualidade.valores_impossiveis(base)
+        travados = qualidade.sensores_travados(base)
+
+        metricas = st.columns(4)
+        metricas[0].metric("Estações analisadas", f"{len(resumo)}")
+        metricas[1].metric("Completude média", f"{resumo['Completude'].mean():.0f}%")
+        metricas[2].metric("Valores impossíveis", f"{len(impossiveis)}")
+        metricas[3].metric("Horas travadas", f"{int(resumo['Horas travadas'].sum())}")
+        if ausentes:
+            st.warning(f"Sem dados ou falha na consulta ({len(ausentes)}): {', '.join(ausentes)}")
+
+        st.subheader("Por estação")
+        st.caption("Da pior para a melhor. Completude é quanto das horas do período tem registro.")
+        st.dataframe(resumo, width="stretch", hide_index=True, height=340, column_config={
+            "Completude": st.column_config.ProgressColumn("Completude", format="%.0f%%", min_value=0, max_value=100),
+        })
+
+        st.subheader("Completude por dia")
+        completude = qualidade.completude_por_dia(base)
+        longo = (completude.reset_index()
+                 .melt("Estação", var_name="Dia", value_name="Completude")
+                 .assign(Dia=lambda tabela: tabela["Dia"].astype(str)))
+        st.altair_chart(
+            alt.Chart(longo).mark_rect().encode(
+                x=alt.X("Dia:O", title=None),
+                y=alt.Y("Estação:N", title=None, sort=list(resumo["Estação"])),
+                color=alt.Color("Completude:Q", title="% das horas",
+                                scale=alt.Scale(scheme="blues", domain=[0, 100])),
+                tooltip=["Estação", "Dia", alt.Tooltip("Completude:Q", format=".0f")],
+            ).properties(height=max(18 * len(completude), 120)),
+            width="stretch")
+
+        st.subheader("Completude por variável")
+        st.caption("A estação pode registrar a hora e mesmo assim não medir tudo. Aqui aparece o sensor que "
+                   "parou sozinho, sem a estação sair do ar.")
+        por_variavel = qualidade.completude_por_variavel(base).rename(columns=NOMES_CURTOS)
+        longo_variavel = (por_variavel.reset_index()
+                          .melt("Estação", var_name="Variável", value_name="Completude"))
+        st.altair_chart(
+            alt.Chart(longo_variavel).mark_rect().encode(
+                x=alt.X("Variável:N", title=None, axis=alt.Axis(labelAngle=-45)),
+                y=alt.Y("Estação:N", title=None, sort=list(resumo["Estação"])),
+                color=alt.Color("Completude:Q", title="% das horas",
+                                scale=alt.Scale(scheme="blues", domain=[0, 100])),
+                tooltip=["Estação", "Variável", alt.Tooltip("Completude:Q", format=".0f")],
+            ).properties(height=max(18 * len(por_variavel), 120)),
+            width="stretch")
+
+        with st.expander(f"Valores impossíveis ({len(impossiveis)})"):
+            impossiveis = impossiveis.assign(
+                Variável=impossiveis["Variável"].map(NOMES_CURTOS).fillna(impossiveis["Variável"]))
+            st.caption("Leituras fora da faixa plausível da variável — costuma ser defeito de sensor.")
+            st.dataframe(impossiveis, width="stretch", hide_index=True, height=260)
+
+        with st.expander(f"Sensores travados ({len(travados)} trecho{'s' if len(travados) != 1 else ''})"):
+            travados = travados.assign(Variável=travados["Variável"].map(NOMES_CURTOS).fillna(travados["Variável"]))
+            st.caption(f"A mesma leitura repetida por {qualidade.HORAS_TRAVADO} horas ou mais, em temperatura, "
+                       "umidade ou pressão. Chuva e vento ficam de fora: zero repetido ali é normal.")
+            st.dataframe(travados, width="stretch", hide_index=True, height=260)
+
+        st.caption(f"**Radiação negativa** à noite é ruído comum do sensor, não defeito — por isso aparece numa "
+                   f"coluna própria, e não como valor impossível. **Bateria** abaixo de "
+                   f"{qualidade.TENSAO_MINIMA:g} V costuma anteceder a estação sair do ar.")
