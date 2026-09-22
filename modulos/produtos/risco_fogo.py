@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .. import calculos, config, excel, inmet, mapas
+from .. import calculos, config, excel, graficos, inmet, mapas
 from ..config import Periodo
 from ..mapas import BaseCartografica, EspecClasses, EspecMapa, Indicadores
 
@@ -72,6 +72,15 @@ def niveis_por_hora(leituras: pd.DataFrame) -> pd.Series:
     return pd.Series(niveis, index=pd.Index(leituras["dt_utc"]), dtype=int)
 
 
+def dia_da_leitura(horas: pd.DatetimeIndex):
+    """Dia (no horário de MS) a que cada leitura pertence.
+
+    Cada leitura fecha a hora anterior, então a das 00:00 pertence ao dia que acabou de terminar.
+    Sem esse ajuste, uma consulta de sete dias produz oito dias, o último com uma hora só.
+    """
+    return (horas - pd.Timedelta(hours=1)).tz_convert(config.FUSO_MS).date
+
+
 def horas_da_janela(periodo: Periodo) -> pd.DatetimeIndex:
     """Horas cheias contidas na janela (início, fim].
 
@@ -118,7 +127,7 @@ def resumir_estacao(leituras: pd.DataFrame, estacao: pd.Series, periodo: Periodo
 
 def _dias_por_nivel(niveis: pd.Series) -> dict:
     """Em quantos dias (no horário de MS) o pior nível da estação foi o alto e em quantos foi o médio."""
-    por_dia = niveis.groupby(niveis.index.tz_convert(config.FUSO_MS).date).max()
+    por_dia = niveis.groupby(dia_da_leitura(pd.DatetimeIndex(niveis.index))).max()
     return {"Dias com Risco Alto": int((por_dia == NIVEL_ALTO).sum()),
             "Dias com Risco Médio": int((por_dia == NIVEL_MEDIO).sum())}
 
@@ -221,12 +230,17 @@ def _espec_classes(titulo: str, subtitulo: str, arquivo: str) -> EspecClasses:
     return EspecClasses(titulo, subtitulo, arquivo, config.CORES_RISCO, config.ROTULOS_RISCO)
 
 
+def _rotulos_condicoes() -> list[str]:
+    """Como cada condição aparece nas legendas, com o seu limiar."""
+    return [f"Temperatura máx. ≥ {config.LIMIAR_TEMP_MAX:g} °C",
+            f"Umidade mín. ≤ {config.LIMIAR_UMIDADE_MIN:g} %",
+            f"Rajada ≥ {config.LIMIAR_RAJADA:g} km/h"]
+
+
 def _indicadores_condicoes() -> Indicadores:
     """Pontos das condições atendidas nos mapas horários: temperatura à esquerda, umidade no meio, rajada à direita."""
-    rotulos = [f"Temperatura máx. ≥ {config.LIMIAR_TEMP_MAX:g} °C",
-               f"Umidade mín. ≤ {config.LIMIAR_UMIDADE_MIN:g} %",
-               f"Rajada ≥ {config.LIMIAR_RAJADA:g} km/h"]
-    return Indicadores(COLUNAS_CONDICOES, rotulos, config.CORES_CONDICOES, "Condições atendidas (esquerda → direita)")
+    return Indicadores(COLUNAS_CONDICOES, _rotulos_condicoes(), config.CORES_CONDICOES,
+                       "Condições atendidas (esquerda → direita)")
 
 
 def _niveis_continuos(grade: np.ndarray):
@@ -293,6 +307,58 @@ def _mapas_horarios(horas: dict, base: BaseCartografica, pasta: Path, todas_as_h
 
 
 # =====================================================
+# GRÁFICOS (só no período)
+# =====================================================
+def tabela_horaria(completas: list) -> pd.DataFrame:
+    """Uma linha por estação e hora, com as condições atendidas, o nível e o dia daquela leitura."""
+    quadros = []
+    for estacao, leituras in completas:
+        atendidas = condicoes_atendidas(leituras["TEM_MAX"], leituras["UMD_MIN"], leituras["rajada_kmh"])
+        quadro = pd.DataFrame(dict(zip(COLUNAS_CONDICOES, atendidas)))
+        quadro.insert(0, "Estação", estacao["Estação"])
+        quadro["dia"] = dia_da_leitura(pd.DatetimeIndex(leituras["dt_utc"]))
+        quadros.append(quadro)
+    tabela = pd.concat(quadros, ignore_index=True)
+    tabela[COLUNA_NIVEL_HORA] = tabela[COLUNAS_CONDICOES].sum(axis=1)
+    return tabela
+
+
+def gerar_graficos(horas: pd.DataFrame, periodo: Periodo, pasta: Path) -> None:
+    """Três gráficos do período: horas por nível, calendário dos dias e as condições de cada dia."""
+    titulo = f"Risco de Fogo por Estação em {config.UF}"
+    janela = periodo.descrever_janela(*periodo.janela)
+
+    # Ordem das estações: quem passou mais horas em risco alto primeiro. Vale para os três gráficos,
+    # para dar para comparar um com o outro.
+    # Sem filtrar as linhas: reindexar as colunas já descarta o nível 0 e mantém as estações que
+    # não atenderam condição nenhuma, que precisam aparecer (em cinza) no calendário.
+    por_nivel = (horas.pivot_table(index="Estação", columns=COLUNA_NIVEL_HORA, values="dia", aggfunc="count")
+                 .reindex(columns=[1, NIVEL_MEDIO, NIVEL_ALTO]).fillna(0))
+    ordem = por_nivel.sort_values([NIVEL_ALTO, NIVEL_MEDIO, 1]).index
+
+    graficos.barras_empilhadas(
+        por_nivel.loc[ordem], config.CORES_RISCO[1:], config.ROTULOS_RISCO[1:], titulo,
+        f"Horas em cada nível de risco · {janela}", "Horas",
+        pasta / f"Grafico_Risco_Fogo_Niveis_{config.UF}_{periodo.identificador}.png",
+        cores_do_texto=[graficos.TINTA, graficos.TINTA, "white"])
+
+    calendario = (horas.pivot_table(index="Estação", columns="dia", values=COLUNA_NIVEL_HORA, aggfunc="max")
+                  .fillna(0).reindex(ordem[::-1]))
+    calendario.columns = [f"{dia:%d/%m}" for dia in calendario.columns]
+    graficos.calendario(
+        calendario, config.CORES_RISCO, config.ROTULOS_RISCO, titulo, f"Pior nível de cada dia · {janela}",
+        pasta / f"Grafico_Risco_Fogo_Calendario_{config.UF}_{periodo.identificador}.png")
+
+    for dia, leituras in horas.groupby("dia"):
+        # Mesma ordem dos outros dois gráficos: barras horizontais crescem de baixo para cima
+        condicoes = leituras.groupby("Estação")[COLUNAS_CONDICOES].sum().reindex(ordem).fillna(0)
+        graficos.barras_agrupadas(
+            condicoes, config.CORES_CONDICOES, _rotulos_condicoes(), f"Condições Atendidas em {config.UF}",
+            f"Horas de cada condição · {dia:%d/%m/%Y}", "Horas",
+            pasta / "graficosDeCondicoes" / f"Grafico_Risco_Fogo_Condicoes_{config.UF}_{dia:%Y%m%d}.png")
+
+
+# =====================================================
 # EXECUÇÃO
 # =====================================================
 def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
@@ -338,6 +404,10 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
         return 1
     horas = analisar_horas(completas, periodo, base)
     gerar_mapas(tabela, horas, periodo, base, pasta / "mapas", opcoes.get("hrtodas", False))
+
+    if periodo.modo == "periodo":
+        print("\n📈 Gerando gráficos...")
+        gerar_graficos(tabela_horaria(completas), periodo, pasta)
 
     print("=" * 60)
     print(f"✅ Concluído. Arquivos em: {pasta}")
