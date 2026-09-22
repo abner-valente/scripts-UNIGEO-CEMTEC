@@ -139,4 +139,6 @@ As decisões foram tomadas com o programador em 16/09/2026. Os pontos marcados c
 
 **Decisão (17/09/2026):** o produto passa a aceitar **período** também. Tudo funciona como no dia, somando os dias: o mapa de nível máximo traz o pior nível de cada lugar em todo o período, o de horas agregadas soma as horas em risco alto, e os mapas horários continuam saindo em todas as horas com risco alto — um mês movimentado pode passar de 200 arquivos. A planilha ganha, só no período, as colunas `Dias com Risco Alto` e `Dias com Risco Médio`. Os gráficos quantitativos (estação × condições atendidas) continuam previstos, como uma entrega à parte.
 
+**Decisão (21/09/2026):** o período ganha três gráficos, que o dia e o tempo real não têm, porque só faz sentido comparar dias entre si: as **horas de cada estação em cada nível**, um **calendário de estação × dia** (o pior nível de cada dia) e, para **cada dia**, as horas em que cada estação atendeu cada condição. Na mesma revisão foi corrigida a contagem de dias: a leitura que fecha as 24 h leva o carimbo 00:00 do dia seguinte, e por isso uma consulta de sete dias produzia oito dias, o último com uma hora só.
+
 ⚠️ **A confirmar:** os limiares (≥ 30 °C, ≤ 30 %, ≥ 30 km/h) e o critério de gerar mapa horário só a partir do risco alto.

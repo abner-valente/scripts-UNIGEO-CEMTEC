@@ -288,6 +288,8 @@ python main.py --produto risco_fogo --dataini 03/09/2026 --hrtodas         # um 
 
 **No período** (datas diferentes, ou horas que atravessam dois dias) tudo funciona igual, somando os dias: o mapa de nível máximo mostra o pior nível que cada lugar alcançou em todo o período, e o de horas agregadas soma as horas em risco alto de todos os dias. A planilha ganha duas colunas — `Dias com Risco Alto` e `Dias com Risco Médio` —, porque num período "5 dias em risco alto" diz mais do que "20 horas no total".
 
+O período é também o único modo que gera **gráficos**, porque eles comparam dias entre si: as horas de cada estação em cada nível, um calendário de estação × dia e, para cada dia, as horas em que cada condição foi atendida. Num dia sozinho não haveria o que comparar.
+
 > **Atenção ao volume:** os mapas horários continuam saindo em todas as horas com risco alto, e quanto maior o período, mais arquivos e mais tempo de execução. Como referência, 01 a 03/09/2026 rendeu 9 mapas horários, 15 MB e 15 segundos — mas só o dia 03/09, sozinho, rendeu 7 deles. Num mês de seca, espere algumas dezenas de mapas.
 
 #### Saídas
@@ -314,6 +316,9 @@ saida/risco_fogo/dia/20260903/
 | `Mapa_Risco_Fogo_Horas_MS_<datas>.png` | **Horas em risco alto — pontual:** quantas horas cada estação passou no nível 3 |
 | `Mapa_Risco_Fogo_Horas_MS_<datas>_interpolado.png` | **Horas em risco alto — interpolado:** o mesmo, sobre o estado inteiro |
 | `horas/Mapa_Risco_Fogo_MS_<data>_<hora>h.png` | **Mapa horário** (só interpolado): o nível de risco naquela hora, com o nível de cada estação e os pontos das condições que ela atendeu |
+| `Grafico_Risco_Fogo_Niveis_MS_<datas>.png` | **Só no período.** Horas que cada estação passou em cada nível, com o total ao lado da barra |
+| `Grafico_Risco_Fogo_Calendario_MS_<datas>.png` | **Só no período.** Um quadrado por dia de cada estação, na cor do pior nível daquele dia |
+| `graficosDeCondicoes/Grafico_Risco_Fogo_Condicoes_MS_<data>.png` | **Só no período.** Um arquivo por dia: horas em que cada estação atendeu cada condição |
 
 O **nível máximo** mostra o pico; as **horas em risco alto** mostram a duração — ficar 6 horas em 30-30-30 é bem diferente de ficar 1 hora. Em dias em que nenhuma estação chega ao nível 3, os mapas de horas ficam zerados.
 
@@ -341,6 +346,12 @@ Mapas gerados com dados reais do INMET para **03/09/2026**.
 | Nível máximo — pontual | Nível máximo — interpolado | Horas em risco alto — interpolado |
 |---|---|---|
 | <img src="docs/img/risco_fogo/nivel_pontual.png" alt="Mapa pontual do nível máximo de risco de fogo por estação" width="245"> | <img src="docs/img/risco_fogo/nivel_interpolado.png" alt="Mapa interpolado do nível máximo de risco de fogo" width="245"> | <img src="docs/img/risco_fogo/horas_risco_alto_interpolado.png" alt="Mapa interpolado das horas em risco alto de fogo" width="245"> |
+
+Os gráficos do período, na semana de 01 a 07/09/2026. O calendário mostra o episódio: 02 a 04/09 formam um bloco de risco alto, e a semana acalma depois.
+
+| Horas em cada nível | Calendário estação × dia | Condições de um dia |
+|---|---|---|
+| <img src="docs/img/risco_fogo/grafico_niveis.png" alt="Gráfico de barras com as horas de cada estação em cada nível de risco" width="245"> | <img src="docs/img/risco_fogo/grafico_calendario.png" alt="Calendário com o pior nível de risco de cada estação em cada dia" width="245"> | <img src="docs/img/risco_fogo/grafico_condicoes.png" alt="Gráfico de barras com as horas de cada condição atendida por estação" width="245"> |
 
 A evolução ao longo do dia, nos mapas horários. Em 03/09 o risco alto apareceu às 10h, se espalhou à tarde e desapareceu depois das 16h — por isso o dia rendeu sete mapas horários:
 
@@ -385,6 +396,7 @@ O método foi definido em **16/09/2026** a partir do pedido da equipe (questões
 - As três condições têm o mesmo peso; estações sem uma das variáveis ficam de fora.
 - Cores cinza, amarelo, laranja e vermelho (sem o par verde/vermelho, por causa do daltonismo).
 - Nos mapas horários, pontos das condições atendidas abaixo de cada estação, em posição fixa (definido em 17/09/2026).
+- No período, três gráficos: horas por nível, calendário de estação × dia e as condições de cada dia (definido em 21/09/2026).
 
 Em **17/09/2026** a equipe confirmou duas aproximações do método: avaliar a simultaneidade dentro de cada hora (a janela mais fina que a API oferece) e manter a rajada na superfície interpolada, apesar de o vento ser muito local.
 
@@ -545,6 +557,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │   ├── inmet.py          # Acesso à API do INMET (estações e dados horários)
 │   ├── calculos.py       # Recorte no tempo, extremos, acumulados e interpolação IDW
 │   ├── mapas.py          # Mapas pontuais, interpolados e de classes (níveis de risco)
+│   ├── graficos.py       # Gráficos de barras e calendário, com o estilo comum aos produtos
 │   ├── excel.py          # Planilha Excel
 │   └── produtos/         # Um arquivo por produto
 │       ├── relatorio_inmet.py  # Extremos e chuva das estações automáticas

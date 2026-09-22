@@ -60,6 +60,7 @@ HORAS_BUSCA_TEMPO_REAL = 96    # histórico baixado no modo tempo real (cobre o 
 LON_MIN, LON_MAX = -58.5, -50.5
 LAT_MIN, LAT_MAX = -24.5, -17.0
 DPI = 300
+DPI_GRAFICOS = 150  # gráficos são texto e barras: 150 dpi basta e deixa os arquivos leves
 
 # Logos: (arquivo PNG com fundo transparente, retângulo [x, y, largura, altura] em fração da
 # moldura do mapa — (0, 0) é o canto inferior esquerdo e (1, 1) o superior direito).
