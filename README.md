@@ -567,6 +567,22 @@ O navegador abre em `http://localhost:8501`. Na barra lateral ficam o período, 
 | **Cache** | O que já foi baixado fica em `cache/`, fora do controle de versão, para a tela responder rápido a cada filtro. O botão **Limpar cache** apaga tudo; o que faltar é baixado de novo |
 | **Onde roda** | Na sua máquina. Não é um serviço: cada pessoa abre o seu |
 
+### Aba "Qualidade dos dados"
+
+Conferências que nenhum produto faz — os produtos calculam em cima do que a API mandou; aqui a pergunta é se dá para confiar nesse dado. Dá para analisar só as estações escolhidas ou **todas as de MS** de uma vez.
+
+| Verificação | O que procura |
+|---|---|
+| **Completude por dia** | Quanto das 24 horas de cada dia a estação registrou |
+| **Completude por variável** | A estação pode registrar a hora e mesmo assim não medir tudo: é aqui que aparece o sensor que parou sozinho |
+| **Valores impossíveis** | Leituras fora da faixa plausível (umidade acima de 100%, pressão fora de 800–1100 hPa) |
+| **Sensores travados** | A mesma leitura repetida por 6 horas ou mais em temperatura, umidade ou pressão. Chuva e vento ficam de fora: zero repetido ali é normal |
+| **Bateria** | Tensão mínima da estação no período; abaixo de 11,5 V costuma anteceder a estação sair do ar |
+
+Radiação levemente negativa à noite é ruído conhecido do sensor, não defeito — por isso tem uma coluna própria e não entra como valor impossível.
+
+> Se você alterar um arquivo de `app/`, o Streamlit recarrega a tela mas **não** os módulos importados. Pare com `Ctrl+C` e rode de novo.
+
 > Para o dia em curso, as horas mais recentes podem não estar no cache. Se precisar do dado de agora, limpe o cache ou consulte de novo mais tarde.
 
 ## Novos produtos
