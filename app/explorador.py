@@ -14,6 +14,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import altair as alt
+import matplotlib
+
+matplotlib.use("Agg")  # a rosa dos ventos é desenhada em imagem, sem abrir janela
+
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -29,11 +35,18 @@ VARIAVEIS = {
     "Umidade mínima (%)": "UMD_MIN",
     "Chuva (mm)": "CHUVA",
     "Radiação global (kJ/m²)": "RAD_GLO",
-    "Vento (m/s)": "VEN_VEL",
-    "Rajada (m/s)": "VEN_RAJ",
+    "Vento (km/h)": "VEN_VEL",
+    "Rajada (km/h)": "VEN_RAJ",
+    "Direção do vento (°)": "VEN_DIR",
     "Pressão (hPa)": "PRE_INS",
     "Ponto de orvalho (°C)": "PTO_INS",
 }
+# A API manda o vento em m/s; os produtos trabalham em km/h, e aqui seguimos a mesma unidade
+CONVERSOES = {"VEN_VEL": 3.6, "VEN_RAJ": 3.6}
+# Direção é ângulo: entre 350° e 10° o vento mal mudou, mas uma linha desceria o gráfico inteiro
+COLUNAS_CIRCULARES = {"VEN_DIR"}
+FAIXAS_VENTO = [(0, 10), (10, 20), (20, 30), (30, float("inf"))]
+CORES_VENTO = ["#c6dbef", "#6baed6", "#2171b5", "#08306b"]  # sequencial: claro = fraco, escuro = forte
 FUNCOES = {"Média": "mean", "Máxima": "max", "Mínima": "min", "Soma": "sum"}
 # Variáveis em que o zero é uma referência de verdade (não chover é zero). Nas outras, forçar o
 # eixo a começar no zero achataria a variação: 25 a 30 °C viraria um risco reto.
@@ -62,14 +75,23 @@ def carregar_leituras(codigos: tuple[str, ...], nomes: tuple[str, ...],
             falharam.append(nome)
             continue
         series.append(leituras.assign(Estação=nome))
-    return (pd.concat(series, ignore_index=True) if series else pd.DataFrame()), falharam
+    tabela = pd.concat(series, ignore_index=True) if series else pd.DataFrame()
+    for coluna, fator in CONVERSOES.items():
+        if coluna in tabela:
+            tabela[coluna] = tabela[coluna] * fator
+    return tabela, falharam
 
 
-def desenhar(serie: pd.DataFrame, nome: str, zero_na_base: bool) -> alt.Chart:
-    """Uma linha por estação, com zoom por arrasto e valor ao passar o mouse."""
+def desenhar(serie: pd.DataFrame, nome: str, zero_na_base: bool, circular: bool = False) -> alt.Chart:
+    """Uma série por estação, com zoom por arrasto e valor ao passar o mouse.
+
+    Variáveis circulares (direção do vento) saem em pontos: ligar 350° a 10° com uma linha
+    desenharia uma volta inteira que não aconteceu.
+    """
     longo = serie.reset_index().melt("dt_local", var_name="Estação", value_name="valor").dropna()
-    return (alt.Chart(longo)
-            .mark_line(strokeWidth=2)
+    base = alt.Chart(longo)
+    marca = base.mark_point(size=18, filled=True, opacity=0.7) if circular else base.mark_line(strokeWidth=2)
+    return (marca
             .encode(x=alt.X("dt_local:T", title=None),
                     y=alt.Y("valor:Q", title=nome, scale=alt.Scale(zero=zero_na_base)),
                     color=alt.Color("Estação:N", title=None, legend=alt.Legend(orient="bottom")),
@@ -78,6 +100,46 @@ def desenhar(serie: pd.DataFrame, nome: str, zero_na_base: bool) -> alt.Chart:
                              alt.Tooltip("valor:Q", title=nome, format=".1f")])
             .properties(height=280)
             .interactive())
+
+
+def rosa_dos_ventos(tabela: pd.DataFrame, nome_estacao: str):
+    """Horas em que o vento veio de cada direção, separadas por faixa de velocidade.
+
+    É a forma certa de resumir direção num período: cada pétala é um rumo, e o comprimento
+    diz por quantas horas o vento veio de lá.
+    """
+    dados = tabela[tabela["Estação"] == nome_estacao].dropna(subset=["VEN_DIR", "VEN_VEL"])
+    setores = ((dados["VEN_DIR"] % 360) / 22.5).round().astype(int) % 16
+    rotulos = [f"{menor:g}–{maior:g}" if maior != float("inf") else f"≥ {menor:g}" for menor, maior in FAIXAS_VENTO]
+    faixas = pd.cut(dados["VEN_VEL"], bins=[menor for menor, _ in FAIXAS_VENTO] + [float("inf")],
+                    right=False, labels=rotulos)
+    contagem = pd.crosstab(setores, faixas).reindex(range(16), fill_value=0).reindex(columns=rotulos, fill_value=0)
+
+    fig = plt.figure(figsize=(3.2, 3.6))
+    ax = fig.add_subplot(projection="polar")
+    angulos, base = np.deg2rad(np.arange(16) * 22.5), np.zeros(16)
+    for rotulo, cor in zip(rotulos, CORES_VENTO):
+        alturas = contagem[rotulo].to_numpy()
+        ax.bar(angulos, alturas, width=np.deg2rad(20), bottom=base, color=cor, edgecolor="none", label=rotulo)
+        base += alturas
+
+    ax.set_theta_zero_location("N")
+    ax.set_theta_direction(-1)  # norte no topo e sentido horário, como na bússola
+    ax.set_xticks(np.deg2rad([0, 90, 180, 270]), ["N", "L", "S", "O"])
+    ax.set_yticklabels([])
+    ax.set_title(nome_estacao, fontsize=8.5, color="#9a9a9a", pad=12)
+    ax.tick_params(colors="#9a9a9a", labelsize=8)
+    ax.grid(color="#9a9a9a", alpha=0.25)
+    ax.spines["polar"].set_color("#9a9a9a")
+    ax.spines["polar"].set_alpha(0.3)
+    fig.patch.set_alpha(0)
+    ax.set_facecolor("none")
+    legenda = ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.04), ncols=2, fontsize=7.5,
+                        frameon=False, handlelength=1.0, columnspacing=1.0, title="km/h", title_fontsize=7.5)
+    legenda.get_title().set_color("#9a9a9a")
+    for texto in legenda.get_texts():
+        texto.set_color("#9a9a9a")
+    return fig
 
 
 def agregar(tabela: pd.DataFrame, coluna: str, por_dia: bool, funcao: str) -> pd.DataFrame:
@@ -156,12 +218,28 @@ for nome_variavel in escolhidas:
     if coluna not in tabela:
         st.warning(f"{nome_variavel}: a API não devolveu essa coluna no período.")
         continue
+    circular = coluna in COLUNAS_CIRCULARES
+    if circular and por_dia:
+        st.subheader(nome_variavel)
+        st.info("A direção não é resumida por dia: a média entre 350° e 10° daria 180°, que é o oposto. "
+                "Veja hora a hora ou use a rosa dos ventos abaixo.")
+        continue
     serie = agregar(tabela, coluna, por_dia, funcao)
     if serie.empty:
         st.warning(f"{nome_variavel}: nenhuma estação escolhida tem essa medição no período.")
         continue
     st.subheader(nome_variavel)
-    st.altair_chart(desenhar(serie, nome_variavel, coluna in ZERO_NA_BASE), use_container_width=True)
+    st.altair_chart(desenhar(serie, nome_variavel, coluna in ZERO_NA_BASE, circular), use_container_width=True)
+
+if "VEN_DIR" in tabela and "VEN_VEL" in tabela:
+    with st.expander("Rosa dos ventos do período"):
+        st.caption("De onde o vento veio, em horas. Cada anel é uma faixa de velocidade; a faixa mais escura "
+                   f"é a que interessa ao risco de fogo (≥ {FAIXAS_VENTO[-1][0]:g} km/h).")
+        for coluna_tela, nome_estacao in zip(st.columns(min(len(nomes), 4)), nomes[:4]):
+            with coluna_tela:
+                st.pyplot(rosa_dos_ventos(tabela, nome_estacao), use_container_width=True)
+        if len(nomes) > 4:
+            st.caption(f"Mostrando as 4 primeiras de {len(nomes)} estações escolhidas.")
 
 with st.expander("Ver e baixar os dados"):
     colunas = ["Estação", "dt_local"] + [VARIAVEIS[nome] for nome in escolhidas if VARIAVEIS[nome] in tabela]
