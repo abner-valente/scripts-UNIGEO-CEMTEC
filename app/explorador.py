@@ -47,6 +47,7 @@ CONVERSOES = {"VEN_VEL": 3.6, "VEN_RAJ": 3.6}
 # Direção é ângulo: entre 350° e 10° o vento mal mudou, mas uma linha desceria o gráfico inteiro
 COLUNAS_CIRCULARES = {"VEN_DIR"}
 FAIXAS_VENTO = [(0, 10), (10, 20), (20, 30), (30, float("inf"))]
+ROSAS_MAXIMAS = 5  # rosas por linha: mais que isso e cada uma fica pequena demais para se ler
 CORES_VENTO = ["#c6dbef", "#6baed6", "#2171b5", "#08306b"]  # sequencial: claro = fraco, escuro = forte
 # Nomes curtos para o eixo dos mapas de calor da qualidade, onde os códigos da API não ajudam
 NOMES_CURTOS = {
@@ -84,6 +85,12 @@ CENTRALIZAR_MAPA = """<style>
 # Variáveis em que o zero é uma referência de verdade (não chover é zero). Nas outras, forçar o
 # eixo a começar no zero achataria a variação: 25 a 30 °C viraria um risco reto.
 ZERO_NA_BASE = {"CHUVA", "RAD_GLO", "VEN_VEL", "VEN_RAJ"}
+
+# O streamlit redireciona a saída dos módulos, e no Windows ela vai em cp1252: sem isto, o
+# primeiro aviso com emoji (uma nova tentativa na API, por exemplo) derruba a tela inteira.
+for _fluxo in (sys.stdout, sys.stderr):
+    if hasattr(_fluxo, "reconfigure"):
+        _fluxo.reconfigure(encoding="utf-8", errors="replace")
 
 st.set_page_config(page_title="Painel Meteorológico", page_icon="🌡️", layout="wide")
 
@@ -170,6 +177,8 @@ def rosa_dos_ventos(tabela: pd.DataFrame, nome_estacao: str):
 
     # Figure direto, e não plt.figure: o pyplot guarda as figuras num estado global, que num
     # servidor com várias pessoas ao mesmo tempo vaza memória e pode embaralhar dois desenhos.
+    # O corpo do texto é grande para o tamanho da figura porque ela é mostrada em cerca de 200 px,
+    # uma de cada ROSAS_MAXIMAS colunas: no tamanho natural ficaria miúdo.
     fig = Figure(figsize=(3.2, 3.6))
     ax = fig.add_subplot(projection="polar")
     angulos, base = np.deg2rad(np.arange(16) * 22.5), np.zeros(16)
@@ -182,15 +191,15 @@ def rosa_dos_ventos(tabela: pd.DataFrame, nome_estacao: str):
     ax.set_theta_direction(-1)  # norte no topo e sentido horário, como na bússola
     ax.set_xticks(np.deg2rad([0, 90, 180, 270]), ["N", "L", "S", "O"])
     ax.set_yticklabels([])
-    ax.set_title(nome_estacao, fontsize=8.5, color="#9a9a9a", pad=12)
-    ax.tick_params(colors="#9a9a9a", labelsize=8)
+    ax.set_title(nome_estacao, fontsize=12, color="#9a9a9a", pad=12)
+    ax.tick_params(colors="#9a9a9a", labelsize=11)
     ax.grid(color="#9a9a9a", alpha=0.25)
     ax.spines["polar"].set_color("#9a9a9a")
     ax.spines["polar"].set_alpha(0.3)
     fig.patch.set_alpha(0)
     ax.set_facecolor("none")
-    legenda = ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.04), ncols=2, fontsize=7.5,
-                        frameon=False, handlelength=1.0, columnspacing=1.0, title="km/h", title_fontsize=7.5)
+    legenda = ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.04), ncols=2, fontsize=10,
+                        frameon=False, handlelength=1.2, columnspacing=1.0, title="km/h", title_fontsize=10)
     legenda.get_title().set_color("#9a9a9a")
     for texto in legenda.get_texts():
         texto.set_color("#9a9a9a")
@@ -365,11 +374,17 @@ with aba_series:
         with st.expander("Rosa dos ventos do período"):
             st.caption("De onde o vento veio, em horas. Cada anel é uma faixa de velocidade; a faixa mais escura "
                        f"é a que interessa ao risco de fogo (≥ {FAIXAS_VENTO[-1][0]:g} km/h).")
-            for coluna_tela, nome_estacao in zip(st.columns(min(len(nomes), 4)), nomes[:4]):
+            mostradas = nomes[:ROSAS_MAXIMAS]
+            # Sempre ROSAS_MAXIMAS colunas, deixando vazias as das pontas: assim uma rosa sozinha
+            # sai do mesmo tamanho das outras e no meio da tela, em vez de esticada na largura
+            # inteira — desenhada com 3 polegadas, ela viraria um cartaz.
+            colunas = st.columns(ROSAS_MAXIMAS)
+            recuo = (ROSAS_MAXIMAS - len(mostradas)) // 2
+            for coluna_tela, nome_estacao in zip(colunas[recuo:], mostradas):
                 with coluna_tela:
                     st.pyplot(rosa_dos_ventos(tabela, nome_estacao), width="stretch")
-            if len(nomes) > 4:
-                st.caption(f"Mostrando as 4 primeiras de {len(nomes)} estações escolhidas.")
+            if len(nomes) > ROSAS_MAXIMAS:
+                st.caption(f"Mostrando as {ROSAS_MAXIMAS} primeiras de {len(nomes)} estações escolhidas.")
 
     with st.expander("Ver e baixar os dados"):
         colunas = ["Estação", "dt_local"] + [VARIAVEIS[nome] for nome in escolhidas if VARIAVEIS[nome] in tabela]

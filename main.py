@@ -30,6 +30,19 @@ from modulos.produtos import relatorio_inmet, risco_fogo
 # Produtos disponíveis: um arquivo em modulos/produtos/ para cada um
 PRODUTOS = {produto.NOME: produto for produto in (relatorio_inmet, risco_fogo)}
 
+
+def _saida_em_utf8() -> None:
+    """Garante que as mensagens saiam em UTF-8, mesmo quando não vão para o terminal.
+
+    No Windows, a saída redirecionada (um arquivo de log, uma tarefa agendada, o servidor do
+    Streamlit) vai em cp1252, que não sabe escrever os emojis dos avisos. Sem isto, o primeiro
+    "⚠️" derruba a execução inteira — a mensagem mata justamente o que ela ia avisar.
+    """
+    for fluxo in (sys.stdout, sys.stderr):
+        if hasattr(fluxo, "reconfigure"):
+            fluxo.reconfigure(encoding="utf-8", errors="replace")
+
+
 # =====================================================
 # CONSULTA (ALTERE AQUI)
 # =====================================================
@@ -108,6 +121,5 @@ def executar(produto: ModuleType, periodo: Periodo, opcoes: dict | None = None) 
 
 
 if __name__ == "__main__":
-    sys.stdout.reconfigure(encoding="utf-8")  # emojis e acentos também em logs redirecionados no Windows
-    sys.stderr.reconfigure(encoding="utf-8")  # idem para as mensagens de erro da linha de comando
+    _saida_em_utf8()
     sys.exit(executar(*ler_consulta()))
