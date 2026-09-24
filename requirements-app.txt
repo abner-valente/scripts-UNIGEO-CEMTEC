@@ -1,5 +1,0 @@
-# Dependências do explorador (app/explorador.py), à parte das dos produtos.
-# Quem só gera os produtos pelo main.py não precisa instalar nada disto.
--r requirements.txt
-
-streamlit>=1.36

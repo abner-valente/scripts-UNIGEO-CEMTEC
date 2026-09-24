@@ -14,14 +14,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import altair as alt
-import matplotlib
-
-matplotlib.use("Agg")  # a rosa dos ventos é desenhada em imagem, sem abrir janela
-
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
+from matplotlib.figure import Figure
 
 from app import dados as coleta
 from app import qualidade
@@ -122,7 +118,9 @@ def rosa_dos_ventos(tabela: pd.DataFrame, nome_estacao: str):
                     right=False, labels=rotulos)
     contagem = pd.crosstab(setores, faixas).reindex(range(16), fill_value=0).reindex(columns=rotulos, fill_value=0)
 
-    fig = plt.figure(figsize=(3.2, 3.6))
+    # Figure direto, e não plt.figure: o pyplot guarda as figuras num estado global, que num
+    # servidor com várias pessoas ao mesmo tempo vaza memória e pode embaralhar dois desenhos.
+    fig = Figure(figsize=(3.2, 3.6))
     ax = fig.add_subplot(projection="polar")
     angulos, base = np.deg2rad(np.arange(16) * 22.5), np.zeros(16)
     for rotulo, cor in zip(rotulos, CORES_VENTO):
