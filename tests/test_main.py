@@ -1,4 +1,5 @@
 """Ponto de entrada: escolha do produto e das datas, e verificação do token."""
+import sys
 from datetime import date, datetime
 
 import pytest
@@ -96,3 +97,33 @@ def test_sem_token_para_antes_de_gerar_o_produto(api_simulada, monkeypatch):
     monkeypatch.setattr(config, "TOKEN_INMET", "")
     monkeypatch.setattr(inmet, "listar_estacoes", api_proibida)
     assert main.executar(relatorio_inmet, Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30))) == 1
+
+
+class FluxoFalso:
+    """Faz as vezes da saída padrão, guardando como foi reconfigurada."""
+
+    def __init__(self):
+        self.encoding = "cp1252"
+        self.erros = None
+
+    def reconfigure(self, encoding, errors):
+        self.encoding, self.erros = encoding, errors
+
+
+def test_saida_vai_para_utf8(monkeypatch):
+    """Redirecionada, a saída do Windows vai em cp1252 e o primeiro emoji derrubaria a execução."""
+    saida, erro = FluxoFalso(), FluxoFalso()
+    monkeypatch.setattr(sys, "stdout", saida)
+    monkeypatch.setattr(sys, "stderr", erro)
+
+    main._saida_em_utf8()
+
+    assert (saida.encoding, saida.erros) == ("utf-8", "replace")
+    assert (erro.encoding, erro.erros) == ("utf-8", "replace")
+
+
+def test_saida_sem_reconfigure_nao_quebra(monkeypatch):
+    """Sob outro executor a saída pode não ser reconfigurável: só não fazemos nada."""
+    monkeypatch.setattr(sys, "stdout", object())
+    monkeypatch.setattr(sys, "stderr", object())
+    main._saida_em_utf8()  # não levanta
