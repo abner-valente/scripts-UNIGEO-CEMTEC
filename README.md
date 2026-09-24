@@ -544,7 +544,7 @@ Os testes também rodam automaticamente no GitHub (GitHub Actions, em Linux, com
 
 ## Explorador (Streamlit)
 
-Ferramenta de **análise**, separada dos produtos: aqui não se gera planilha nem mapa — olha-se o dado para entender tendências e conferir a qualidade da medição. Os produtos continuam saindo pelo `main.py`, e o explorador não altera nada do que eles produzem.
+Ferramenta de **análise**, separada dos produtos: olha-se o dado para entender tendências e conferir a qualidade da medição, sem gerar os arquivos do relatório. Os produtos continuam saindo pelo `main.py`, e o explorador não altera nada do que eles produzem.
 
 Instale as dependências dele uma vez (quem só gera os produtos não precisa disto):
 
@@ -552,7 +552,7 @@ Instale as dependências dele uma vez (quem só gera os produtos não precisa di
 pip install -r app/requirements.txt
 ```
 
-A lista é curta de propósito: o explorador não desenha mapas, então não precisa das bibliotecas de geoprocessamento que os produtos usam.
+A aba de mapa usa o mesmo `modulos/mapas.py` dos produtos, então a lista inclui as bibliotecas de geoprocessamento (geopandas, shapely, pyogrio, pyproj e scipy). São ~165 MB — o preço de não manter um segundo desenho de mapa, que com o tempo divergiria do relatório.
 
 E abra:
 
@@ -568,6 +568,20 @@ O navegador abre em `http://localhost:8501`. Na barra lateral ficam o período, 
 | **Vento** | Velocidade e rajada aparecem em **km/h**, como nos produtos (a API manda em m/s). A **direção** sai em pontos, e não em linha: entre 350° e 10° o vento mal mudou, mas uma linha desceria o gráfico inteiro. Para o período há uma **rosa dos ventos** por estação, com as horas de cada rumo separadas por faixa de velocidade |
 | **Cache** | O que já foi baixado fica em `cache/`, fora do controle de versão, para a tela responder rápido a cada filtro. O botão **Limpar cache** apaga tudo; o que faltar é baixado de novo |
 | **Onde roda** | Na sua máquina. Não é um serviço: cada pessoa abre o seu |
+
+### Aba "Mapa"
+
+O **mesmo mapa interpolado dos produtos** — mesma interpolação IDW, mesmo recorte pelo contorno do estado, mesmas cores —, só que sem a moldura institucional: na tela, título e logos tomariam o lugar do mapa. Na prática é o produto de mapa rodando pela tela, sem terminal: escolha o período e as variáveis, ande no tempo e baixe o PNG.
+
+| | |
+|---|---|
+| **Estações** | Todas as 62 de MS, e não só as escolhidas na barra lateral: com duas ou três a superfície inventaria o estado inteiro. Por isso a aba começa com um botão — a primeira consulta demora alguns minutos, e depois vem do cache |
+| **Deslizante** | Anda no mesmo passo da barra lateral: de hora em hora, ou de dia em dia com o resumo escolhido (média, máxima, mínima ou soma) |
+| **Um mapa por variável** | As variáveis escolhidas na barra lateral viram uma linha de mapas do mesmo instante, três por linha: dá para ver a temperatura alta bater com a umidade baixa sem trocar de tela |
+| **O que o mapa mostra** | Neste tamanho, o **padrão**: a superfície interpolada e as estações como pontos. Barra de cores, grade de latitude e longitude e valor de cada estação saem do desenho — com 62 estações numa coluna de ~470 px eles se cobrem e viram borrão, e a moldura de coordenadas toma a borda inteira. A **faixa de valores** (mínimo e máximo do instante) vai escrita sob cada mapa, e a caixa **"Mostrar o valor de cada estação"** traz os números de volta, para ler ampliando no ícone de tela cheia |
+| **Variáveis** | Todas, menos a direção do vento: interpolar ângulo entre 350° e 10° daria 180°, o rumo oposto |
+| **Quando não desenha** | Se menos de 3 estações mediram naquele instante, a tela avisa em vez de mostrar uma superfície inventada |
+| **Baixar PNG** | Um botão por mapa, com o mesmo desenho da tela em 150 dpi. Os mapas do relatório, com título, logos e ranking, continuam saindo pelo `main.py` |
 
 ### Aba "Qualidade dos dados"
 
@@ -609,8 +623,9 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │       ├── relatorio_inmet.py  # Extremos e chuva das estações automáticas
 │       └── risco_fogo.py       # Risco de fogo pela regra 30-30-30, hora a hora
 ├── app/                  # Explorador em Streamlit (análise), com o seu cache local em cache/
-│   ├── explorador.py     # A tela: filtros, gráficos e verificações de qualidade
+│   ├── explorador.py     # A tela: filtros, gráficos, mapa e verificações de qualidade
 │   ├── dados.py          # Coleta com cache, usada só pelo explorador
+│   ├── series.py         # Séries no tempo (sem tela, por isso testáveis)
 │   ├── qualidade.py      # Regras de qualidade das leituras (sem tela, por isso testáveis)
 │   └── requirements.txt  # Dependências só do explorador
 ├── ferramentas/          # Scripts auxiliares (ex.: gerar o shapefile simplificado dos municípios)

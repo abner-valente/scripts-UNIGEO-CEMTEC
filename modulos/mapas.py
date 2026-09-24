@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import shapely
+from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
@@ -67,6 +68,21 @@ class Indicadores:
 PASSO_INDICADORES = 0.08
 DESCIDA_INDICADORES = 0.16
 TAMANHO_INDICADORES = 30
+
+
+@dataclass(frozen=True)
+class Tela:
+    """Ajustes de quem vai ver o mapa pequeno, do tamanho de uma coluna, e ampliar se quiser.
+
+    Nesse tamanho o mapa mostra o padrão, não os números: título, logos e ranking viram borrão,
+    e os valores de 62 estações se cobrem. O que sobra vai com o texto maior, proporcional à
+    figura, para continuar legível depois de encolhido. Sem `Tela`, sai o mapa do relatório.
+    """
+
+    rotulos: bool = False         # o valor escrito em cada estação
+    barra_de_cores: bool = False
+    escala_texto: float = 2.2     # sobre o corpo padrão (10 pt), para a barra de cores
+    escala_rotulos: float = 1.5   # sobre o corpo do valor de cada estação
 
 
 @dataclass
@@ -128,7 +144,8 @@ def gerar_mapas(tabelas: dict[str, pd.DataFrame], especificacoes: list[EspecMapa
             mapa_interpolado(dados, espec, base, pasta / f"{nome}_interpolado.png")
 
 
-def mapa_pontual(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartografica, caminho: Path) -> None:
+def mapa_pontual(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartografica,
+                 caminho: Path | None = None, tela: Tela | None = None) -> Figure:
     """Estações coloridas e rotuladas com o valor; tamanho do marcador proporcional ao valor."""
     fig, ax = _nova_figura((12, 12))
     _desenhar_limites(ax, base)
@@ -137,30 +154,40 @@ def mapa_pontual(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartografica
     amplitude = valores.max() - valores.min()
     tamanho = (valores - valores.min()) / amplitude * 150 + 50 if amplitude else 100
     vmin, vmax = _faixa_de_cores(valores)
+    com_barra = tela is None or tela.barra_de_cores
     gdf.plot(ax=ax, column=espec.coluna, cmap=espec.cmap, vmin=vmin, vmax=vmax, markersize=tamanho,
-             edgecolor="black", linewidth=0.8, legend=True, legend_kwds={"label": espec.unidade, "shrink": 0.75})
+             edgecolor="black", linewidth=0.8, legend=com_barra,
+             legend_kwds={"label": espec.unidade, "shrink": 0.75} if com_barra else None)
 
-    _rotular(ax, gdf, valores.map(_formato(espec)), tamanho_fonte=8, cor="black",
-             fundo="white", borda="none", opacidade=0.75)
-    _ranking(ax, gdf, espec, tamanho_fonte=10)
-    _finalizar(fig, ax, espec, base, caminho)
+    if tela is None or tela.rotulos:
+        _rotular(ax, gdf, valores.map(_formato(espec)), tamanho_fonte=_corpo_rotulo(8, tela), cor="black",
+                 fundo="white", borda="none", opacidade=0.75)
+    if tela is None:
+        _ranking(ax, gdf, espec, tamanho_fonte=10)
+    return _finalizar(fig, ax, espec, base, caminho, tela)
 
 
-def mapa_interpolado(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartografica, caminho: Path) -> None:
-    """Superfície IDW recortada ao estado, com as estações e (opcionalmente) a direção do vento."""
+def mapa_interpolado(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartografica,
+                     caminho: Path | None = None, tela: Tela | None = None) -> Figure | None:
+    """Superfície IDW recortada ao estado, com as estações e (opcionalmente) a direção do vento.
+
+    Devolve None quando há estações de menos para interpolar: com poucos pontos a superfície
+    inventa mais do que mostra.
+    """
     if len(gdf) < config.MIN_ESTACOES_INTERPOLACAO:
         print(f"⚠️ Poucas estações para interpolar '{espec.titulo}' "
               f"({len(gdf)}; mínimo {config.MIN_ESTACOES_INTERPOLACAO})")
-        return
+        return None
 
     grade = calculos.interpolar_idw(gdf["Longitude"], gdf["Latitude"], gdf[espec.coluna],
                                     base.lon_grade, base.lat_grade, config.IDW_VIZINHOS, config.IDW_POTENCIA)
     valores = gdf[espec.coluna]
     niveis = 20 if valores.max() > valores.min() else np.linspace(*_faixa_de_cores(valores), 11)
-    mapa_de_grade(grade, gdf, espec, base, caminho, niveis)
+    return mapa_de_grade(grade, gdf, espec, base, caminho, niveis, tela)
 
 
-def mapa_de_grade(grade, gdf, espec: EspecMapa, base: BaseCartografica, caminho: Path, niveis=20) -> None:
+def mapa_de_grade(grade, gdf, espec: EspecMapa, base: BaseCartografica, caminho: Path | None = None,
+                  niveis=20, tela: Tela | None = None) -> Figure:
     """Desenha uma superfície já calculada, recortada ao estado, com as estações por cima.
 
     Separado do mapa_interpolado porque nem toda superfície vem do IDW de uma única coluna: o
@@ -170,7 +197,10 @@ def mapa_de_grade(grade, gdf, espec: EspecMapa, base: BaseCartografica, caminho:
     superficie = ax.contourf(base.lon_grade, base.lat_grade, _recortar(grade, base),
                              levels=niveis, cmap=espec.cmap, alpha=0.8)
     superficie.set_clip_path(base.contorno_uf, transform=ax.transData)
-    fig.colorbar(superficie, ax=ax, label=espec.unidade, shrink=0.75)
+    if tela is None or tela.barra_de_cores:
+        barra = fig.colorbar(superficie, ax=ax, label=espec.unidade, shrink=0.75)
+        barra.set_label(espec.unidade, size=_corpo(tela))
+        barra.ax.tick_params(labelsize=_corpo(tela))
     _desenhar_limites(ax, base)
     gdf.plot(ax=ax, color="black", markersize=50, alpha=0.7, edgecolor="white", linewidth=1.5)
 
@@ -182,12 +212,16 @@ def mapa_de_grade(grade, gdf, espec: EspecMapa, base: BaseCartografica, caminho:
         rotulos = rotulos + direcao.map(lambda d: "" if pd.isna(d) else f"\n{d:.0f}°")
         sufixos_ranking = direcao.map(lambda d: "" if pd.isna(d) else f" ({d:.0f}°)")
 
-    _rotular(ax, gdf, rotulos, tamanho_fonte=9, cor="white", fundo="black", borda="white", opacidade=0.8)
-    _ranking(ax, gdf, espec, tamanho_fonte=9, sufixos=sufixos_ranking)
-    _finalizar(fig, ax, espec, base, caminho)
+    if tela is None or tela.rotulos:
+        _rotular(ax, gdf, rotulos, tamanho_fonte=_corpo_rotulo(9, tela), cor="white", fundo="black",
+                 borda="white", opacidade=0.8)
+    if tela is None:
+        _ranking(ax, gdf, espec, tamanho_fonte=9, sufixos=sufixos_ranking)
+    return _finalizar(fig, ax, espec, base, caminho, tela)
 
 
-def mapa_classes_pontual(gdf, coluna: str, espec: EspecClasses, base: BaseCartografica, caminho: Path) -> None:
+def mapa_classes_pontual(gdf, coluna: str, espec: EspecClasses, base: BaseCartografica,
+                         caminho: Path | None = None, tela: Tela | None = None) -> Figure:
     """Estações coloridas pela classe, com legenda nomeada no lugar da barra de cores."""
     fig, ax = _nova_figura((12, 12))
     _desenhar_limites(ax, base)
@@ -196,14 +230,15 @@ def mapa_classes_pontual(gdf, coluna: str, espec: EspecClasses, base: BaseCartog
     # Marcador grande e rótulo sem caixa: aqui a cor é a informação, e uma caixa de fundo a cobriria
     ax.scatter(gdf.geometry.x, gdf.geometry.y, c=[espec.cores[classe] for classe in classes],
                s=520, edgecolor="black", linewidth=1.0, zorder=5)
-    _rotular(ax, gdf, classes.map(str), tamanho_fonte=11, cor="black",
+    _rotular(ax, gdf, classes.map(str), tamanho_fonte=_corpo_rotulo(11, tela), cor="black",
              fundo="none", borda="none", opacidade=1.0)
     _legenda_classes(ax, espec, classes)
-    _finalizar(fig, ax, espec, base, caminho)
+    return _finalizar(fig, ax, espec, base, caminho, tela)
 
 
 def mapa_classes_interpolado(grade, gdf, coluna: str, espec: EspecClasses, base: BaseCartografica,
-                             caminho: Path, indicadores: Indicadores | None = None) -> None:
+                             caminho: Path | None = None, indicadores: Indicadores | None = None,
+                             tela: Tela | None = None) -> Figure:
     """Superfície já classificada (0 a n-1) recortada ao estado, com as estações por cima.
 
     Com `indicadores`, desenha também os pontos abaixo de cada estação e a legenda deles.
@@ -218,12 +253,12 @@ def mapa_classes_interpolado(grade, gdf, coluna: str, espec: EspecClasses, base:
     gdf.plot(ax=ax, color="black", markersize=50, alpha=0.7, edgecolor="white", linewidth=1.5)
 
     classes = _classes(gdf[coluna], espec)
-    _rotular(ax, gdf, classes.map(str), tamanho_fonte=9, cor="white",
+    _rotular(ax, gdf, classes.map(str), tamanho_fonte=_corpo_rotulo(9, tela), cor="white",
              fundo="black", borda="white", opacidade=0.8)
     _legenda_classes(ax, espec, classes)
     if indicadores is not None:
         _desenhar_indicadores(ax, gdf, indicadores)
-    _finalizar(fig, ax, espec, base, caminho)
+    return _finalizar(fig, ax, espec, base, caminho, tela)
 
 
 # =====================================================
@@ -306,7 +341,11 @@ def _caminho_matplotlib(geometria) -> mpath.Path:
 
 
 def _nova_figura(tamanho: tuple[float, float]):
-    fig, ax = plt.subplots(figsize=tamanho)
+    # Figure direto, e não plt.subplots: o pyplot guarda as figuras num estado global, que num
+    # servidor com várias pessoas ao mesmo tempo vaza memória e pode embaralhar dois desenhos.
+    # Sem esse registro, a figura é liberada sozinha quando ninguém mais precisa dela.
+    fig = Figure(figsize=tamanho)
+    ax = fig.add_subplot()
     fig.patch.set_facecolor("white")
     ax.set_facecolor("white")
     return fig, ax
@@ -348,22 +387,44 @@ def _desenhar_setas_vento(ax, gdf) -> None:
     ax.legend(handles=[legenda], loc="lower left", fontsize=10)
 
 
-def _finalizar(fig, ax, espec: EspecMapa, base: BaseCartografica, caminho: Path) -> None:
-    """Título, limites, logos e gravação do PNG."""
-    ax.set_title(f"{espec.titulo}\n{espec.subtitulo} — INMET/SEMADESC", fontsize=16, weight="bold", pad=20)
+def _corpo(tela: "Tela | None") -> float:
+    """Corpo do texto que sobra no mapa: maior na tela, porque a figura vai ser encolhida."""
+    return 10 * (tela.escala_texto if tela else 1)
+
+
+def _corpo_rotulo(tamanho: float, tela: "Tela | None") -> float:
+    """Corpo do valor escrito em cada estação, ampliado quando o mapa vai ser visto pequeno."""
+    return tamanho * (tela.escala_rotulos if tela else 1)
+
+
+def _finalizar(fig, ax, espec, base: BaseCartografica, caminho: Path | None,
+               tela: "Tela | None" = None) -> Figure:
+    """Limites, moldura (título e logos) e, se vier caminho, gravação do PNG.
+
+    Com `tela`, sai só o mapa: título e logos institucionais tomariam o lugar do desenho numa
+    miniatura. O relatório, que não passa `tela`, continua saindo com tudo.
+    """
+    if tela is None:
+        ax.set_title(f"{espec.titulo}\n{espec.subtitulo} — INMET/SEMADESC", fontsize=16, weight="bold", pad=20)
     ax.set_xlim(config.LON_MIN, config.LON_MAX)
     ax.set_ylim(config.LAT_MIN, config.LAT_MAX)
-    ax.set_xlabel("Longitude")
-    ax.set_ylabel("Latitude")
+    if tela is None:
+        ax.set_xlabel("Longitude")
+        ax.set_ylabel("Latitude")
+    else:
+        # Sem a grade de latitude e longitude: numa miniatura ela toma a borda do desenho inteira
+        # e não se lê. Quem precisa de coordenada está olhando o mapa do relatório.
+        ax.set_axis_off()
 
     # Logos posicionados pela moldura do mapa: mesmo lugar e proporção em qualquer tamanho de figura
-    for imagem, retangulo in base.logos:
+    for imagem, retangulo in (base.logos if tela is None else []):
         eixo_logo = ax.inset_axes(retangulo, zorder=10)
         eixo_logo.imshow(imagem)
         eixo_logo.set_anchor("NE")
         eixo_logo.axis("off")
 
-    fig.tight_layout(rect=[0, 0, 1, 0.93])
-    fig.savefig(caminho, dpi=config.DPI, bbox_inches="tight", facecolor="white", edgecolor="none")
-    plt.close(fig)
-    print(f"🗺️ Mapa salvo: {caminho.name}")
+    fig.tight_layout(rect=[0, 0, 1, 0.93] if tela is None else None)
+    if caminho is not None:
+        fig.savefig(caminho, dpi=config.DPI, bbox_inches="tight", facecolor="white", edgecolor="none")
+        print(f"🗺️ Mapa salvo: {caminho.name}")
+    return fig
