@@ -549,8 +549,10 @@ Ferramenta de **análise**, separada dos produtos: aqui não se gera planilha ne
 Instale as dependências dele uma vez (quem só gera os produtos não precisa disto):
 
 ```bash
-pip install -r requirements-app.txt
+pip install -r app/requirements.txt
 ```
+
+A lista é curta de propósito: o explorador não desenha mapas, então não precisa das bibliotecas de geoprocessamento que os produtos usam.
 
 E abra:
 
@@ -607,8 +609,10 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │       ├── relatorio_inmet.py  # Extremos e chuva das estações automáticas
 │       └── risco_fogo.py       # Risco de fogo pela regra 30-30-30, hora a hora
 ├── app/                  # Explorador em Streamlit (análise), com o seu cache local em cache/
-│   ├── explorador.py     # A tela: filtros e gráficos de séries temporais
-│   └── dados.py          # Coleta com cache, usada só pelo explorador
+│   ├── explorador.py     # A tela: filtros, gráficos e verificações de qualidade
+│   ├── dados.py          # Coleta com cache, usada só pelo explorador
+│   ├── qualidade.py      # Regras de qualidade das leituras (sem tela, por isso testáveis)
+│   └── requirements.txt  # Dependências só do explorador
 ├── ferramentas/          # Scripts auxiliares (ex.: gerar o shapefile simplificado dos municípios)
 ├── tests/                # Testes automatizados (pytest), com a API do INMET simulada
 ├── .github/workflows/    # Execução automática dos testes no GitHub (GitHub Actions)
@@ -620,7 +624,6 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 ├── legado/               # Scripts originais de cada produto (ex.: legado/relatorio_inmet/), para comparação
 ├── requirements.txt
 ├── requirements-dev.txt  # Dependências de desenvolvimento (testes)
-├── requirements-app.txt  # Dependências do explorador (Streamlit)
 ├── pytest.ini            # Configuração dos testes
 ├── .env                  # Token do INMET (local, fora do controle de versão)
 ├── .env.example          # Modelo do arquivo .env

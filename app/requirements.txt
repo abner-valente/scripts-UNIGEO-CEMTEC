@@ -1,0 +1,18 @@
+# Dependências do explorador (app/explorador.py).
+#
+# Só o que o app importa de fato: ele não desenha mapas, então não precisa de geopandas,
+# shapely, pyogrio nem scipy, que estão no requirements.txt dos produtos. Manter esta lista
+# enxuta deixa a publicação mais rápida e menos sujeita a quebrar numa atualização daquelas
+# bibliotecas.
+#
+# Fica nesta pasta, e não na raiz, porque é aqui que o Streamlit Community Cloud procura as
+# dependências do arquivo publicado.
+
+streamlit>=1.36
+altair>=5.0
+pandas>=2.0
+numpy>=1.24
+matplotlib>=3.5
+requests>=2.28
+python-dotenv>=1.0
+tzdata
