@@ -569,7 +569,7 @@ O navegador abre em `http://localhost:8501`. Na barra lateral ficam o período, 
 | **Cache** | O que já foi baixado fica em `cache/`, fora do controle de versão, para a tela responder rápido a cada filtro. O botão **Limpar cache** apaga tudo; o que faltar é baixado de novo |
 | **Onde roda** | Na sua máquina. Não é um serviço: cada pessoa abre o seu |
 
-### Aba "Mapa"
+### Aba "Mapas Boletim"
 
 O **mesmo mapa interpolado dos produtos** — mesma interpolação IDW, mesmo recorte pelo contorno do estado, mesmas cores —, só que sem a moldura institucional: na tela, título e logos tomariam o lugar do mapa. Na prática é o produto de mapa rodando pela tela, sem terminal: escolha o período e as variáveis, ande no tempo e baixe o PNG.
 
@@ -582,6 +582,18 @@ O **mesmo mapa interpolado dos produtos** — mesma interpolação IDW, mesmo re
 | **Variáveis** | Todas, menos a direção do vento: interpolar ângulo entre 350° e 10° daria 180°, o rumo oposto |
 | **Quando não desenha** | Se menos de 3 estações mediram naquele instante, a tela avisa em vez de mostrar uma superfície inventada |
 | **Baixar PNG** | Um botão por mapa, com o mesmo desenho da tela em 150 dpi. Os mapas do relatório, com título, logos e ranking, continuam saindo pelo `main.py` |
+
+### Aba "Mapa Navegação"
+
+Em avaliação. A **mesma superfície** da aba anterior — mesma interpolação IDW sobre as mesmas 62 estações —, mas desenhada sobre um mapa base que se aproxima e arrasta, com as cidades e as estradas por baixo. Passando o mouse numa estação sai o nome e o valor; o enquadramento sobrevive a andar no tempo, então dá para aproximar numa região e seguir as horas ali.
+
+O que ela custa, e por isso está em teste:
+
+- **É um segundo desenho de mapa.** O compartilhado é a conta (`modulos/calculos.py`); a tela e o relatório podem divergir com o tempo.
+- **O mapa base vem do Carto**, fora da SEMADESC: o navegador de cada pessoa busca as imagens lá.
+- **Convida a aproximar mais do que o dado permite.** São 62 estações, não a grade de um modelo: ampliada até o município, a interpolação parece mais segura do que é. O mapa de escala fixa do relatório é honesto quanto à sua resolução.
+
+A decisão — substituir a aba `Mapa`, conviver com ela ou não valer a manutenção — depende de a equipe usar o explorador para **explorar** ou para **conferir e baixar** o mapa do relatório.
 
 ### Aba "Qualidade dos dados"
 
@@ -626,6 +638,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │   ├── explorador.py     # A tela: filtros, gráficos, mapa e verificações de qualidade
 │   ├── dados.py          # Coleta com cache, usada só pelo explorador
 │   ├── series.py         # Séries no tempo (sem tela, por isso testáveis)
+│   ├── superficie.py     # Superfície interpolada como imagem, para o mapa navegável
 │   ├── qualidade.py      # Regras de qualidade das leituras (sem tela, por isso testáveis)
 │   └── requirements.txt  # Dependências só do explorador
 ├── ferramentas/          # Scripts auxiliares (ex.: gerar o shapefile simplificado dos municípios)
