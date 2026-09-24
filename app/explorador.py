@@ -17,11 +17,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import altair as alt
 import numpy as np
 import pandas as pd
+import pydeck as pdk
 import streamlit as st
 from matplotlib.figure import Figure
 
 from app import dados as coleta
 from app import qualidade
+from app import superficie
 from app.series import FUNCOES, agregar
 from modulos import config, inmet, mapas
 
@@ -63,12 +65,27 @@ PALETAS = {
 }
 DPI_MAPA = 150       # serve para a tela e para o PNG baixado: um desenho só, codificado uma vez
 MAPAS_POR_LINHA = 3  # acima disso cada mapa fica estreito demais para se lerem os valores
+# Mapa navegável: enquadramento inicial em MS e o mapa base (Carto, sem chave de acesso)
+VISAO_INICIAL = {"latitude": -20.5, "longitude": -54.5, "zoom": 5.9}
+MAPA_BASE = pdk.map_styles.LIGHT
+# MS é quase quadrado: ocupando a largura inteira da tela, o mapa sairia três vezes mais largo
+# que alto e o estado nadaria no meio de São Paulo e da Bolívia. Em tela menor que isso o
+# Streamlit encolhe o mapa até o espaço que houver, e o zoom inicial abaixo ainda o enquadra.
+LARGURA_MAPA, ALTURA_MAPA = 1200, 780
+# O Streamlit alinha tudo à esquerda; com largura fixa, sobraria um vão à direita nas telas
+# largas. A regra abaixo centraliza só o mapa. Se um dia o Streamlit mudar esse identificador,
+# o mapa volta a ficar à esquerda — e nada mais quebra.
+CENTRALIZAR_MAPA = """<style>
+[data-testid="stElementContainer"]:has([data-testid="stDeckGlJsonChart"]) {
+  margin-left: auto; margin-right: auto; align-self: center;
+}
+</style>"""
 
 # Variáveis em que o zero é uma referência de verdade (não chover é zero). Nas outras, forçar o
 # eixo a começar no zero achataria a variação: 25 a 30 °C viraria um risco reto.
 ZERO_NA_BASE = {"CHUVA", "RAD_GLO", "VEN_VEL", "VEN_RAJ"}
 
-st.set_page_config(page_title="Explorador CEMTEC", page_icon="🌡️", layout="wide")
+st.set_page_config(page_title="Painel Meteorológico", page_icon="🌡️", layout="wide")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -195,10 +212,7 @@ def mapa_do_instante(valores: pd.Series, nome_variavel: str, quando: str, rotulo
     porque cada passo do deslizante redesenha uma variável por vez: voltar a uma hora já vista não
     paga o desenho de novo.
     """
-    coordenadas = (carregar_estacoes().set_index("Estação")[["VL_LATITUDE", "VL_LONGITUDE"]]
-                   .rename(columns={"VL_LATITUDE": "Latitude", "VL_LONGITUDE": "Longitude"}))
-    pontos = coordenadas.join(valores.rename(nome_variavel), how="inner").reset_index()
-    gdf = mapas.preparar_pontos(pontos, nome_variavel, quando)
+    gdf = mapas.preparar_pontos(_com_coordenadas(valores, nome_variavel), nome_variavel, quando)
     if gdf is None or len(gdf) < config.MIN_ESTACOES_INTERPOLACAO:
         return None
 
@@ -211,6 +225,27 @@ def mapa_do_instante(valores: pd.Series, nome_variavel: str, quando: str, rotulo
     arquivo = io.BytesIO()
     figura.savefig(arquivo, format="png", dpi=DPI_MAPA, bbox_inches="tight", facecolor="white")
     return arquivo.getvalue()
+
+
+@st.cache_resource(show_spinner=False)
+def malha_fina() -> superficie.Malha:
+    """Grade e máscara do estado do mapa navegável: dependem só da resolução, não do dado."""
+    return superficie.malha(base_cartografica().uf.geometry.union_all())
+
+
+@st.cache_data(show_spinner=False, max_entries=30)
+def camada_superficie(valores: pd.Series, nome_variavel: str, quando: str) -> str:
+    """A superfície do instante como imagem, pronta para virar camada do mapa."""
+    pontos = _com_coordenadas(valores, nome_variavel)
+    return superficie.como_uri(
+        superficie.superficie_png(pontos, nome_variavel, malha_fina(), PALETAS[nome_variavel]))
+
+
+def _com_coordenadas(valores: pd.Series, nome_variavel: str) -> pd.DataFrame:
+    """Valores de um instante com a latitude e a longitude de cada estação."""
+    coordenadas = (carregar_estacoes().set_index("Estação")[["VL_LATITUDE", "VL_LONGITUDE"]]
+                   .rename(columns={"VL_LATITUDE": "Latitude", "VL_LONGITUDE": "Longitude"}))
+    return coordenadas.join(valores.rename(nome_variavel), how="inner").reset_index().dropna()
 
 
 def painel_do_mapa(nome_variavel: str, serie: pd.DataFrame, momento, rotulo: str, quando: str,
@@ -242,7 +277,7 @@ def painel_do_mapa(nome_variavel: str, serie: pd.DataFrame, momento, rotulo: str
 # =====================================================
 # FILTROS
 # =====================================================
-st.title("Explorador — estações automáticas do INMET em MS")
+st.title("Painel Meteorológico")
 
 if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
     st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
@@ -298,7 +333,8 @@ if falharam:
     st.warning(f"Sem dados ou falha na consulta: {', '.join(falharam)}")
 
 horas_esperadas = int((fim - inicio).total_seconds() // 3600)
-aba_series, aba_mapa, aba_qualidade = st.tabs(["Séries temporais", "Mapa", "Qualidade dos dados"])
+aba_series, aba_mapa, aba_navegavel, aba_qualidade = st.tabs(
+    ["Estações: Séries Temporais", "Mapas Boletim", "Mapa Navegação", "Qualidade dos dados"])
 
 # =====================================================
 # SÉRIES TEMPORAIS
@@ -402,6 +438,78 @@ with aba_mapa:
                 st.caption(f"Fora do mapa, sem medição no período: {', '.join(sem_medicao)}")
             if ausentes_mapa:
                 st.caption(f"Sem dados no período ({len(ausentes_mapa)}): {', '.join(ausentes_mapa)}")
+
+# =====================================================
+# MAPA NAVEGÁVEL (EM TESTE)
+# =====================================================
+# A mesma superfície da aba anterior, mas sobre um mapa base que se aproxima e arrasta. Aqui o
+# desenho não é o do relatório: a interpolação é a mesma (modulos/calculos.py), o desenho é do
+# deck.gl. Em teste para decidir se substitui, complementa ou não vale a manutenção.
+with aba_navegavel:
+    st.caption("Em teste. A conta é a mesma dos relatórios; o desenho é outro — aproxime com a roda "
+               "do mouse, arraste para deslocar e passe o mouse numa estação para ver o valor.")
+    mapeaveis = [nome for nome in escolhidas if nome in PALETAS]
+    if not mapeaveis:
+        st.info("Escolha na barra lateral uma variável que não seja a direção do vento.")
+    elif not st.session_state.get("mapa_liberado"):
+        st.info(f"Precisa das {len(estacoes)} estações do estado. Carregue-as na aba **Mapas Boletim**.")
+    else:
+        with st.spinner(f"Consultando as {len(estacoes)} estações do estado..."):
+            leituras_navegavel, _ = carregar_leituras(tuple(estacoes["CD_ESTACAO"]),
+                                                      tuple(estacoes["Estação"]), inicio, fim)
+        # Uma variável por vez: num mapa que se navega, a comparação lado a lado dá lugar ao zoom
+        nome_variavel = st.selectbox("Variável", mapeaveis, key="variavel_navegavel")
+        coluna = VARIAVEIS[nome_variavel]
+
+        if leituras_navegavel.empty or coluna not in leituras_navegavel:
+            st.warning(f"{nome_variavel}: a API não devolveu essa medição no período.")
+        else:
+            serie = agregar(leituras_navegavel, coluna, por_dia, funcao)
+            momentos = list(serie.index)
+            formatar = (lambda marca: f"{marca:%d/%m/%Y}") if por_dia else (lambda marca: f"{marca:%d/%m %H:%M}")
+            momento = st.select_slider("Quando", options=momentos, value=momentos[-1],
+                                       format_func=formatar, key="quando_navegavel")
+            valores = serie.loc[momento]
+            medida = nome_variavel.split(" (")[0].lower()
+            unidade = nome_variavel.split("(")[-1].rstrip(")")
+
+            if valores.notna().sum() < config.MIN_ESTACOES_INTERPOLACAO:
+                st.warning(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram {medida} "
+                           f"em {formatar(momento)}.")
+            else:
+                with st.spinner("Desenhando o mapa..."):
+                    imagem = camada_superficie(valores, nome_variavel, formatar(momento))
+                pontos = _com_coordenadas(valores, nome_variavel)
+                pontos["Valor"] = pontos[nome_variavel].map(lambda valor: f"{valor:.1f} {unidade}")
+                # A imagem entra depois de criada a camada: passada no construtor, o pydeck a
+                # trataria como expressão a ser avaliada no navegador ("@@=data:image/png;...").
+                campo = pdk.Layer("BitmapLayer", data=None, bounds=superficie.limites())
+                campo.image = imagem
+                camadas = [
+                    campo,
+                    pdk.Layer("GeoJsonLayer", data=base_cartografica().uf.__geo_interface__,
+                              stroked=True, filled=False, get_line_color=[40, 40, 40], line_width_min_pixels=1),
+                    pdk.Layer("ScatterplotLayer", data=pontos, get_position=["Longitude", "Latitude"],
+                              get_fill_color=[20, 20, 20, 200], get_line_color=[255, 255, 255],
+                              line_width_min_pixels=1, stroked=True, radius_min_pixels=4,
+                              get_radius=2500, pickable=True),
+                ]
+                if st.checkbox("Mostrar o valor de cada estação", value=False, key="valores_navegavel",
+                               help="Aproxime para os valores deixarem de se cobrir."):
+                    camadas.append(
+                        pdk.Layer("TextLayer", data=pontos, get_position=["Longitude", "Latitude"],
+                                  get_text="Valor", get_size=12,
+                                  get_color=[20, 20, 20], get_pixel_offset=[0, -14],
+                                  background=True, get_background_color=[255, 255, 255, 200]))
+
+                st.markdown(CENTRALIZAR_MAPA, unsafe_allow_html=True)
+                st.pydeck_chart(pdk.Deck(layers=camadas, map_style=MAPA_BASE,
+                                         initial_view_state=pdk.ViewState(**VISAO_INICIAL),
+                                         tooltip={"text": "{Estação} — {Valor}"}),
+                                width=LARGURA_MAPA, height=ALTURA_MAPA)
+                st.caption(f"{valores.min():.1f} a {valores.max():.1f} {unidade} · "
+                           f"{valores.notna().sum()} estações mediram {medida} em {formatar(momento)}. "
+                           "O mapa base vem do Carto, fora da SEMADESC.")
 
 # =====================================================
 # QUALIDADE DOS DADOS
