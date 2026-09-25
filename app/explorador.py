@@ -24,24 +24,9 @@ from matplotlib.figure import Figure
 from app import dados as coleta
 from app import qualidade
 from app import superficie
-from app.series import FUNCOES, agregar
+from app import variaveis
 from modulos import config, inmet, mapas
 
-# Nome que aparece na tela -> coluna da API. A ordem é a que aparece na lista.
-VARIAVEIS = {
-    "Temperatura (°C)": "TEM_INS",
-    "Temperatura máxima (°C)": "TEM_MAX",
-    "Temperatura mínima (°C)": "TEM_MIN",
-    "Umidade relativa (%)": "UMD_INS",
-    "Umidade mínima (%)": "UMD_MIN",
-    "Chuva (mm)": "CHUVA",
-    "Radiação global (kJ/m²)": "RAD_GLO",
-    "Vento (km/h)": "VEN_VEL",
-    "Rajada (km/h)": "VEN_RAJ",
-    "Direção do vento (°)": "VEN_DIR",
-    "Pressão (hPa)": "PRE_INS",
-    "Ponto de orvalho (°C)": "PTO_INS",
-}
 # A API manda o vento em m/s; os produtos trabalham em km/h, e aqui seguimos a mesma unidade
 CONVERSOES = {"VEN_VEL": 3.6, "VEN_RAJ": 3.6}
 # Direção é ângulo: entre 350° e 10° o vento mal mudou, mas uma linha desceria o gráfico inteiro
@@ -55,14 +40,16 @@ NOMES_CURTOS = {
     "UMD_INS": "Umidade", "UMD_MAX": "Umid. máx.", "UMD_MIN": "Umid. mín.", "CHUVA": "Chuva",
     "RAD_GLO": "Radiação", "PRE_INS": "Pressão", "VEN_VEL": "Vento", "VEN_RAJ": "Rajada", "VEN_DIR": "Direção",
 }
-# Paleta de cada variável no mapa, seguindo a dos produtos: quem já conhece os relatórios lê o
-# mapa da tela sem precisar reaprender as cores. A direção do vento não entra — interpolar ângulo
-# entre 350° e 10° daria 180°, o rumo oposto.
-PALETAS = {
-    "Temperatura (°C)": "RdYlBu_r", "Temperatura máxima (°C)": "YlOrRd", "Temperatura mínima (°C)": "coolwarm",
-    "Umidade relativa (%)": "YlGnBu", "Umidade mínima (%)": "YlGnBu", "Chuva (mm)": "Blues",
-    "Radiação global (kJ/m²)": "YlOrRd", "Vento (km/h)": "turbo", "Rajada (km/h)": "turbo",
-    "Pressão (hPa)": "viridis", "Ponto de orvalho (°C)": "YlGnBu",
+# Modos de agregação dos mapas. Cada um tem os seus produtos no catálogo (app/variaveis.py):
+# a regra é da variável, não escolha de quem olha.
+MODOS_MAPA = {"Hora a hora": variaveis.HORA, "Por dia": variaveis.DIA, "Período inteiro": variaveis.PERIODO}
+# O gráfico não tem o período inteiro: um valor só não faz série no tempo.
+MODOS_GRAFICO = {"Hora a hora": variaveis.HORA, "Por dia": variaveis.DIA}
+# O que já vem escolhido: o trio do boletim. Quem quiser outro troca no seletor.
+PADRAO_MAPA = {
+    variaveis.HORA: ["Temperatura na hora cheia", "Chuva na hora", "Rajada na hora"],
+    variaveis.DIA: ["Temperatura máxima", "Umidade mínima", "Chuva acumulada"],
+    variaveis.PERIODO: ["Temperatura máxima", "Umidade mínima", "Chuva acumulada"],
 }
 DPI_MAPA = 150       # serve para a tela e para o PNG baixado: um desenho só, codificado uma vez
 MAPAS_POR_LINHA = 3  # acima disso cada mapa fica estreito demais para se lerem os valores
@@ -81,10 +68,6 @@ CENTRALIZAR_MAPA = """<style>
   margin-left: auto; margin-right: auto; align-self: center;
 }
 </style>"""
-
-# Variáveis em que o zero é uma referência de verdade (não chover é zero). Nas outras, forçar o
-# eixo a começar no zero achataria a variação: 25 a 30 °C viraria um risco reto.
-ZERO_NA_BASE = {"CHUVA", "RAD_GLO", "VEN_VEL", "VEN_RAJ"}
 
 # O streamlit redireciona a saída dos módulos, e no Windows ela vai em cp1252: sem isto, o
 # primeiro aviso com emoji (uma nova tentativa na API, por exemplo) derruba a tela inteira.
@@ -122,44 +105,61 @@ def carregar_leituras(codigos: tuple[str, ...], nomes: tuple[str, ...],
     return tabela, falharam
 
 
-def desenhar(serie: pd.DataFrame, nome: str, zero_na_base: bool, circular: bool = False,
-             por_dia: bool = False) -> alt.Chart:
-    """Uma série por estação, com zoom por arrasto e valor ao passar o mouse.
+def series_da_grandeza(tabela: pd.DataFrame, grandeza: str, modo: str):
+    """As séries daquela grandeza no tempo, e os produtos que as geraram.
 
-    O traço leva um ponto em cada leitura, para dar para contar as horas medidas e enxergar
-    falha no meio da série. Variáveis circulares (direção do vento) saem só em pontos: ligar
-    350° a 10° com uma linha desenharia uma volta inteira que não aconteceu.
+    É aqui que o catálogo entra no gráfico: a máxima do dia sai da mesma regra que alimenta o
+    mapa, e as duas telas não podem discordar.
+    """
+    pedacos, usados = [], []
+    for produto in variaveis.disponiveis(modo, variaveis.GRAFICO):
+        if produto.grandeza != grandeza:
+            continue
+        largo = variaveis.no_tempo(produto, tabela, modo)
+        if largo.empty:
+            continue
+        pedacos.append(largo.reset_index()
+                       .melt("dt_local", var_name="Estação", value_name="valor")
+                       .assign(Série=variaveis.rotulo_curto(produto)))
+        usados.append(produto)
+    if not pedacos:
+        return pd.DataFrame(columns=["dt_local", "Estação", "valor", "Série"]), []
+    return pd.concat(pedacos, ignore_index=True).dropna(subset=["valor"]), usados
+
+
+def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, casas: int = 1) -> alt.Chart:
+    """As séries de uma grandeza no tempo: cor separa a estação, traço separa a série.
+
+    Cinco estações com três séries dariam quinze linhas iguais. Cor para a estação e traço para
+    a série (máxima, mínima, média) deixa as duas leituras possíveis no mesmo desenho; clicar na
+    legenda isola uma série.
     """
     # Arrastar move e Shift+roda aproxima. Sem o Shift, a roda do mouse em cima do gráfico
     # aproximaria em vez de rolar a página, e quem passa por vários gráficos fica preso no
     # primeiro (é o que o .interactive() faz por padrão).
     navegar = alt.selection_interval(bind="scales", zoom="wheel![event.shiftKey]")
-    longo = serie.reset_index().melt("dt_local", var_name="Estação", value_name="valor").dropna()
-    base = alt.Chart(longo)
-    marca = (base.mark_point(size=22, filled=True, opacity=0.75) if circular
-             else base.mark_line(strokeWidth=2, point=alt.OverlayMarkDef(filled=True, size=32)))
+    isolar = alt.selection_point(fields=["Série"], bind="legend")
     # Hora em cima e data embaixo, como nos meteogramas; por dia, só a data — e aí uma marca por
-    # dia, senão o eixo marca de meio em meio dia e a mesma data aparece duas vezes. De hora em
-    # hora o espaçamento fica por conta do eixo: pedir de 3 em 3 horas (tickCount={"interval":
-    # "hour", "step": 3}) quebra o desenho na versão do Vega-Lite que o Streamlit embute.
+    # dia, senão o eixo marca de meio em meio dia e a mesma data aparece duas vezes.
+    por_dia = modo == variaveis.DIA
     formato = ("[timeFormat(datum.value, '%d/%m')]" if por_dia
                else "[timeFormat(datum.value, '%H:%M'), timeFormat(datum.value, '%d/%m')]")
-    marcas = "day" if por_dia else alt.Undefined
-    # A direção vai de 0° a 360° e só isso: deixada solta, a escala sobraria até 400°
-    escala = (alt.Scale(domain=[0, 360]) if circular else alt.Scale(zero=zero_na_base))
-    rumos = [0, 90, 180, 270, 360] if circular else alt.Undefined
-    return (marca
+    return (alt.Chart(longo)
+            .mark_line(strokeWidth=2, point=alt.OverlayMarkDef(filled=True, size=32))
             .encode(x=alt.X("dt_local:T", title=None,
                             axis=alt.Axis(grid=True, gridOpacity=0.25, labelAngle=0, labelExpr=formato,
-                                          labelFontSize=10, tickCount=marcas)),
-                    y=alt.Y("valor:Q", title=nome, scale=escala,
-                            axis=alt.Axis(grid=True, gridOpacity=0.25, values=rumos)),
+                                          labelFontSize=10, tickCount="day" if por_dia else alt.Undefined)),
+                    y=alt.Y("valor:Q", title=rotulo_y, scale=alt.Scale(zero=zero_na_base),
+                            axis=alt.Axis(grid=True, gridOpacity=0.25)),
                     color=alt.Color("Estação:N", title=None, legend=alt.Legend(orient="bottom")),
-                    tooltip=[alt.Tooltip("Estação:N"),
-                             alt.Tooltip("dt_local:T", title="Quando", format="%d/%m %H:%M"),
-                             alt.Tooltip("valor:Q", title=nome, format=".1f")])
-            .properties(height=300)
-            .add_params(navegar))
+                    strokeDash=alt.StrokeDash("Série:N", title=None, legend=alt.Legend(orient="bottom")),
+                    opacity=alt.condition(isolar, alt.value(1), alt.value(0.12)),
+                    tooltip=[alt.Tooltip("Estação:N"), alt.Tooltip("Série:N"),
+                             alt.Tooltip("dt_local:T", title="Quando",
+                                         format="%d/%m" if por_dia else "%d/%m %H:%M"),
+                             alt.Tooltip("valor:Q", title="Valor", format=f".{casas}f")])
+            .properties(height=320)
+            .add_params(navegar, isolar))
 
 
 def rosa_dos_ventos(tabela: pd.DataFrame, nome_estacao: str):
@@ -213,7 +213,7 @@ def base_cartografica() -> mapas.BaseCartografica:
 
 
 @st.cache_data(show_spinner=False, max_entries=30)
-def mapa_do_instante(valores: pd.Series, nome_variavel: str, quando: str, rotulos: bool) -> bytes | None:
+def mapa_do_instante(valores: pd.Series, nome_produto: str, quando: str, rotulos: bool) -> bytes | None:
     """PNG do mapa interpolado de um instante, ou None se faltarem estações para interpolar.
 
     É o mesmo desenho dos produtos — mesmo IDW, mesmo recorte pelo estado, mesmas cores —, só que
@@ -221,12 +221,14 @@ def mapa_do_instante(valores: pd.Series, nome_variavel: str, quando: str, rotulo
     porque cada passo do deslizante redesenha uma variável por vez: voltar a uma hora já vista não
     paga o desenho de novo.
     """
-    gdf = mapas.preparar_pontos(_com_coordenadas(valores, nome_variavel), nome_variavel, quando)
+    produto = variaveis.por_nome(nome_produto)
+    gdf = mapas.preparar_pontos(_com_coordenadas(valores, nome_produto), nome_produto, quando)
     if gdf is None or len(gdf) < config.MIN_ESTACOES_INTERPOLACAO:
         return None
 
-    espec = mapas.EspecMapa(tabela="", coluna=nome_variavel, titulo=nome_variavel, subtitulo=quando,
-                            arquivo="", cmap=PALETAS[nome_variavel], unidade=nome_variavel, ranking="")
+    espec = mapas.EspecMapa(tabela="", coluna=nome_produto, titulo=nome_produto, subtitulo=quando,
+                            arquivo="", cmap=produto.paleta, ranking="", decimais=produto.decimais,
+                            unidade=f"{produto.nome} ({produto.unidade})")
     figura = mapas.mapa_interpolado(gdf, espec, base_cartografica(), tela=mapas.Tela(rotulos=rotulos))
     if figura is None:
         return None
@@ -243,11 +245,12 @@ def malha_fina() -> superficie.Malha:
 
 
 @st.cache_data(show_spinner=False, max_entries=30)
-def camada_superficie(valores: pd.Series, nome_variavel: str, quando: str) -> str:
+def camada_superficie(valores: pd.Series, nome_produto: str, quando: str) -> str:
     """A superfície do instante como imagem, pronta para virar camada do mapa."""
-    pontos = _com_coordenadas(valores, nome_variavel)
+    produto = variaveis.por_nome(nome_produto)
+    pontos = _com_coordenadas(valores, nome_produto)
     return superficie.como_uri(
-        superficie.superficie_png(pontos, nome_variavel, malha_fina(), PALETAS[nome_variavel]))
+        superficie.superficie_png(pontos, nome_produto, malha_fina(), produto.paleta))
 
 
 def _com_coordenadas(valores: pd.Series, nome_variavel: str) -> pd.DataFrame:
@@ -257,30 +260,30 @@ def _com_coordenadas(valores: pd.Series, nome_variavel: str) -> pd.DataFrame:
     return coordenadas.join(valores.rename(nome_variavel), how="inner").reset_index().dropna()
 
 
-def painel_do_mapa(nome_variavel: str, serie: pd.DataFrame, momento, rotulo: str, quando: str,
+def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, carimbo: str,
                    rotulos: bool) -> None:
-    """Uma coluna da linha de mapas: nome da variável, desenho, a faixa de valores e o botão de baixar."""
-    st.markdown(f"**{nome_variavel}**")
-    medida = nome_variavel.split(" (")[0].lower()  # "Temperatura (°C)" -> "temperatura"
-    if momento not in serie.index:
-        st.info(f"Sem medição de {medida} {quando}.")
+    """Uma coluna da linha de mapas: nome do produto, desenho, a regra e o botão de baixar."""
+    st.markdown(f"**{produto.nome}**")
+    medida = produto.nome.lower()
+    if valores.dropna().empty:
+        st.info(f"Nenhuma estação mediu {medida} em {rotulo}.")
         return
 
-    valores = serie.loc[momento]
-    png = mapa_do_instante(valores, nome_variavel, rotulo, rotulos)
+    png = mapa_do_instante(valores, produto.nome, rotulo, rotulos)
     if png is None:
         st.warning(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram {medida} em {rotulo}: "
                    "com tão poucos pontos a superfície inventaria mais do que mostra.")
         return
 
     st.image(png, width="stretch")
-    # Sem a barra de cores no desenho, é esta linha que diz o que as cores valem
-    unidade = nome_variavel.split("(")[-1].rstrip(")")
-    st.caption(f"{valores.min():.1f} a {valores.max():.1f} {unidade} · "
-               f"{valores.notna().sum()} estações mediram {medida} {quando}.")
-    carimbo = f"{momento:%Y%m%d}" if quando == "nesse dia" else f"{momento:%Y%m%d_%H}h"
-    st.download_button(f"Baixar PNG — {medida}", png, mime="image/png", key=f"baixar_{nome_variavel}",
-                       file_name=f"Mapa_{medida.replace(' ', '_')}_{carimbo}.png")
+    # Sem a barra de cores no desenho, é esta linha que diz o que as cores valem — e a regra
+    # do produto vai junto, para ninguém precisar adivinhar que conta é aquela.
+    casas = produto.decimais
+    st.caption(f"{valores.min():.{casas}f} a {valores.max():.{casas}f} {produto.unidade} · "
+               f"{valores.notna().sum()} estações · {produto.regra}.")
+    arquivo = produto.nome.lower().replace(" ", "_")
+    st.download_button(f"Baixar PNG — {medida}", png, mime="image/png", key=f"baixar_{produto.nome}",
+                       file_name=f"Mapa_{arquivo}_{carimbo}.png")
 
 
 # =====================================================
@@ -305,13 +308,15 @@ with st.sidebar:
     # Sem estação escolhida de saída: quem abre decide o que quer ver, e nenhuma consulta
     # à API acontece antes disso.
     nomes = st.multiselect("Estações", estacoes["Estação"].tolist(), default=[],
-                           help="Cada estação vira uma linha no gráfico.")
-    escolhidas = st.multiselect("Variáveis", list(VARIAVEIS),
-                                default=["Temperatura (°C)", "Chuva (mm)", "Rajada (km/h)"],
-                                help="Cada variável ganha o seu próprio gráfico: escalas diferentes não se misturam.")
-    por_dia = st.radio("Agregação", ["Hora a hora", "Por dia"], horizontal=True) == "Por dia"
-    funcao = st.selectbox("Resumo do dia", list(FUNCOES), disabled=not por_dia,
-                          help="Para chuva, use Soma; para as demais, Média, Máxima ou Mínima.")
+                           help="Cada estação vira uma linha no gráfico. Os mapas usam sempre as "
+                                "62 estações do estado.")
+    # Uma grandeza dá um gráfico, com as suas séries dentro (máxima, mínima, média): escalas
+    # diferentes nunca se misturam num eixo só.
+    escolhidas = st.multiselect("Grandezas", variaveis.grandezas(variaveis.HORA, variaveis.GRAFICO),
+                                default=["Temperatura", "Chuva", "Vento"],
+                                help="Cada grandeza ganha o seu gráfico, com as séries que a equipe "
+                                     "de meteorologia definiu.")
+    modo_grafico = MODOS_GRAFICO[st.radio("Agregação", list(MODOS_GRAFICO), horizontal=True)]
 
     st.divider()
     guardadas, megabytes = coleta.tamanho_do_cache()
@@ -320,8 +325,8 @@ with st.sidebar:
         st.cache_data.clear()
         st.success(f"{coleta.limpar_cache()} arquivos removidos.")
 
-if not nomes or not escolhidas:
-    st.info("Escolha ao menos uma estação e uma variável na barra lateral.")
+if not nomes:
+    st.info("Escolha ao menos uma estação na barra lateral.")
     st.stop()
 
 # =====================================================
@@ -342,6 +347,8 @@ if falharam:
     st.warning(f"Sem dados ou falha na consulta: {', '.join(falharam)}")
 
 horas_esperadas = int((fim - inicio).total_seconds() // 3600)
+periodo_escolhido = (f"{intervalo[0]:%d/%m/%Y}" if intervalo[0] == intervalo[1]
+                     else f"{intervalo[0]:%d/%m/%Y} a {intervalo[1]:%d/%m/%Y}")
 aba_series, aba_mapa, aba_navegavel, aba_qualidade = st.tabs(
     ["Estações: Séries Temporais", "Mapas Boletim", "Mapa Navegação", "Qualidade dos dados"])
 
@@ -351,24 +358,36 @@ aba_series, aba_mapa, aba_navegavel, aba_qualidade = st.tabs(
 with aba_series:
     st.caption(f"{len(tabela)} leituras de {tabela['Estação'].nunique()} estações · "
                f"{len(tabela) / (horas_esperadas * len(nomes)):.0%} das horas do período têm registro")
+    if not escolhidas:
+        st.info("Escolha ao menos uma variável na barra lateral.")
 
-    for nome_variavel in escolhidas:
-        coluna = VARIAVEIS[nome_variavel]
-        if coluna not in tabela:
-            st.warning(f"{nome_variavel}: a API não devolveu essa coluna no período.")
+    for grandeza in escolhidas:
+        longo, produtos = series_da_grandeza(tabela, grandeza, modo_grafico)
+        if longo.empty:
+            st.warning(f"{grandeza}: a API não devolveu essa medição no período.")
             continue
-        circular = coluna in COLUNAS_CIRCULARES
-        if circular and por_dia:
-            st.subheader(nome_variavel)
-            st.info("A direção não é resumida por dia: a média entre 350° e 10° daria 180°, que é o oposto. "
-                    "Veja hora a hora ou use a rosa dos ventos abaixo.")
+
+        st.subheader(grandeza)
+        # A direção sai num gráfico próprio: em graus, ela não divide o eixo com km/h — juntar
+        # duas unidades num eixo só é o tipo de gráfico que engana quem lê.
+        circulares = [produto for produto in produtos if produto.colunas[0] in COLUNAS_CIRCULARES]
+        for produto in circulares:
+            rotulo = variaveis.rotulo_curto(produto)
+            st.altair_chart(desenhar(longo[longo["Série"] == rotulo],
+                                     f"{produto.nome} ({produto.unidade})", False, modo_grafico,
+                                     produto.decimais), width="stretch")
+            st.caption("A direção ligada por linha engana: entre 350° e 10° o vento mal mudou, mas o traço "
+                       "desce o gráfico inteiro. Para o rumo do período, veja a rosa dos ventos abaixo.")
+            longo = longo[longo["Série"] != rotulo]
+
+        restantes = [produto for produto in produtos if produto not in circulares]
+        if not restantes:
             continue
-        serie = agregar(tabela, coluna, por_dia, funcao)
-        if serie.empty:
-            st.warning(f"{nome_variavel}: nenhuma estação escolhida tem essa medição no período.")
-            continue
-        st.subheader(nome_variavel)
-        st.altair_chart(desenhar(serie, nome_variavel, coluna in ZERO_NA_BASE, circular, por_dia), width="stretch")
+        primeiro = restantes[0]
+        st.altair_chart(desenhar(longo, f"{grandeza} ({primeiro.unidade})", primeiro.zero_na_base,
+                                 modo_grafico, primeiro.decimais), width="stretch")
+        st.caption(" · ".join(f"**{variaveis.rotulo_curto(produto)}**: {produto.regra}"
+                              for produto in restantes))
 
     if "VEN_DIR" in tabela and "VEN_VEL" in tabela:
         with st.expander("Rosa dos ventos do período"):
@@ -387,7 +406,11 @@ with aba_series:
                 st.caption(f"Mostrando as {ROSAS_MAXIMAS} primeiras de {len(nomes)} estações escolhidas.")
 
     with st.expander("Ver e baixar os dados"):
-        colunas = ["Estação", "dt_local"] + [VARIAVEIS[nome] for nome in escolhidas if VARIAVEIS[nome] in tabela]
+        # As colunas cruas por trás das grandezas escolhidas, sem repetir e na ordem do catálogo
+        das_grandezas = [coluna for produto in variaveis.disponiveis(modo_grafico, variaveis.GRAFICO)
+                         if produto.grandeza in escolhidas
+                         for coluna in produto.colunas if coluna in tabela]
+        colunas = ["Estação", "dt_local"] + list(dict.fromkeys(das_grandezas))
         visivel = tabela[colunas].rename(columns={"dt_local": "Data/Hora (MS)"})
         st.dataframe(visivel, width="stretch", height=300)
         st.download_button("Baixar CSV", visivel.to_csv(index=False).encode("utf-8-sig"),
@@ -397,11 +420,7 @@ with aba_series:
 # MAPA
 # =====================================================
 with aba_mapa:
-    mapeaveis = [nome for nome in escolhidas if nome in PALETAS]
-    if not mapeaveis:
-        st.info("A direção do vento não entra no mapa: interpolar ângulo entre 350° e 10° daria 180°, "
-                "o rumo oposto. Escolha outra variável na barra lateral.")
-    elif not st.session_state.get("mapa_liberado"):
+    if not st.session_state.get("mapa_liberado"):
         st.info(f"O mapa interpola as {len(estacoes)} estações do estado, e não só as escolhidas na barra "
                 "lateral. Na primeira vez a consulta demora alguns minutos; depois vem do cache.")
         if st.button("Carregar todas as estações de MS", type="primary"):
@@ -411,48 +430,60 @@ with aba_mapa:
         with st.spinner(f"Consultando as {len(estacoes)} estações do estado..."):
             leituras_mapa, ausentes_mapa = carregar_leituras(tuple(estacoes["CD_ESTACAO"]),
                                                              tuple(estacoes["Estação"]), inicio, fim)
-        # Um mapa por variável escolhida, lado a lado: no mesmo instante, dá para ver a temperatura
-        # alta bater com a umidade baixa sem trocar de tela.
-        series = {nome: agregar(leituras_mapa, VARIAVEIS[nome], por_dia, funcao)
-                  for nome in mapeaveis if VARIAVEIS[nome] in leituras_mapa}
-        series = {nome: serie for nome, serie in series.items() if not serie.empty}
-        sem_medicao = [nome for nome in mapeaveis if nome not in series]
+        # O modo mora aqui, e não na barra lateral, porque o mapa tem um a mais que o gráfico: o
+        # período inteiro, que é um mapa só para a janela toda, sem deslizante.
+        modo = MODOS_MAPA[st.radio("Agregação", list(MODOS_MAPA), horizontal=True, key="modo_mapa")]
+        catalogo = [produto for produto in variaveis.disponiveis(modo, variaveis.MAPA)
+                    if all(coluna in leituras_mapa for coluna in produto.colunas)]
+        escolhidos = st.multiselect(
+            "Mapas", [produto.nome for produto in catalogo],
+            default=[nome for nome in PADRAO_MAPA[modo] if nome in {p.nome for p in catalogo}],
+            key=f"mapas_{modo}",
+            help="Cada um traz a sua regra: a máxima do dia é a maior das máximas horárias, "
+                 "nunca a média delas.")
 
-        if not series:
-            st.warning("A API não devolveu nenhuma dessas medições no período.")
+        if not escolhidos:
+            st.info("Escolha ao menos um mapa acima.")
         else:
-            # O eixo do tempo é a união das variáveis: uma delas pode faltar em algumas horas
-            momentos = sorted(set().union(*(serie.index for serie in series.values())))
-            formatar = (lambda marca: f"{marca:%d/%m/%Y}") if por_dia else (lambda marca: f"{marca:%d/%m %H:%M}")
-            # O deslizante anda no mesmo passo da barra lateral: de hora em hora ou de dia em dia,
-            # e no modo diário o valor do mapa é o resumo escolhido (Média, Máxima, Mínima ou Soma).
-            momento = st.select_slider("Quando", options=momentos, value=momentos[-1], format_func=formatar)
-            rotulo, quando = formatar(momento), ("nesse dia" if por_dia else "nesse instante")
-            rotulos = st.checkbox("Mostrar o valor de cada estação", value=False,
-                                  help="Lado a lado os valores se cobrem. Ligue quando for ampliar um mapa "
-                                       "ou baixar o PNG.")
+            paradas = variaveis.momentos(leituras_mapa, modo)
+            if modo != variaveis.PERIODO and not paradas:
+                st.warning("Sem leituras no período escolhido.")
+            else:
+                if modo == variaveis.PERIODO:
+                    momento, rotulo = None, periodo_escolhido
+                    carimbo = f"{intervalo[0]:%Y%m%d}_a_{intervalo[1]:%Y%m%d}"
+                else:
+                    formatar = ((lambda marca: f"{marca:%d/%m/%Y}") if modo == variaveis.DIA
+                                else (lambda marca: f"{marca:%d/%m %H:%M}"))
+                    momento = st.select_slider("Quando", options=paradas, value=paradas[-1],
+                                               format_func=formatar, key=f"quando_{modo}")
+                    rotulo = formatar(momento)
+                    carimbo = (f"{momento:%Y%m%d}" if modo == variaveis.DIA else f"{momento:%Y%m%d_%H}h")
 
-            nomes = list(series)
-            # Todas as linhas com a mesma quantidade de colunas: se a última fosse dimensionada
-            # pelo que sobrou, os mapas dela sairiam maiores que os de cima. Com uma variável só,
-            # a coluna é uma e o mapa ocupa a largura inteira.
-            por_linha = min(len(nomes), MAPAS_POR_LINHA)
-            with st.spinner("Desenhando os mapas..."):
-                for primeiro in range(0, len(nomes), por_linha):
-                    linha = nomes[primeiro:primeiro + por_linha]
-                    for coluna_tela, nome_variavel in zip(st.columns(por_linha), linha):
-                        with coluna_tela:
-                            painel_do_mapa(nome_variavel, series[nome_variavel], momento, rotulo, quando,
-                                           rotulos)
+                rotulos = st.checkbox("Mostrar o valor de cada estação", value=False,
+                                      help="Lado a lado os valores se cobrem. Ligue quando for ampliar "
+                                           "um mapa ou baixar o PNG.")
 
-            st.caption(f"Interpolação IDW (potência {config.IDW_POTENCIA}, {config.IDW_VIZINHOS} vizinhos) sobre as "
-                       f"{len(estacoes)} estações do estado, a mesma dos relatórios. Neste tamanho o mapa mostra "
-                       "o padrão, e a faixa de valores vai escrita sob cada um; para ver estação por estação, "
-                       "ligue a caixa acima e amplie o mapa no ícone de tela cheia.")
-            if sem_medicao:
-                st.caption(f"Fora do mapa, sem medição no período: {', '.join(sem_medicao)}")
-            if ausentes_mapa:
-                st.caption(f"Sem dados no período ({len(ausentes_mapa)}): {', '.join(ausentes_mapa)}")
+                fatia = variaveis.recorte(leituras_mapa, modo, momento)
+                # Todas as linhas com a mesma quantidade de colunas: se a última fosse dimensionada
+                # pelo que sobrou, os mapas dela sairiam maiores que os de cima. Com um mapa só, a
+                # coluna é uma e ele ocupa a largura inteira.
+                por_linha = min(len(escolhidos), MAPAS_POR_LINHA)
+                with st.spinner("Desenhando os mapas..."):
+                    for primeiro in range(0, len(escolhidos), por_linha):
+                        linha = escolhidos[primeiro:primeiro + por_linha]
+                        for coluna_tela, nome in zip(st.columns(por_linha), linha):
+                            with coluna_tela:
+                                produto = variaveis.por_nome(nome)
+                                painel_do_mapa(produto, variaveis.por_estacao(produto, fatia),
+                                               rotulo, carimbo, rotulos)
+
+                st.caption(f"Interpolação IDW (potência {config.IDW_POTENCIA}, {config.IDW_VIZINHOS} vizinhos) "
+                           f"sobre as {len(estacoes)} estações do estado, a mesma dos relatórios. Neste tamanho "
+                           "o mapa mostra o padrão, e a faixa de valores vai escrita sob cada um; para ver "
+                           "estação por estação, ligue a caixa acima e amplie o mapa no ícone de tela cheia.")
+                if ausentes_mapa:
+                    st.caption(f"Sem dados no período ({len(ausentes_mapa)}): {', '.join(ausentes_mapa)}")
 
 # =====================================================
 # MAPA NAVEGÁVEL (EM TESTE)
@@ -463,39 +494,48 @@ with aba_mapa:
 with aba_navegavel:
     st.caption("Em teste. A conta é a mesma dos relatórios; o desenho é outro — aproxime com a roda "
                "do mouse, arraste para deslocar e passe o mouse numa estação para ver o valor.")
-    mapeaveis = [nome for nome in escolhidas if nome in PALETAS]
-    if not mapeaveis:
-        st.info("Escolha na barra lateral uma variável que não seja a direção do vento.")
-    elif not st.session_state.get("mapa_liberado"):
+    if not st.session_state.get("mapa_liberado"):
         st.info(f"Precisa das {len(estacoes)} estações do estado. Carregue-as na aba **Mapas Boletim**.")
     else:
         with st.spinner(f"Consultando as {len(estacoes)} estações do estado..."):
             leituras_navegavel, _ = carregar_leituras(tuple(estacoes["CD_ESTACAO"]),
                                                       tuple(estacoes["Estação"]), inicio, fim)
-        # Uma variável por vez: num mapa que se navega, a comparação lado a lado dá lugar ao zoom
-        nome_variavel = st.selectbox("Variável", mapeaveis, key="variavel_navegavel")
-        coluna = VARIAVEIS[nome_variavel]
+        modo_nav = MODOS_MAPA[st.radio("Agregação", list(MODOS_MAPA), horizontal=True, key="modo_navegavel")]
+        catalogo_nav = [produto for produto in variaveis.disponiveis(modo_nav, variaveis.MAPA)
+                        if all(coluna in leituras_navegavel for coluna in produto.colunas)]
 
-        if leituras_navegavel.empty or coluna not in leituras_navegavel:
-            st.warning(f"{nome_variavel}: a API não devolveu essa medição no período.")
+        if not catalogo_nav:
+            st.warning("A API não devolveu nenhuma dessas medições no período.")
         else:
-            serie = agregar(leituras_navegavel, coluna, por_dia, funcao)
-            momentos = list(serie.index)
-            formatar = (lambda marca: f"{marca:%d/%m/%Y}") if por_dia else (lambda marca: f"{marca:%d/%m %H:%M}")
-            momento = st.select_slider("Quando", options=momentos, value=momentos[-1],
-                                       format_func=formatar, key="quando_navegavel")
-            valores = serie.loc[momento]
-            medida = nome_variavel.split(" (")[0].lower()
-            unidade = nome_variavel.split("(")[-1].rstrip(")")
+            # Um mapa por vez: aqui a comparação lado a lado dá lugar ao zoom
+            nome_nav = st.selectbox("Mapa", [produto.nome for produto in catalogo_nav], key="mapa_navegavel")
+            produto_nav = variaveis.por_nome(nome_nav)
+            paradas_nav = variaveis.momentos(leituras_navegavel, modo_nav)
 
-            if valores.notna().sum() < config.MIN_ESTACOES_INTERPOLACAO:
-                st.warning(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram {medida} "
-                           f"em {formatar(momento)}.")
+            if modo_nav == variaveis.PERIODO:
+                momento_nav, rotulo_nav = None, periodo_escolhido
+            elif not paradas_nav:
+                momento_nav, rotulo_nav = None, periodo_escolhido
+                st.warning("Sem leituras no período escolhido.")
+            else:
+                formatar_nav = ((lambda marca: f"{marca:%d/%m/%Y}") if modo_nav == variaveis.DIA
+                                else (lambda marca: f"{marca:%d/%m %H:%M}"))
+                momento_nav = st.select_slider("Quando", options=paradas_nav, value=paradas_nav[-1],
+                                               format_func=formatar_nav, key=f"quando_nav_{modo_nav}")
+                rotulo_nav = formatar_nav(momento_nav)
+
+            fatia_nav = variaveis.recorte(leituras_navegavel, modo_nav, momento_nav)
+            valores_nav = variaveis.por_estacao(produto_nav, fatia_nav)
+
+            if valores_nav.notna().sum() < config.MIN_ESTACOES_INTERPOLACAO:
+                st.warning(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram "
+                           f"{produto_nav.nome.lower()} em {rotulo_nav}.")
             else:
                 with st.spinner("Desenhando o mapa..."):
-                    imagem = camada_superficie(valores, nome_variavel, formatar(momento))
-                pontos = _com_coordenadas(valores, nome_variavel)
-                pontos["Valor"] = pontos[nome_variavel].map(lambda valor: f"{valor:.1f} {unidade}")
+                    imagem = camada_superficie(valores_nav, produto_nav.nome, rotulo_nav)
+                pontos = _com_coordenadas(valores_nav, produto_nav.nome)
+                pontos["Valor"] = pontos[produto_nav.nome].map(
+                    lambda valor: f"{valor:.{produto_nav.decimais}f} {produto_nav.unidade}")
                 # A imagem entra depois de criada a camada: passada no construtor, o pydeck a
                 # trataria como expressão a ser avaliada no navegador ("@@=data:image/png;...").
                 campo = pdk.Layer("BitmapLayer", data=None, bounds=superficie.limites())
@@ -522,9 +562,10 @@ with aba_navegavel:
                                          initial_view_state=pdk.ViewState(**VISAO_INICIAL),
                                          tooltip={"text": "{Estação} — {Valor}"}),
                                 width=LARGURA_MAPA, height=ALTURA_MAPA)
-                st.caption(f"{valores.min():.1f} a {valores.max():.1f} {unidade} · "
-                           f"{valores.notna().sum()} estações mediram {medida} em {formatar(momento)}. "
-                           "O mapa base vem do Carto, fora da SEMADESC.")
+                casas = produto_nav.decimais
+                st.caption(f"{valores_nav.min():.{casas}f} a {valores_nav.max():.{casas}f} "
+                           f"{produto_nav.unidade} · {valores_nav.notna().sum()} estações · "
+                           f"{produto_nav.regra}, em {rotulo_nav}. O mapa base vem do Carto, fora da SEMADESC.")
 
 # =====================================================
 # QUALIDADE DOS DADOS
