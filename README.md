@@ -23,6 +23,7 @@ Desenvolvido pela equipe de meteorologia do **CEMTEC** — Centro de Monitoramen
 - [Como atualizar](#como-atualizar)
 - [Configuração](#configuração)
 - [Testes](#testes)
+- [Explorador (Streamlit)](#explorador-streamlit)
 - [Novos produtos](#novos-produtos)
 - [Estrutura do repositório](#estrutura-do-repositório)
 
@@ -541,6 +542,91 @@ Rode os testes antes de cada commit: eles conferem as janelas de tempo, os cálc
 
 Os testes também rodam automaticamente no GitHub (GitHub Actions, em Linux, com Python 3.10 e 3.14) a cada push e a cada pull request para a `main`. O resultado aparece como ✓ ou ✗ ao lado de cada commit e na aba **Actions** do repositório, onde também é possível rodá-los manualmente.
 
+## Explorador (Streamlit)
+
+Ferramenta de **análise**, separada dos produtos: olha-se o dado para entender tendências e conferir a qualidade da medição, sem gerar os arquivos do relatório. Os produtos continuam saindo pelo `main.py`, e o explorador não altera nada do que eles produzem.
+
+Instale as dependências dele uma vez (quem só gera os produtos não precisa disto):
+
+```bash
+pip install -r app/requirements.txt
+```
+
+A aba de mapa usa o mesmo `modulos/mapas.py` dos produtos, então a lista inclui as bibliotecas de geoprocessamento (geopandas, shapely, pyogrio, pyproj e scipy). São ~165 MB — o preço de não manter um segundo desenho de mapa, que com o tempo divergiria do relatório.
+
+E abra:
+
+```bash
+streamlit run app/explorador.py
+```
+
+O navegador abre em `http://localhost:8501`. Na barra lateral ficam o período, as estações e as **grandezas**. Cada grandeza ganha o seu gráfico — escalas diferentes nunca se misturam num eixo só —, com as séries que a equipe de meteorologia definiu: no gráfico horário, a máxima, a mínima e a média da hora; no diário, as do dia mais a compensada. **Cor separa a estação, traço separa a série**, e clicar na legenda isola uma delas. Zoom com Shift + roda, valor ao passar o mouse, e tudo baixável em CSV.
+
+| | |
+|---|---|
+| **Grandezas** | Temperatura, umidade, pressão, vento, radiação e chuva. O que cada uma mostra — e com que regra — está no catálogo [`app/variaveis.py`](app/variaveis.py), e a regra vai escrita sob cada gráfico |
+| **Chuva** | Sai em **cascata**, não em linha: cada barra é a chuva daquele passo, empilhada no que já tinha caído, e a barra escura no fim é o total. No horário mostra as últimas 24 horas; no diário, um dia por barra |
+| **A regra é da variável** | A estação mede de 10 em 10 minutos e transmite de hora em hora, já resumido: MAX e MIN são os extremos daquela hora, INS é a leitura da hora cheia, chuva e radiação são acumulados. Por isso **a máxima do dia é a maior das máximas horárias**, nunca a média delas — e não existe mais escolher "média, máxima, mínima ou soma" para qualquer variável |
+| **Vento** | Velocidade e rajada aparecem em **km/h**, como nos produtos (a API manda em m/s). A **direção** sai em pontos, e não em linha: entre 350° e 10° o vento mal mudou, mas uma linha desceria o gráfico inteiro. Para o período há uma **rosa dos ventos** por estação, com as horas de cada rumo separadas por faixa de velocidade |
+| **Cache** | O que já foi baixado fica em `cache/`, fora do controle de versão, para a tela responder rápido a cada filtro. O botão **Limpar cache** apaga tudo; o que faltar é baixado de novo |
+| **Onde roda** | Na sua máquina. Não é um serviço: cada pessoa abre o seu |
+
+### Aba "Mapas Boletim"
+
+O **mesmo mapa interpolado dos produtos** — mesma interpolação IDW, mesmo recorte pelo contorno do estado, mesmas cores —, só que sem a moldura institucional: na tela, título e logos tomariam o lugar do mapa. Na prática é o produto de mapa rodando pela tela, sem terminal: escolha o período e os mapas, ande no tempo e baixe o PNG.
+
+| | |
+|---|---|
+| **Estações** | Todas as 62 de MS, e não só as escolhidas na barra lateral: com duas ou três a superfície inventaria o estado inteiro. Por isso a aba começa com um botão — a primeira consulta demora alguns minutos, e depois vem do cache |
+| **Três modos** | **Hora a hora** mostra a leitura como a estação mandou; **por dia** e **período inteiro** mostram os produtos do boletim, cada um com a sua regra. O deslizante anda de hora em hora ou de dia em dia; no período inteiro não há deslizante, porque é um mapa só para a janela |
+| **A regra é da variável** | Não existe mais escolher "média, máxima, mínima ou soma" para qualquer coisa: a máxima do dia é a **maior das máximas horárias**, a chuva do dia é a **soma**, a umidade do mapa é a **menor mínima**. O catálogo com todas as regras está em [`app/variaveis.py`](app/variaveis.py), e a regra de cada mapa vai escrita embaixo dele |
+| **Vários mapas lado a lado** | Os mapas escolhidos saem em linha, três por linha, no mesmo instante: dá para ver a temperatura alta bater com a umidade baixa sem trocar de tela |
+| **O que o mapa mostra** | Neste tamanho, o **padrão**: a superfície interpolada e as estações como pontos. Barra de cores, grade de latitude e longitude e valor de cada estação saem do desenho — com 62 estações numa coluna de ~470 px eles se cobrem e viram borrão, e a moldura de coordenadas toma a borda inteira. A **faixa de valores** (mínimo e máximo do instante) vai escrita sob cada mapa, e a caixa **"Mostrar o valor de cada estação"** traz os números de volta, para ler ampliando no ícone de tela cheia |
+| **Variáveis** | Todas, menos a direção do vento: interpolar ângulo entre 350° e 10° daria 180°, o rumo oposto. No mapa, direção se mostra com seta, como o relatório faz sobre a rajada |
+| **Quando não desenha** | Se menos de 3 estações mediram naquele instante, a tela avisa em vez de mostrar uma superfície inventada |
+| **Baixar PNG** | Um botão por mapa, com o mesmo desenho da tela em 150 dpi. Os mapas do relatório, com título, logos e ranking, continuam saindo pelo `main.py` |
+
+### Aba "Chuva"
+
+Todos os mapas de chuva ficam aqui, e não junto dos outros, por um motivo de fundo: **a chuva é a única grandeza que precisa de dado fora do período escolhido**. Um acumulado de 96 h, ou o do mês, começa antes do início da janela da barra lateral. Nas outras abas, todo mapa respeita o período; misturar um que espia fora dele geraria exatamente a dúvida que o catálogo veio matar.
+
+| | |
+|---|---|
+| **Acumulados** | 3, 6, 12, 24, 48, 72, 96 h e o **mensal**. Cada janela conta para trás a partir do fim do período; o mensal começa no dia 1º |
+| **A carga é maior** | Por isso a aba tem o seu próprio botão: a consulta vai até o começo do mês (ou 96 h atrás, o que for mais antigo) |
+| **Quando não fecha** | Se o dado carregado não alcança o começo de uma janela, a tela avisa e não desenha aquele mapa — um acumulado de 96 h feito com 48 h de dado mostraria metade da chuva como se fosse o total |
+| **Hora a hora e por dia** | Também estão aqui, e esses respeitam o período escolhido, como as outras abas |
+
+### Aba "Mapa Navegação"
+
+Em avaliação. A **mesma superfície** da aba anterior — mesma interpolação IDW sobre as mesmas 62 estações —, mas desenhada sobre um mapa base que se aproxima e arrasta, com as cidades e as estradas por baixo. Passando o mouse numa estação sai o nome e o valor; o enquadramento sobrevive a andar no tempo, então dá para aproximar numa região e seguir as horas ali.
+
+O que ela custa, e por isso está em teste:
+
+- **É um segundo desenho de mapa.** O compartilhado é a conta (`modulos/calculos.py`); a tela e o relatório podem divergir com o tempo.
+- **O mapa base vem do Carto**, fora da SEMADESC: o navegador de cada pessoa busca as imagens lá.
+- **Convida a aproximar mais do que o dado permite.** São 62 estações, não a grade de um modelo: ampliada até o município, a interpolação parece mais segura do que é. O mapa de escala fixa do relatório é honesto quanto à sua resolução.
+
+A decisão — substituir a aba `Mapa`, conviver com ela ou não valer a manutenção — depende de a equipe usar o explorador para **explorar** ou para **conferir e baixar** o mapa do relatório.
+
+### Aba "Qualidade dos dados"
+
+Conferências que nenhum produto faz — os produtos calculam em cima do que a API mandou; aqui a pergunta é se dá para confiar nesse dado. Dá para analisar só as estações escolhidas ou **todas as de MS** de uma vez.
+
+| Verificação | O que procura |
+|---|---|
+| **Completude por dia** | Quanto das 24 horas de cada dia a estação registrou |
+| **Completude por variável** | A estação pode registrar a hora e mesmo assim não medir tudo: é aqui que aparece o sensor que parou sozinho |
+| **Valores impossíveis** | Leituras fora da faixa plausível (umidade acima de 100%, pressão fora de 800–1100 hPa) |
+| **Sensores travados** | A mesma leitura repetida por 6 horas ou mais em temperatura, umidade ou pressão. Chuva e vento ficam de fora: zero repetido ali é normal |
+| **Bateria** | Tensão mínima da estação no período; abaixo de 11,5 V costuma anteceder a estação sair do ar |
+
+Radiação levemente negativa à noite é ruído conhecido do sensor, não defeito — por isso tem uma coluna própria e não entra como valor impossível.
+
+> Se você alterar um arquivo de `app/`, o Streamlit recarrega a tela mas **não** os módulos importados. Pare com `Ctrl+C` e rode de novo.
+
+> Para o dia em curso, as horas mais recentes podem não estar no cache. Se precisar do dado de agora, limpe o cache ou consulte de novo mais tarde.
+
 ## Novos produtos
 
 Os scripts da equipe estão sendo migrados aos poucos. Cada um vira um produto em `modulos/produtos/`, reaproveitando as peças compartilhadas (API do INMET, períodos, cálculos, mapas e Excel). O passo a passo está em [`docs/como_migrar_um_script.md`](docs/como_migrar_um_script.md).
@@ -562,6 +648,14 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │   └── produtos/         # Um arquivo por produto
 │       ├── relatorio_inmet.py  # Extremos e chuva das estações automáticas
 │       └── risco_fogo.py       # Risco de fogo pela regra 30-30-30, hora a hora
+├── app/                  # Explorador em Streamlit (análise), com o seu cache local em cache/
+│   ├── explorador.py     # A tela: filtros, gráficos, mapa e verificações de qualidade
+│   ├── dados.py          # Coleta com cache, usada só pelo explorador
+│   ├── variaveis.py      # Catálogo do que se pode mapear e traçar, com a regra de cada um
+│   ├── chuva.py          # Acumulados que olham para trás do período e a cascata
+│   ├── superficie.py     # Superfície interpolada como imagem, para o mapa navegável
+│   ├── qualidade.py      # Regras de qualidade das leituras (sem tela, por isso testáveis)
+│   └── requirements.txt  # Dependências só do explorador
 ├── ferramentas/          # Scripts auxiliares (ex.: gerar o shapefile simplificado dos municípios)
 ├── tests/                # Testes automatizados (pytest), com a API do INMET simulada
 ├── .github/workflows/    # Execução automática dos testes no GitHub (GitHub Actions)
