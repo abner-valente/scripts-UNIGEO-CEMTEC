@@ -560,26 +560,28 @@ E abra:
 streamlit run app/explorador.py
 ```
 
-O navegador abre em `http://localhost:8501`. Na barra lateral ficam o período, as estações e as variáveis. Cada variável ganha o seu próprio gráfico — escalas diferentes nunca se misturam num eixo só —, com zoom por arrasto e valor ao passar o mouse. Dá para resumir por dia (média, máxima, mínima ou soma) e baixar tudo em CSV.
+O navegador abre em `http://localhost:8501`. Na barra lateral ficam o período, as estações e as **grandezas**. Cada grandeza ganha o seu gráfico — escalas diferentes nunca se misturam num eixo só —, com as séries que a equipe de meteorologia definiu: no gráfico horário, a máxima, a mínima e a média da hora; no diário, as do dia mais a compensada. **Cor separa a estação, traço separa a série**, e clicar na legenda isola uma delas. Zoom com Shift + roda, valor ao passar o mouse, e tudo baixável em CSV.
 
 | | |
 |---|---|
-| **Variáveis** | Temperatura (instantânea, máxima e mínima), umidade, chuva, radiação global, vento, rajada, direção do vento, pressão e ponto de orvalho — todas da mesma API do INMET usada pelos produtos |
+| **Grandezas** | Temperatura, umidade, pressão, vento, radiação e chuva. O que cada uma mostra — e com que regra — está no catálogo [`app/variaveis.py`](app/variaveis.py), e a regra vai escrita sob cada gráfico |
+| **A regra é da variável** | A estação mede de 10 em 10 minutos e transmite de hora em hora, já resumido: MAX e MIN são os extremos daquela hora, INS é a leitura da hora cheia, chuva e radiação são acumulados. Por isso **a máxima do dia é a maior das máximas horárias**, nunca a média delas — e não existe mais escolher "média, máxima, mínima ou soma" para qualquer variável |
 | **Vento** | Velocidade e rajada aparecem em **km/h**, como nos produtos (a API manda em m/s). A **direção** sai em pontos, e não em linha: entre 350° e 10° o vento mal mudou, mas uma linha desceria o gráfico inteiro. Para o período há uma **rosa dos ventos** por estação, com as horas de cada rumo separadas por faixa de velocidade |
 | **Cache** | O que já foi baixado fica em `cache/`, fora do controle de versão, para a tela responder rápido a cada filtro. O botão **Limpar cache** apaga tudo; o que faltar é baixado de novo |
 | **Onde roda** | Na sua máquina. Não é um serviço: cada pessoa abre o seu |
 
 ### Aba "Mapas Boletim"
 
-O **mesmo mapa interpolado dos produtos** — mesma interpolação IDW, mesmo recorte pelo contorno do estado, mesmas cores —, só que sem a moldura institucional: na tela, título e logos tomariam o lugar do mapa. Na prática é o produto de mapa rodando pela tela, sem terminal: escolha o período e as variáveis, ande no tempo e baixe o PNG.
+O **mesmo mapa interpolado dos produtos** — mesma interpolação IDW, mesmo recorte pelo contorno do estado, mesmas cores —, só que sem a moldura institucional: na tela, título e logos tomariam o lugar do mapa. Na prática é o produto de mapa rodando pela tela, sem terminal: escolha o período e os mapas, ande no tempo e baixe o PNG.
 
 | | |
 |---|---|
 | **Estações** | Todas as 62 de MS, e não só as escolhidas na barra lateral: com duas ou três a superfície inventaria o estado inteiro. Por isso a aba começa com um botão — a primeira consulta demora alguns minutos, e depois vem do cache |
-| **Deslizante** | Anda no mesmo passo da barra lateral: de hora em hora, ou de dia em dia com o resumo escolhido (média, máxima, mínima ou soma) |
-| **Um mapa por variável** | As variáveis escolhidas na barra lateral viram uma linha de mapas do mesmo instante, três por linha: dá para ver a temperatura alta bater com a umidade baixa sem trocar de tela |
+| **Três modos** | **Hora a hora** mostra a leitura como a estação mandou; **por dia** e **período inteiro** mostram os produtos do boletim, cada um com a sua regra. O deslizante anda de hora em hora ou de dia em dia; no período inteiro não há deslizante, porque é um mapa só para a janela |
+| **A regra é da variável** | Não existe mais escolher "média, máxima, mínima ou soma" para qualquer coisa: a máxima do dia é a **maior das máximas horárias**, a chuva do dia é a **soma**, a umidade do mapa é a **menor mínima**. O catálogo com todas as regras está em [`app/variaveis.py`](app/variaveis.py), e a regra de cada mapa vai escrita embaixo dele |
+| **Vários mapas lado a lado** | Os mapas escolhidos saem em linha, três por linha, no mesmo instante: dá para ver a temperatura alta bater com a umidade baixa sem trocar de tela |
 | **O que o mapa mostra** | Neste tamanho, o **padrão**: a superfície interpolada e as estações como pontos. Barra de cores, grade de latitude e longitude e valor de cada estação saem do desenho — com 62 estações numa coluna de ~470 px eles se cobrem e viram borrão, e a moldura de coordenadas toma a borda inteira. A **faixa de valores** (mínimo e máximo do instante) vai escrita sob cada mapa, e a caixa **"Mostrar o valor de cada estação"** traz os números de volta, para ler ampliando no ícone de tela cheia |
-| **Variáveis** | Todas, menos a direção do vento: interpolar ângulo entre 350° e 10° daria 180°, o rumo oposto |
+| **Variáveis** | Todas, menos a direção do vento: interpolar ângulo entre 350° e 10° daria 180°, o rumo oposto. No mapa, direção se mostra com seta, como o relatório faz sobre a rajada |
 | **Quando não desenha** | Se menos de 3 estações mediram naquele instante, a tela avisa em vez de mostrar uma superfície inventada |
 | **Baixar PNG** | Um botão por mapa, com o mesmo desenho da tela em 150 dpi. Os mapas do relatório, com título, logos e ranking, continuam saindo pelo `main.py` |
 
@@ -637,7 +639,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 ├── app/                  # Explorador em Streamlit (análise), com o seu cache local em cache/
 │   ├── explorador.py     # A tela: filtros, gráficos, mapa e verificações de qualidade
 │   ├── dados.py          # Coleta com cache, usada só pelo explorador
-│   ├── series.py         # Séries no tempo (sem tela, por isso testáveis)
+│   ├── variaveis.py      # Catálogo do que se pode mapear e traçar, com a regra de cada um
 │   ├── superficie.py     # Superfície interpolada como imagem, para o mapa navegável
 │   ├── qualidade.py      # Regras de qualidade das leituras (sem tela, por isso testáveis)
 │   └── requirements.txt  # Dependências só do explorador
