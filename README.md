@@ -565,6 +565,7 @@ O navegador abre em `http://localhost:8501`. Na barra lateral ficam o período, 
 | | |
 |---|---|
 | **Grandezas** | Temperatura, umidade, pressão, vento, radiação e chuva. O que cada uma mostra — e com que regra — está no catálogo [`app/variaveis.py`](app/variaveis.py), e a regra vai escrita sob cada gráfico |
+| **Chuva** | Sai em **cascata**, não em linha: cada barra é a chuva daquele passo, empilhada no que já tinha caído, e a barra escura no fim é o total. No horário mostra as últimas 24 horas; no diário, um dia por barra |
 | **A regra é da variável** | A estação mede de 10 em 10 minutos e transmite de hora em hora, já resumido: MAX e MIN são os extremos daquela hora, INS é a leitura da hora cheia, chuva e radiação são acumulados. Por isso **a máxima do dia é a maior das máximas horárias**, nunca a média delas — e não existe mais escolher "média, máxima, mínima ou soma" para qualquer variável |
 | **Vento** | Velocidade e rajada aparecem em **km/h**, como nos produtos (a API manda em m/s). A **direção** sai em pontos, e não em linha: entre 350° e 10° o vento mal mudou, mas uma linha desceria o gráfico inteiro. Para o período há uma **rosa dos ventos** por estação, com as horas de cada rumo separadas por faixa de velocidade |
 | **Cache** | O que já foi baixado fica em `cache/`, fora do controle de versão, para a tela responder rápido a cada filtro. O botão **Limpar cache** apaga tudo; o que faltar é baixado de novo |
@@ -584,6 +585,17 @@ O **mesmo mapa interpolado dos produtos** — mesma interpolação IDW, mesmo re
 | **Variáveis** | Todas, menos a direção do vento: interpolar ângulo entre 350° e 10° daria 180°, o rumo oposto. No mapa, direção se mostra com seta, como o relatório faz sobre a rajada |
 | **Quando não desenha** | Se menos de 3 estações mediram naquele instante, a tela avisa em vez de mostrar uma superfície inventada |
 | **Baixar PNG** | Um botão por mapa, com o mesmo desenho da tela em 150 dpi. Os mapas do relatório, com título, logos e ranking, continuam saindo pelo `main.py` |
+
+### Aba "Chuva"
+
+Todos os mapas de chuva ficam aqui, e não junto dos outros, por um motivo de fundo: **a chuva é a única grandeza que precisa de dado fora do período escolhido**. Um acumulado de 96 h, ou o do mês, começa antes do início da janela da barra lateral. Nas outras abas, todo mapa respeita o período; misturar um que espia fora dele geraria exatamente a dúvida que o catálogo veio matar.
+
+| | |
+|---|---|
+| **Acumulados** | 3, 6, 12, 24, 48, 72, 96 h e o **mensal**. Cada janela conta para trás a partir do fim do período; o mensal começa no dia 1º |
+| **A carga é maior** | Por isso a aba tem o seu próprio botão: a consulta vai até o começo do mês (ou 96 h atrás, o que for mais antigo) |
+| **Quando não fecha** | Se o dado carregado não alcança o começo de uma janela, a tela avisa e não desenha aquele mapa — um acumulado de 96 h feito com 48 h de dado mostraria metade da chuva como se fosse o total |
+| **Hora a hora e por dia** | Também estão aqui, e esses respeitam o período escolhido, como as outras abas |
 
 ### Aba "Mapa Navegação"
 
@@ -640,6 +652,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │   ├── explorador.py     # A tela: filtros, gráficos, mapa e verificações de qualidade
 │   ├── dados.py          # Coleta com cache, usada só pelo explorador
 │   ├── variaveis.py      # Catálogo do que se pode mapear e traçar, com a regra de cada um
+│   ├── chuva.py          # Acumulados que olham para trás do período e a cascata
 │   ├── superficie.py     # Superfície interpolada como imagem, para o mapa navegável
 │   ├── qualidade.py      # Regras de qualidade das leituras (sem tela, por isso testáveis)
 │   └── requirements.txt  # Dependências só do explorador
