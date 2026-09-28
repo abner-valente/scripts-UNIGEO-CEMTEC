@@ -59,6 +59,9 @@ PADRAO_MAPA = {
 PADRAO_CHUVA = ["24 h", "48 h", "72 h"]
 DPI_MAPA = 150       # serve para a tela e para o PNG baixado: um desenho só, codificado uma vez
 MAPAS_POR_LINHA = 3  # acima disso cada mapa fica estreito demais para se lerem os valores
+# Altura dos gráficos de série. Em 320 px, quatro estações com duas séries cada davam oito
+# linhas quase coladas: não dava para dizer qual era qual.
+ALTURA_GRAFICO = 420
 # Mapa navegável: enquadramento inicial em MS e o mapa base (Carto, sem chave de acesso)
 VISAO_INICIAL = {"latitude": -20.5, "longitude": -54.5, "zoom": 5.9}
 MAPA_BASE = pdk.map_styles.LIGHT
@@ -74,6 +77,13 @@ CENTRALIZAR_MAPA = """<style>
   margin-left: auto; margin-right: auto; align-self: center;
 }
 </style>"""
+# O balão do Vega corta o rótulo em 150 px, e "Campo Grande · Média compensada" não cabe —
+# vinha "Média compens…". O balão é um elemento só, pendurado no corpo da página fora do
+# gráfico, então a regra vale para todos eles. O seletor repete o caminho inteiro do estilo do
+# Streamlit: um mais curto perde na especificidade e não pega.
+BALAO_LARGO = """<style>
+#vg-tooltip-element table tr td.key { max-width: 20rem; }
+</style>"""
 
 # O streamlit redireciona a saída dos módulos, e no Windows ela vai em cp1252: sem isto, o
 # primeiro aviso com emoji (uma nova tentativa na API, por exemplo) derruba a tela inteira.
@@ -82,6 +92,13 @@ for _fluxo in (sys.stdout, sys.stderr):
         _fluxo.reconfigure(encoding="utf-8", errors="replace")
 
 st.set_page_config(page_title="Painel Meteorológico", page_icon="🌡️", layout="wide")
+
+# O Altair recusa, por padrão, mais de 5 mil linhas num gráfico — um limite pensado para
+# caderno de notas, onde o dado fica embutido no arquivo. Aqui o spec vai pelo websocket e
+# pesa cerca de 0,4 MB a cada 2,5 mil linhas. Doze estações numa semana de dado horário, com
+# três séries cada, dão 6 mil linhas: sem isto a aba caía com MaxRowsError. O limite real é a
+# legibilidade — trinta linhas no mesmo desenho já não se leem —, e não o tamanho do spec.
+alt.data_transformers.enable("default", max_rows=20000)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -133,6 +150,24 @@ def series_da_grandeza(tabela: pd.DataFrame, grandeza: str, modo: str):
     return pd.concat(pedacos, ignore_index=True).dropna(subset=["valor"]), usados
 
 
+def _apelidos(longo: pd.DataFrame) -> tuple[dict[str, str], pd.Series]:
+    """Um nome curto e seguro para cada linha do gráfico, e o nome legível de cada um.
+
+    O balão junta todas as linhas de um instante, e para isso o Vega transforma o valor desta
+    coluna em **nome de campo**. Ponto em nome de campo ali quer dizer caminho aninhado, e meia
+    dúzia de estações se chamam "Faz. Alvorada" ou parecido: o nome viraria dois níveis e o
+    balão mostraria vazio. Daí `s0`, `s1`... no dado e o nome legível só no rótulo.
+    """
+    uma_serie = longo["Série"].nunique() == 1
+    juntar = (lambda linha: linha["Estação"] if uma_serie
+              else f"{linha['Estação']} · {linha['Série']}")
+    # Por estação e depois por série: no balão, as três leituras da mesma estação ficam juntas
+    pares = longo[["Estação", "Série"]].drop_duplicates().sort_values(["Estação", "Série"])
+    legiveis = {juntar(linha): f"s{indice}" for indice, (_, linha) in enumerate(pares.iterrows())}
+    coluna = longo.apply(juntar, axis=1).map(legiveis)
+    return legiveis, coluna
+
+
 def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, casas: int = 1) -> alt.Chart:
     """As séries de uma grandeza no tempo: cor separa a estação, traço separa a série.
 
@@ -145,27 +180,50 @@ def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, 
     # primeiro (é o que o .interactive() faz por padrão).
     navegar = alt.selection_interval(bind="scales", zoom="wheel![event.shiftKey]")
     isolar = alt.selection_point(fields=["Série"], bind="legend")
+    # O cursor em qualquer lugar do gráfico marca a hora mais próxima, e não só quando cai em
+    # cima de um ponto: o Vega monta a vizinhança de cada instante e o balão traz todas as
+    # estações daquela hora de uma vez — que é a comparação que se quer fazer.
+    apontar = alt.selection_point(fields=["dt_local"], nearest=True, on="pointerover", empty=False)
+
     # Hora em cima e data embaixo, como nos meteogramas; por dia, só a data — e aí uma marca por
     # dia, senão o eixo marca de meio em meio dia e a mesma data aparece duas vezes.
     por_dia = modo == variaveis.DIA
     formato = ("[timeFormat(datum.value, '%d/%m')]" if por_dia
                else "[timeFormat(datum.value, '%H:%M'), timeFormat(datum.value, '%d/%m')]")
-    return (alt.Chart(longo)
-            .mark_line(strokeWidth=2, point=alt.OverlayMarkDef(filled=True, size=32))
-            .encode(x=alt.X("dt_local:T", title=None,
-                            axis=alt.Axis(grid=True, gridOpacity=0.25, labelAngle=0, labelExpr=formato,
-                                          labelFontSize=10, tickCount="day" if por_dia else alt.Undefined)),
-                    y=alt.Y("valor:Q", title=rotulo_y, scale=alt.Scale(zero=zero_na_base),
-                            axis=alt.Axis(grid=True, gridOpacity=0.25)),
-                    color=alt.Color("Estação:N", title=None, legend=alt.Legend(orient="bottom")),
-                    strokeDash=alt.StrokeDash("Série:N", title=None, legend=alt.Legend(orient="bottom")),
-                    opacity=alt.condition(isolar, alt.value(1), alt.value(0.12)),
-                    tooltip=[alt.Tooltip("Estação:N"), alt.Tooltip("Série:N"),
-                             alt.Tooltip("dt_local:T", title="Quando",
-                                         format="%d/%m" if por_dia else "%d/%m %H:%M"),
-                             alt.Tooltip("valor:Q", title="Valor", format=f".{casas}f")])
-            .properties(height=320)
-            .add_params(navegar, isolar))
+    nomes, coluna_chave = _apelidos(longo)
+    dados = longo.assign(chave=coluna_chave)
+
+    eixo_x = alt.X("dt_local:T", title=None,
+                   axis=alt.Axis(grid=True, gridOpacity=0.25, labelAngle=0, labelExpr=formato,
+                                 labelFontSize=10, tickCount="day" if por_dia else alt.Undefined))
+    base = alt.Chart(dados).encode(
+        x=eixo_x,
+        y=alt.Y("valor:Q", title=rotulo_y, scale=alt.Scale(zero=zero_na_base),
+                axis=alt.Axis(grid=True, gridOpacity=0.25)),
+        color=alt.Color("Estação:N", title=None, legend=alt.Legend(orient="bottom")),
+        opacity=alt.condition(isolar, alt.value(1), alt.value(0.12)))
+    linhas = (base.mark_line(strokeWidth=2, point=alt.OverlayMarkDef(filled=True, size=32))
+              .encode(strokeDash=alt.StrokeDash("Série:N", title=None,
+                                                legend=alt.Legend(orient="bottom")))
+              .add_params(navegar, isolar))
+    # O ponto da hora apontada cresce em todas as linhas: sem isto, o balão diz números que quem
+    # olha não sabe a qual altura do gráfico pertencem.
+    destaque = base.mark_point(size=150, filled=True).transform_filter(apontar)
+
+    balao = [alt.Tooltip("dt_local:T", title="Quando", format="%d/%m" if por_dia else "%d/%m %H:%M")]
+    balao += [alt.Tooltip(f"{apelido}:Q", title=nome, format=f".{casas}f")
+              for nome, apelido in nomes.items()]
+    # O pivô é o que permite um balão só com todas as linhas: ele passa as séries daquele
+    # instante de linhas para colunas, e o balão lê uma linha só.
+    regua = (alt.Chart(dados)
+             .transform_pivot("chave", value="valor", groupby=["dt_local"])
+             .mark_rule(color="#9a9a9a", strokeWidth=1)
+             .encode(x=alt.X("dt_local:T", title=None),
+                     opacity=alt.condition(apontar, alt.value(0.5), alt.value(0)),
+                     tooltip=balao)
+             .add_params(apontar))
+
+    return alt.layer(linhas, destaque, regua).properties(height=ALTURA_GRAFICO)
 
 
 def barras_do_acumulado(valores: pd.Series, unidade: str, quantas: int | None) -> alt.Chart:
@@ -485,6 +543,7 @@ with aba_series:
     # outras têm a sua própria. Na lateral ela parecia um filtro geral, e não era.
     modo_grafico = MODOS_GRAFICO[st.radio("Agregação", list(MODOS_GRAFICO), horizontal=True,
                                           key="modo_serie")]
+    st.markdown(BALAO_LARGO, unsafe_allow_html=True)
     st.caption(f"{len(tabela)} leituras de {tabela['Estação'].nunique()} estações · "
                f"{len(tabela) / (horas_esperadas * len(nomes)):.0%} das horas do período têm registro")
     if not escolhidas:
