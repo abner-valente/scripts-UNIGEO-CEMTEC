@@ -102,11 +102,87 @@ def test_direcao_do_vento_nao_vira_mapa():
     assert direcao not in variaveis.disponiveis(variaveis.HORA, variaveis.MAPA)
 
 
-def test_compensada_so_aparece_em_grafico():
-    """Ela é uma estatística do dia inteiro: como mapa, a equipe não quis."""
+def test_compensada_do_periodo_e_a_media_das_diarias():
+    """Aplicar a fórmula ao período inteiro casaria as 9 h de um dia com a máxima de outro."""
+    dois_dias = pd.concat([
+        um_dia(TEM_INS=[20.0] * 24, TEM_MAX=[30.0] * 24, TEM_MIN=[10.0] * 24),
+        leituras("Bonito", "2026-09-18 01:00", 24,
+                 TEM_INS=[30.0] * 24, TEM_MAX=[40.0] * 24, TEM_MIN=[20.0] * 24)], ignore_index=True)
+
     compensada = variaveis.por_nome("Temperatura média compensada")
-    assert compensada.onde == (variaveis.GRAFICO,)
-    assert compensada not in variaveis.disponiveis(variaveis.DIA, variaveis.MAPA)
+
+    # dia 17: (20 + 2*20 + 10 + 30)/5 = 20 ; dia 18: (30 + 2*30 + 20 + 40)/5 = 30
+    assert variaveis.calcular(compensada, dois_dias) == pytest.approx(25.0)
+
+
+def test_dia_incompleto_sai_da_media_do_periodo_em_vez_de_zera_la():
+    completo = um_dia(TEM_INS=[20.0] * 24, TEM_MAX=[30.0] * 24, TEM_MIN=[10.0] * 24)
+    furado = leituras("Bonito", "2026-09-18 01:00", 24,
+                      TEM_INS=[30.0] * 24, TEM_MAX=[40.0] * 24, TEM_MIN=[20.0] * 24)
+    furado.loc[furado["dt_local"].dt.hour == 9, "TEM_INS"] = np.nan
+
+    valor = variaveis.calcular(variaveis.por_nome("Temperatura média compensada"),
+                               pd.concat([completo, furado], ignore_index=True))
+
+    assert valor == pytest.approx(20.0)  # só o dia 17 entrou
+
+
+def test_a_media_do_periodo_e_a_compensada_e_nao_a_media_das_horas_cheias():
+    """A compensada é a que fecha a média de um mês no INMET e compara com a normal."""
+    do_periodo = {produto.nome for produto in variaveis.disponiveis(variaveis.PERIODO, variaveis.MAPA)}
+
+    assert "Temperatura média compensada" in do_periodo
+    assert "Temperatura média" not in do_periodo   # essa é do dia
+    assert "Temperatura média" in {produto.nome
+                                   for produto in variaveis.disponiveis(variaveis.DIA, variaveis.MAPA)}
+
+
+def test_umidade_media_sai_da_hora_cheia_no_dia_e_no_periodo():
+    media = variaveis.por_nome("Umidade média")
+    assert media.colunas == ("UMD_INS",) and media.calculo == "media"
+    assert media.modos == (variaveis.DIA, variaveis.PERIODO)
+    assert variaveis.MAPA in media.onde
+
+
+# =====================================================
+# A SETA DA DIREÇÃO
+# =====================================================
+def test_a_seta_da_rajada_aponta_a_direcao_da_hora_da_rajada():
+    """É a rajada daquela hora que está no mapa; a direção tem de ser a mesma hora."""
+    dia = um_dia(VEN_RAJ=[10.0] * 23 + [80.0], VEN_DIR=[180.0] * 23 + [45.0])
+
+    setas = variaveis.direcoes(variaveis.por_nome("Rajada máxima"), dia)
+
+    assert setas["Bonito"] == pytest.approx(45.0)
+
+
+def test_a_seta_do_vento_medio_e_a_resultante_e_nao_a_media_dos_angulos():
+    """12 h de norte e 12 h de sul não sopraram de leste: elas se cancelam."""
+    dia = um_dia(VEN_VEL=[10.0] * 24, VEN_DIR=[0.0] * 12 + [180.0] * 12)
+
+    assert np.isnan(variaveis.direcoes(variaveis.por_nome("Vento médio"), dia)["Bonito"])
+    assert np.mean([0.0] * 12 + [180.0] * 12) == 90.0  # o que a média dos ângulos diria
+
+
+def test_a_resultante_pesa_cada_hora_pela_velocidade():
+    dia = um_dia(VEN_VEL=[1.0] * 12 + [20.0] * 12, VEN_DIR=[0.0] * 12 + [180.0] * 12)
+    assert variaveis.direcoes(variaveis.por_nome("Vento médio"), dia)["Bonito"] == pytest.approx(180.0)
+
+
+def test_a_resultante_atravessa_o_norte_sem_apontar_para_o_sul():
+    """O caso que a média dos ângulos erra: 350° e 10° dão 0°, e não 180°."""
+    dia = um_dia(VEN_VEL=[10.0] * 24, VEN_DIR=[350.0] * 12 + [10.0] * 12)
+    assert variaveis.direcoes(variaveis.por_nome("Vento médio"), dia)["Bonito"] == pytest.approx(0.0)
+
+
+def test_quem_nao_e_vento_nao_leva_seta():
+    dia = um_dia(TEM_MAX=[20.0] * 24, VEN_DIR=[90.0] * 24)
+    assert variaveis.direcoes(variaveis.por_nome("Temperatura máxima"), dia).empty
+
+
+def test_sem_a_direcao_na_api_o_mapa_de_vento_sai_sem_setas():
+    dia = um_dia(VEN_RAJ=[10.0] * 24)
+    assert variaveis.direcoes(variaveis.por_nome("Rajada máxima"), dia).empty
 
 
 # =====================================================

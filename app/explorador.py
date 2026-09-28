@@ -398,7 +398,7 @@ def base_cartografica() -> mapas.BaseCartografica:
 
 @st.cache_data(show_spinner=False, max_entries=30)
 def mapa_do_instante(valores: pd.Series, titulo: str, unidade: str, paleta: str, decimais: int,
-                     quando: str, rotulos: bool, niveis=None) -> bytes | None:
+                     quando: str, rotulos: bool, niveis=None, direcoes=None) -> bytes | None:
     """PNG do mapa interpolado de um instante, ou None se faltarem estações para interpolar.
 
     É o mesmo desenho dos produtos — mesmo IDW, mesmo recorte pelo estado, mesmas cores —, só que
@@ -406,12 +406,18 @@ def mapa_do_instante(valores: pd.Series, titulo: str, unidade: str, paleta: str,
     porque cada passo do deslizante redesenha uma variável por vez: voltar a uma hora já vista não
     paga o desenho de novo.
     """
-    gdf = mapas.preparar_pontos(_com_coordenadas(valores, titulo), titulo, quando)
+    pontos = _com_coordenadas(valores, titulo)
+    if direcoes is not None:
+        # A direção não vira superfície: vai como seta sobre a estação, e o valor do mapa dá o
+        # comprimento dela.
+        pontos["Direção (°)"] = pontos["Estação"].map(direcoes)
+    gdf = mapas.preparar_pontos(pontos, titulo, quando)
     if gdf is None or len(gdf) < config.MIN_ESTACOES_INTERPOLACAO:
         return None
 
     espec = mapas.EspecMapa(tabela="", coluna=titulo, titulo=titulo, subtitulo=quando, arquivo="",
-                            cmap=paleta, ranking="", decimais=decimais, unidade=f"{titulo} ({unidade})")
+                            cmap=paleta, ranking="", decimais=decimais, unidade=f"{titulo} ({unidade})",
+                            direcao_vento=direcoes is not None)
     figura = mapas.mapa_interpolado(gdf, espec, base_cartografica(), tela=mapas.Tela(rotulos=rotulos),
                                     niveis=niveis)
     if figura is None:
@@ -445,7 +451,7 @@ def _com_coordenadas(valores: pd.Series, nome_variavel: str) -> pd.DataFrame:
 
 
 def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, carimbo: str,
-                   rotulos: bool, niveis=None) -> None:
+                   rotulos: bool, niveis=None, direcoes=None) -> None:
     """Uma coluna da linha de mapas: nome do produto, desenho, a regra e o botão de baixar."""
     st.markdown(f"**{produto.nome}**")
     medida = produto.nome.lower()
@@ -454,7 +460,7 @@ def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, 
         return
 
     png = mapa_do_instante(valores, produto.nome, produto.unidade, produto.paleta,
-                           produto.decimais, rotulo, rotulos, niveis)
+                           produto.decimais, rotulo, rotulos, niveis, direcoes)
     if png is None:
         st.warning(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram {medida} em {rotulo}: "
                    "com tão poucos pontos a superfície inventaria mais do que mostra.")
@@ -722,9 +728,11 @@ with aba_mapa:
                         for coluna_tela, nome in zip(st.columns(por_linha), linha):
                             with coluna_tela:
                                 produto = variaveis.por_nome(nome)
+                                setas = variaveis.direcoes(produto, fatia)
                                 painel_do_mapa(produto, variaveis.por_estacao(produto, fatia),
                                                rotulo, carimbo, rotulos,
-                                               niveis_da_escala(produto, horas_janela, ajustar))
+                                               niveis_da_escala(produto, horas_janela, ajustar),
+                                               None if setas.empty else setas)
 
                 st.caption(f"Interpolação IDW (potência {config.IDW_POTENCIA}, {config.IDW_VIZINHOS} vizinhos) "
                            f"sobre as {len(estacoes)} estações do estado, a mesma dos relatórios. Neste tamanho "
