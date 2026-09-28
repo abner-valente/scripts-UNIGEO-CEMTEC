@@ -2,7 +2,7 @@
 
 Durante a reestruturação dos scripts (versão 0.1.1), alguns pontos ficaram em aberto porque **mudam os resultados** e dependem de uma decisão meteorológica. Para cada um estão a situação atual, o problema e as opções. As respostas podem ser anotadas no campo **Decisão**.
 
-> **Situação em 17/09/2026:** as questões 1 a 5 (versão 0.1.1) foram respondidas e já estão aplicadas no código. Nas questões 6 a 8, do produto `risco_fogo`, a equipe confirmou as aproximações de método (questões 6 e 7); continuam marcados com ⚠️ apenas os limiares e o critério de gerar mapa horário, na questão 8.
+> **Situação em 28/09/2026:** todas as questões foram respondidas. As de 1 a 5 (versão 0.1.1) já estavam aplicadas; as de 6 a 8, do produto `risco_fogo`, tiveram o método confirmado em 17/09/2026 e os **limiares 30-30-30 confirmados em 28/09/2026**, junto com a entrada do risco de fogo no painel.
 
 Nas descrições abaixo, os horários estão em UTC (horário de MS = UTC−4).
 
@@ -141,4 +141,6 @@ As decisões foram tomadas com o programador em 16/09/2026. Os pontos marcados c
 
 **Decisão (21/09/2026):** o período ganha três gráficos, que o dia e o tempo real não têm, porque só faz sentido comparar dias entre si: as **horas de cada estação em cada nível**, um **calendário de estação × dia** (o pior nível de cada dia) e, para **cada dia**, as horas em que cada estação atendeu cada condição. Na mesma revisão foi corrigida a contagem de dias: a leitura que fecha as 24 h leva o carimbo 00:00 do dia seguinte, e por isso uma consulta de sete dias produzia oito dias, o último com uma hora só.
 
-⚠️ **A confirmar:** os limiares (≥ 30 °C, ≤ 30 %, ≥ 30 km/h) e o critério de gerar mapa horário só a partir do risco alto.
+✅ **Confirmado pela equipe (28/09/2026):** os limiares são ≥ 30 °C, ≤ 30 % e ≥ 30 km/h.
+
+Sobre o critério de gerar mapa horário só a partir do risco alto: no **painel** ele deixou de decidir quais mapas existem e passou a ser uma caixa que faz o deslizante **parar só nessas horas** — na tela, quem escolhe a hora é quem olha, e o mapa de qualquer hora está a um passo de distância. No produto (`main.py`), onde cada mapa vira um arquivo em disco, o critério continua valendo como filtro, com `--hrtodas` para gerar todas.
