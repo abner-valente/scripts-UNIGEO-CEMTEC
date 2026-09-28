@@ -24,6 +24,7 @@ from matplotlib.cm import ScalarMappable
 from matplotlib.colors import BoundaryNorm, Normalize
 from matplotlib.figure import Figure
 
+from app import animacao
 from app import chuva as chuva_calc
 from app import dados as coleta
 from app import qualidade
@@ -58,6 +59,9 @@ PADRAO_MAPA = {
 # Acumulados que já vêm escolhidos na aba da chuva: os três do boletim
 PADRAO_CHUVA = ["24 h", "48 h", "72 h"]
 DPI_MAPA = 150       # serve para a tela e para o PNG baixado: um desenho só, codificado uma vez
+# O GIF é feito de dezenas de quadros: em 150 dpi cada um sairia com 1780 px e o arquivo
+# passaria de 20 MB. Em 72 dpi o quadro tem 854 px — legível na tela e ~68 KB no GIF.
+DPI_GIF = 72
 MAPAS_POR_LINHA = 3  # acima disso cada mapa fica estreito demais para se lerem os valores
 # Altura dos gráficos de série. Em 320 px, quatro estações com duas séries cada davam oito
 # linhas quase coladas: não dava para dizer qual era qual.
@@ -407,7 +411,8 @@ def base_cartografica() -> mapas.BaseCartografica:
 
 @st.cache_data(show_spinner=False, max_entries=30)
 def mapa_do_instante(valores: pd.Series, titulo: str, unidade: str, paleta: str, decimais: int,
-                     quando: str, rotulos: bool, niveis=None, direcoes=None) -> bytes | None:
+                     quando: str, rotulos: bool, niveis=None, direcoes=None,
+                     dpi: int = DPI_MAPA) -> bytes | None:
     """PNG do mapa interpolado de um instante, ou None se faltarem estações para interpolar.
 
     É o mesmo desenho dos produtos — mesmo IDW, mesmo recorte pelo estado, mesmas cores —, só que
@@ -433,7 +438,7 @@ def mapa_do_instante(valores: pd.Series, titulo: str, unidade: str, paleta: str,
         return None
     # Codifica uma vez só: os mesmos bytes vão para a tela e para o botão de baixar
     arquivo = io.BytesIO()
-    figura.savefig(arquivo, format="png", dpi=DPI_MAPA, bbox_inches="tight", facecolor="white")
+    figura.savefig(arquivo, format="png", dpi=dpi, bbox_inches="tight", facecolor="white")
     return arquivo.getvalue()
 
 
@@ -485,6 +490,82 @@ def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, 
     arquivo = produto.nome.lower().replace(" ", "_")
     st.download_button(f"Baixar PNG — {medida}", png, mime="image/png", key=f"baixar_{produto.nome}",
                        file_name=f"Mapa_{arquivo}_{carimbo}.png")
+
+
+def escala_do_periodo(produto: variaveis.Produto, leituras: pd.DataFrame, horas_janela):
+    """Os níveis de cor que valem para todos os quadros do GIF.
+
+    Num GIF a escala **tem** de ser a mesma do começo ao fim: esticada a cada quadro, a mancha
+    fica igual e só as cores piscam, e quem olha vê variação onde não houve. Quando o produto não
+    tem escala fixa — a pressão —, a faixa sai dos extremos da janela inteira.
+    """
+    niveis = niveis_da_escala(produto, horas_janela)
+    if niveis is not None:
+        return niveis
+    coluna = produto.colunas[0]
+    if coluna not in leituras or leituras[coluna].dropna().empty:
+        return None
+    menor, maior = float(leituras[coluna].min()), float(leituras[coluna].max())
+    return np.linspace(menor, maior, 21) if maior > menor else None
+
+
+@st.cache_data(show_spinner=False, max_entries=3)
+def gif_do_mapa(nome_produto: str, leituras: pd.DataFrame, modo: str, momentos: tuple,
+                rotulos: bool, niveis=None) -> bytes | None:
+    """O mapa quadro a quadro, do começo ao fim da janela, como GIF.
+
+    Guarda poucos na memória (`max_entries`) de propósito: cada um pesa alguns MB, e o painel
+    pode estar servindo várias pessoas ao mesmo tempo.
+    """
+    produto = variaveis.por_nome(nome_produto)
+    barra = st.progress(0.0, text=f"Desenhando o GIF de {produto.nome.lower()}")
+    quadros = []
+    for indice, momento in enumerate(momentos, start=1):
+        fatia = variaveis.recorte(leituras, modo, momento)
+        setas = variaveis.direcoes(produto, fatia)
+        png = mapa_do_instante(variaveis.por_estacao(produto, fatia), produto.nome, produto.unidade,
+                               produto.paleta, produto.decimais, animacao.carimbo(momento, modo == variaveis.DIA),
+                               rotulos, niveis, None if setas.empty else setas, DPI_GIF)
+        if png is not None:
+            quadros.append((png, animacao.carimbo(momento, modo == variaveis.DIA)))
+        barra.progress(indice / len(momentos),
+                       text=f"Desenhando o GIF de {produto.nome.lower()} — quadro {indice} de {len(momentos)}")
+    barra.empty()
+    return animacao.montar(quadros) if quadros else None
+
+
+def painel_do_gif(produto: variaveis.Produto, leituras: pd.DataFrame, modo: str, paradas: list,
+                  rotulos: bool, horas_janela) -> None:
+    """Botão que monta a animação do período, e a animação quando ela fica pronta.
+
+    Atrás de um botão porque custa: um quadro por hora da janela, desenhados um a um. Quem só
+    quer o mapa da hora não deve pagar por isso.
+    """
+    momentos = animacao.passos(paradas)
+    salto = animacao.intervalo(paradas, momentos)
+    chave = f"gif_{produto.nome}"
+    if st.button(f"Gerar GIF — {produto.nome.lower()}", key=f"botao_{chave}",
+                 help=f"{len(momentos)} quadros, um a cada "
+                      f"{salto} {'dia' if modo == variaveis.DIA else 'hora'}{'s' if salto > 1 else ''}."):
+        st.session_state[chave] = True
+
+    if not st.session_state.get(chave):
+        return
+
+    gif = gif_do_mapa(produto.nome, leituras, modo, tuple(momentos), rotulos,
+                      escala_do_periodo(produto, leituras, horas_janela))
+    if gif is None:
+        st.warning("Não houve dado suficiente para desenhar a sequência.")
+        return
+
+    st.image(gif, width="stretch")
+    passo = f"{salto} {'dia' if modo == variaveis.DIA else 'hora'}{'s' if salto > 1 else ''}"
+    st.caption(f"{len(momentos)} quadros, um a cada {passo}, com a escala de cores travada para "
+               f"o período inteiro. {len(gif) / 1e6:.1f} MB.")
+    st.download_button(f"Baixar GIF — {produto.nome.lower()}", gif, mime="image/gif",
+                       key=f"baixar_{chave}",
+                       file_name=f"Animacao_{produto.nome.lower().replace(' ', '_')}_"
+                                 f"{momentos[0]:%Y%m%d}_a_{momentos[-1]:%Y%m%d}.gif")
 
 
 def painel_da_chuva(rotulo: str, valores: pd.Series, janela: str, rotulos: bool, niveis=None) -> None:
@@ -743,6 +824,10 @@ with aba_mapa:
                                                rotulo, carimbo, rotulos,
                                                niveis_da_escala(produto, horas_janela, ajustar),
                                                None if setas.empty else setas)
+                                # No período inteiro não há sequência: é um mapa só para a janela
+                                if modo != variaveis.PERIODO:
+                                    painel_do_gif(produto, leituras_mapa, modo, paradas, rotulos,
+                                                  horas_janela)
 
                 st.caption(f"Interpolação IDW (potência {config.IDW_POTENCIA}, {config.IDW_VIZINHOS} vizinhos) "
                            f"sobre as {len(estacoes)} estações do estado, a mesma dos relatórios. Neste tamanho "
