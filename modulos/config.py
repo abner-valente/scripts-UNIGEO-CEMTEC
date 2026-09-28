@@ -64,6 +64,12 @@ HORAS_BUSCA_TEMPO_REAL = 96    # histórico baixado no modo tempo real (cobre o 
 # =====================================================
 LON_MIN, LON_MAX = -58.5, -50.5
 LAT_MIN, LAT_MAX = -24.5, -17.0
+# Até que distância do enquadramento uma estação de outro estado ainda ajuda a interpolar. Em MS
+# as estações ficam a ~78 km umas das outras, e o IDW olha para as 8 mais próximas: numa célula
+# da divisa, uma estação a 165 km do enquadramento pode estar entre elas. Sem essa margem, os 8
+# vizinhos de quem está na borda ficam todos do lado de cá, e a superfície extrapola tendo dado
+# do outro lado. Em MS isso traz 54 estações de PR, MT, GO, SP e MG.
+MARGEM_RECORTE = 1.5           # graus (~165 km)
 DPI = 300
 DPI_GRAFICOS = 150  # gráficos são texto e barras: 150 dpi basta e deixa os arquivos leves
 

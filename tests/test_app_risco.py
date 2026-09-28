@@ -14,6 +14,7 @@ FUSO = "America/Campo_Grande"
 ESTACOES = pd.DataFrame({
     "Estação": ["Bonito", "Corumba"],
     "CD_ESTACAO": ["A001", "A002"],
+    "SG_ESTADO": ["MS", "MS"],
     "VL_LATITUDE": [-21.1, -19.0],
     "VL_LONGITUDE": [-56.5, -57.6],
 })
@@ -118,6 +119,21 @@ def test_a_tela_e_o_produto_dao_o_mesmo_nivel_hora_a_hora():
 
     assert do_produto.sort_index().equals(risco_fogo.niveis_por_hora(do_painel).sort_index())
     assert do_produto.max() == 3          # 31 °C, 20 % e 32,4 km/h na mesma hora
+
+
+def test_as_vizinhas_alimentam_a_grade_e_nao_a_tabela():
+    """As de fora seguram a superfície na divisa; o produto continua sendo do estado."""
+    cadastro = pd.concat([ESTACOES, pd.DataFrame({
+        "Estação": ["Vizinha"], "CD_ESTACAO": ["A900"], "SG_ESTADO": ["GO"],
+        "VL_LATITUDE": [-18.0], "VL_LONGITUDE": [-52.0]})], ignore_index=True)
+    tabela = pd.concat([calmo("Bonito"), calmo("Vizinha")], ignore_index=True)
+
+    completas = risco.por_estacao(tabela, cadastro.assign(SG_ESTADO=cadastro["SG_ESTADO"].fillna("MS")))
+    do_produto = risco.da_uf(completas)
+
+    assert len(completas) == 2                                  # as duas entram na conta
+    assert [estacao["Estação"] for estacao, _ in do_produto] == ["Bonito"]
+    assert list(risco.resumo(do_produto, DIA)["Estação"]) == ["Bonito"]
 
 
 # =====================================================

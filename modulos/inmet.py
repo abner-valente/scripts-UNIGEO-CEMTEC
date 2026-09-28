@@ -22,6 +22,8 @@ def _sessao() -> requests.Session:
 # (temperatura, umidade, chuva, vento, pressão, radiação, ponto de orvalho...) viram número.
 COLUNAS_TEXTO = ["DC_NOME", "UF", "CD_ESTACAO", "DT_MEDICAO", "HR_MEDICAO"]
 PALAVRAS_MINUSCULAS = {"da", "das", "de", "do", "dos", "e"}
+# A API marca cada estação como "Operante" ou "Pane"; só a primeira tem o que responder.
+SITUACAO_OPERANTE = "operante"
 
 
 class ErroINMET(Exception):
@@ -69,13 +71,46 @@ def formatar_nome_estacao(nome) -> str:
     )
 
 
-def listar_estacoes(uf: str = config.UF) -> pd.DataFrame:
-    """Estações automáticas da UF, com coordenadas numéricas e a coluna 'Estação' (nome formatado)."""
+def _todas_as_estacoes() -> pd.DataFrame:
+    """A lista inteira do INMET (o país todo), com coordenadas numéricas e o nome formatado.
+
+    Fora as estações em pane: a API as devolve junto com as operantes, e pedir dados delas é
+    consulta que sempre volta vazia. Em MS são 3 das 62.
+    """
     estacoes = pd.DataFrame(_consultar(config.URL_ESTACOES, config.TIMEOUT_ESTACOES))
-    estacoes = estacoes[estacoes["SG_ESTADO"] == uf].copy()
+    if "CD_SITUACAO" in estacoes:
+        estacoes = estacoes[estacoes["CD_SITUACAO"].str.strip().str.casefold() == SITUACAO_OPERANTE]
+    estacoes = estacoes.copy()
     for coluna in ("VL_LATITUDE", "VL_LONGITUDE"):
         estacoes[coluna] = pd.to_numeric(estacoes[coluna], errors="coerce")
     estacoes["Estação"] = estacoes["DC_NOME"].map(formatar_nome_estacao)
+    return estacoes.dropna(subset=["VL_LATITUDE", "VL_LONGITUDE"])
+
+
+def estacoes_do_recorte(limites: tuple[float, float, float, float] | None = None,
+                        margem: float = config.MARGEM_RECORTE) -> pd.DataFrame:
+    """As estações que ajudam a interpolar o enquadramento — de qualquer estado.
+
+    `limites` é (oeste, leste, sul, norte); sem eles, o enquadramento da UF em config. A margem
+    existe porque a estação do outro lado da divisa descreve a borda tão bem quanto a de cá: sem
+    ela, os 8 vizinhos que o IDW enxerga numa célula da divisa estão todos para dentro, e a
+    superfície extrapola tendo dado disponível.
+
+    A coluna `SG_ESTADO` continua ali: é por ela que se separa o que é do produto do que é só
+    apoio para a conta.
+    """
+    oeste, leste, sul, norte = limites or (config.LON_MIN, config.LON_MAX,
+                                           config.LAT_MIN, config.LAT_MAX)
+    estacoes = _todas_as_estacoes()
+    dentro = (estacoes["VL_LONGITUDE"].between(oeste - margem, leste + margem)
+              & estacoes["VL_LATITUDE"].between(sul - margem, norte + margem))
+    return estacoes[dentro].copy()
+
+
+def listar_estacoes(uf: str = config.UF) -> pd.DataFrame:
+    """Estações automáticas da UF, com coordenadas numéricas e a coluna 'Estação' (nome formatado)."""
+    estacoes = _todas_as_estacoes()
+    estacoes = estacoes[estacoes["SG_ESTADO"] == uf].copy()
     return estacoes
 
 

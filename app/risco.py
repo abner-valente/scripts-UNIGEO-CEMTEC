@@ -46,6 +46,17 @@ def por_estacao(leituras: pd.DataFrame, estacoes: pd.DataFrame) -> list:
             for nome, desta in validas.groupby("Estação", sort=False) if nome in cadastro]
 
 
+def da_uf(completas: list, uf: str = config.UF) -> list:
+    """Só as estações do produto.
+
+    As de apoio — de fora do estado — alimentam as grades horárias, porque o risco de uma célula
+    da divisa depende do que acontece dos dois lados. Mas elas não entram na tabela, nos gráficos
+    nem na contagem de estações em risco: o produto é do estado.
+    """
+    return [(estacao, leituras) for estacao, leituras in completas
+            if estacao.get("SG_ESTADO") == uf]
+
+
 def resumo(completas: list, periodo: config.Periodo) -> pd.DataFrame:
     """Uma linha por estação, da de maior risco para a de menor — a tabela da planilha do produto."""
     if not completas:
