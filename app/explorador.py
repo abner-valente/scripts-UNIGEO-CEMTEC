@@ -442,7 +442,6 @@ with st.sidebar:
                                 default=["Temperatura", "Chuva", "Vento"],
                                 help="Cada grandeza ganha o seu gráfico, com as séries que a equipe "
                                      "de meteorologia definiu.")
-    modo_grafico = MODOS_GRAFICO[st.radio("Agregação", list(MODOS_GRAFICO), horizontal=True)]
 
     st.divider()
     guardadas, megabytes = coleta.tamanho_do_cache()
@@ -482,6 +481,10 @@ aba_series, aba_mapa, aba_chuva, aba_navegavel, aba_qualidade = st.tabs(
 # SÉRIES TEMPORAIS
 # =====================================================
 with aba_series:
+    # A agregação mora aqui, e não na barra lateral: esta é a única aba em que ela vale, e as
+    # outras têm a sua própria. Na lateral ela parecia um filtro geral, e não era.
+    modo_grafico = MODOS_GRAFICO[st.radio("Agregação", list(MODOS_GRAFICO), horizontal=True,
+                                          key="modo_serie")]
     st.caption(f"{len(tabela)} leituras de {tabela['Estação'].nunique()} estações · "
                f"{len(tabela) / (horas_esperadas * len(nomes)):.0%} das horas do período têm registro")
     if not escolhidas:
