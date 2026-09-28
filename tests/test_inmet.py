@@ -43,6 +43,45 @@ def test_formatar_nome_estacao(original, formatado):
     assert inmet.formatar_nome_estacao(original) == formatado
 
 
+def estacao(codigo, nome, uf, lat, lon, situacao="Operante") -> dict:
+    return {"CD_ESTACAO": codigo, "DC_NOME": nome, "SG_ESTADO": uf, "CD_SITUACAO": situacao,
+            "VL_LATITUDE": str(lat), "VL_LONGITUDE": str(lon)}
+
+
+def test_estacoes_em_pane_ficam_de_fora(monkeypatch):
+    """Pedir dados de uma estação em pane é consulta que sempre volta vazia. Em MS são 3 das 62."""
+    trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa([
+        estacao("A702", "CAMPO GRANDE", "MS", -20.4, -54.7),
+        estacao("A999", "ESTACAO MORTA", "MS", -21.0, -55.0, situacao="Pane"),
+    ]))
+
+    assert inmet.listar_estacoes("MS")["CD_ESTACAO"].tolist() == ["A702"]
+
+
+def test_o_recorte_traz_as_vizinhas_de_outros_estados(monkeypatch):
+    """A estação do outro lado da divisa descreve a borda tão bem quanto a de cá."""
+    trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa([
+        estacao("A702", "CAMPO GRANDE", "MS", -20.4, -54.7),
+        estacao("A001", "VIZINHA DE GOIAS", "GO", -18.0, -52.0),      # logo acima do enquadramento
+        estacao("A002", "LONGE DEMAIS", "AM", -3.0, -60.0),
+    ]))
+
+    recorte = inmet.estacoes_do_recorte()
+
+    assert sorted(recorte["CD_ESTACAO"]) == ["A001", "A702"]
+    assert set(recorte["SG_ESTADO"]) == {"MS", "GO"}      # a coluna separa produto de apoio
+
+
+def test_o_recorte_respeita_a_margem(monkeypatch):
+    """Sem margem, os 8 vizinhos de uma célula da divisa ficam todos para dentro."""
+    logo_fora = {"CD_ESTACAO": "A003", "DC_NOME": "PERTO", "SG_ESTADO": "PR", "CD_SITUACAO": "Operante",
+                 "VL_LATITUDE": "-25.5", "VL_LONGITUDE": "-53.0"}   # 1° abaixo do enquadramento
+    trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa([logo_fora]))
+
+    assert len(inmet.estacoes_do_recorte()) == 1                     # com a margem de 1,5°, entra
+    assert inmet.estacoes_do_recorte(margem=0.0).empty               # sem margem, fica de fora
+
+
 def test_listar_estacoes_filtra_a_uf_e_converte_coordenadas(monkeypatch):
     lista = [
         {"CD_ESTACAO": "A702", "DC_NOME": "CAMPO GRANDE", "SG_ESTADO": "MS", "VL_LATITUDE": "-20.44", "VL_LONGITUDE": "-54.72"},

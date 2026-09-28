@@ -55,13 +55,17 @@ def limites() -> list[float]:
 
 
 def superficie_png(pontos: pd.DataFrame, coluna: str, grade_fina: Malha, paleta: str,
-                   niveis=None, opacidade: float = OPACIDADE) -> bytes:
+                   niveis=None, opacidade: float = OPACIDADE, apoio: pd.DataFrame | None = None) -> bytes:
     """PNG da superfície IDW, transparente fora de Mato Grosso do Sul.
 
     Com `niveis`, as cores seguem a escala fixa do catálogo — a mesma do mapa do boletim, para
     os dois não contarem histórias diferentes. Sem eles, a escala se ajusta ao dado.
+
+    `apoio` são as estações de fora do estado: entram na interpolação para segurar a borda, mas
+    não na faixa de cores, que é do produto.
     """
-    grade = calculos.interpolar_idw(pontos["Longitude"], pontos["Latitude"], pontos[coluna],
+    entrada = pontos if apoio is None or apoio.empty else pd.concat([pontos, apoio], ignore_index=True)
+    grade = calculos.interpolar_idw(entrada["Longitude"], entrada["Latitude"], entrada[coluna],
                                     grade_fina.lon, grade_fina.lat,
                                     config.IDW_VIZINHOS, config.IDW_POTENCIA)
     if niveis is None:

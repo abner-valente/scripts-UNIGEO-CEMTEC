@@ -170,8 +170,14 @@ def mapa_pontual(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartografica
 
 def mapa_interpolado(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartografica,
                      caminho: Path | None = None, tela: Tela | None = None,
-                     niveis=None) -> Figure | None:
+                     niveis=None, apoio=None) -> Figure | None:
     """Superfície IDW recortada ao estado, com as estações e (opcionalmente) a direção do vento.
+
+    `apoio` são pontos que **só alimentam a interpolação** — estações de fora do recorte, que
+    seguram a superfície na borda. Elas não viram ponto desenhado, rótulo nem ranking, e não
+    mexem na escala de cores: o produto é do estado, e o que está fora dele é insumo da conta.
+    Sem elas, os 8 vizinhos que o IDW enxerga numa célula da divisa estão todos para dentro, e a
+    superfície extrapola tendo dado do outro lado.
 
     Devolve None quando há estações de menos para interpolar: com poucos pontos a superfície
     inventa mais do que mostra.
@@ -181,7 +187,8 @@ def mapa_interpolado(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartogra
               f"({len(gdf)}; mínimo {config.MIN_ESTACOES_INTERPOLACAO})")
         return None
 
-    grade = calculos.interpolar_idw(gdf["Longitude"], gdf["Latitude"], gdf[espec.coluna],
+    entrada = gdf if apoio is None or len(apoio) == 0 else pd.concat([gdf, apoio], ignore_index=True)
+    grade = calculos.interpolar_idw(entrada["Longitude"], entrada["Latitude"], entrada[espec.coluna],
                                     base.lon_grade, base.lat_grade, config.IDW_VIZINHOS, config.IDW_POTENCIA)
     valores = gdf[espec.coluna]
     if niveis is None:

@@ -165,6 +165,44 @@ def test_na_tela_o_valor_vai_contornado_e_sem_caixa(base):
     assert relatorio.axes[0].texts[0].get_bbox_patch() is not None  # na folha inteira, cabe
 
 
+def test_o_apoio_entra_na_interpolacao(base, monkeypatch):
+    """Se alguém tirar o apoio da conta, o desenho continua igual e ninguém percebe — daí o espião."""
+    tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
+    gdf = mapas._preparar_dados(tabela, CHUVA)
+    vizinha = mapas._preparar_dados(
+        pd.DataFrame({"Estação": ["Fora"], "Latitude": [-19.0], "Longitude": [-51.0],
+                      "Chuva (mm)": [200.0]}), CHUVA)
+    quantos = []
+    original = mapas.calculos.interpolar_idw
+    monkeypatch.setattr(mapas.calculos, "interpolar_idw",
+                        lambda lons, *resto: quantos.append(len(lons)) or original(lons, *resto))
+
+    mapas.mapa_interpolado(gdf, CHUVA, base)
+    mapas.mapa_interpolado(gdf, CHUVA, base, apoio=vizinha)
+
+    assert quantos == [len(gdf), len(gdf) + 1]
+
+
+def test_o_apoio_muda_a_superficie_e_nao_o_desenho(base):
+    """As vizinhas seguram a borda: entram no IDW, mas não viram ponto, rótulo nem ranking."""
+    tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
+    gdf = mapas._preparar_dados(tabela, CHUVA)
+    vizinha = mapas._preparar_dados(
+        pd.DataFrame({"Estação": ["Fora"], "Latitude": [-19.0], "Longitude": [-51.0],
+                      "Chuva (mm)": [200.0]}), CHUVA)
+
+    sozinho = mapas.mapa_interpolado(gdf, CHUVA, base)
+    com_apoio = mapas.mapa_interpolado(gdf, CHUVA, base, apoio=vizinha)
+
+    desenhados = [colecao.get_offsets().shape[0] for colecao in com_apoio.axes[0].collections
+                  if colecao.get_offsets() is not None and len(colecao.get_offsets())]
+    assert max(desenhados) == len(gdf)          # nenhum ponto a mais no mapa
+    superficie_antes = sozinho.axes[0].collections[0].get_array()
+    superficie_depois = com_apoio.axes[0].collections[0].get_array()
+    assert (superficie_antes is None) == (superficie_depois is None)
+    assert len(com_apoio.axes[0].texts) == len(sozinho.axes[0].texts)   # nem rótulo, nem ranking
+
+
 def test_poucas_estacoes_nao_viram_superficie(base):
     """Com dois pontos a interpolação inventaria o estado inteiro: melhor não desenhar."""
     tabela = ESTACOES.head(2).assign(**{"Chuva (mm)": [1.0, 2.0]})
