@@ -14,6 +14,7 @@ import pandas as pd
 import shapely
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
+from matplotlib.patheffects import withStroke
 from matplotlib.patches import Patch
 
 from . import calculos, config
@@ -161,7 +162,7 @@ def mapa_pontual(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartografica
 
     if tela is None or tela.rotulos:
         _rotular(ax, gdf, valores.map(_formato(espec)), tamanho_fonte=_corpo_rotulo(8, tela), cor="black",
-                 fundo="white", borda="none", opacidade=0.75)
+                 fundo="white", borda="none", opacidade=0.75, halo=tela is not None)
     if tela is None:
         _ranking(ax, gdf, espec, tamanho_fonte=10)
     return _finalizar(fig, ax, espec, base, caminho, tela)
@@ -221,7 +222,7 @@ def mapa_de_grade(grade, gdf, espec: EspecMapa, base: BaseCartografica, caminho:
 
     if tela is None or tela.rotulos:
         _rotular(ax, gdf, rotulos, tamanho_fonte=_corpo_rotulo(9, tela), cor="white", fundo="black",
-                 borda="white", opacidade=0.8)
+                 borda="white", opacidade=0.8, halo=tela is not None)
     if tela is None:
         _ranking(ax, gdf, espec, tamanho_fonte=9, sufixos=sufixos_ranking)
     return _finalizar(fig, ax, espec, base, caminho, tela)
@@ -369,11 +370,21 @@ def _desenhar_limites(ax, base: BaseCartografica) -> None:
     base.uf.boundary.plot(ax=ax, linewidth=1.8, color="black")
 
 
-def _rotular(ax, gdf, textos, tamanho_fonte, cor, fundo, borda, opacidade) -> None:
+def _rotular(ax, gdf, textos, tamanho_fonte, cor, fundo, borda, opacidade, halo=False) -> None:
+    """Escreve o valor sobre cada estação.
+
+    Com `halo`, o texto vai sem caixa, contornado pela cor que seria o fundo. É o que a tela
+    pede: num mapa do tamanho de uma coluna, com 62 estações, o que cobre a estação vizinha é a
+    **caixa**, não a letra — o contorno segura a leitura e devolve o mapa por baixo. No
+    relatório, onde o mapa ocupa a folha inteira, a caixa continua.
+    """
+    contorno = [withStroke(linewidth=max(2.0, tamanho_fonte / 3), foreground=fundo)] if halo else None
+    caixa = (None if halo else
+             dict(boxstyle="round,pad=0.15", facecolor=fundo, edgecolor=borda, alpha=opacidade))
     for (_, linha), texto in zip(gdf.iterrows(), textos):
         ax.text(linha.geometry.x, linha.geometry.y, texto, ha="center", va="center",
                 fontsize=tamanho_fonte, fontweight="bold", color=cor, zorder=7,
-                bbox=dict(boxstyle="round,pad=0.15", facecolor=fundo, edgecolor=borda, alpha=opacidade))
+                bbox=caixa, path_effects=contorno)
 
 
 def _ranking(ax, gdf, espec: EspecMapa, tamanho_fonte, sufixos=None) -> None:

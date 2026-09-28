@@ -152,6 +152,19 @@ def test_na_tela_os_valores_saem_maiores(base):
         relatorio.axes[0].texts[0].get_fontsize() * escala)
 
 
+def test_na_tela_o_valor_vai_contornado_e_sem_caixa(base):
+    """Num mapa do tamanho de uma coluna, o que cobre a estação vizinha é a caixa, não a letra."""
+    tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
+    gdf = mapas._preparar_dados(tabela, CHUVA)
+
+    relatorio = mapas.mapa_interpolado(gdf, CHUVA, base)
+    na_tela = mapas.mapa_interpolado(gdf, CHUVA, base, tela=mapas.Tela(rotulos=True))
+
+    assert na_tela.axes[0].texts[0].get_bbox_patch() is None
+    assert na_tela.axes[0].texts[0].get_path_effects()  # o contorno é o que segura a leitura
+    assert relatorio.axes[0].texts[0].get_bbox_patch() is not None  # na folha inteira, cabe
+
+
 def test_poucas_estacoes_nao_viram_superficie(base):
     """Com dois pontos a interpolação inventaria o estado inteiro: melhor não desenhar."""
     tabela = ESTACOES.head(2).assign(**{"Chuva (mm)": [1.0, 2.0]})
