@@ -565,6 +565,7 @@ O navegador abre em `http://localhost:8501`. Na barra lateral ficam o período, 
 | | |
 |---|---|
 | **Grandezas** | Temperatura, umidade, pressão, vento, radiação e chuva. O que cada uma mostra — e com que regra — está no catálogo [`app/variaveis.py`](app/variaveis.py), e a regra vai escrita sob cada gráfico |
+| **Horário ou diário** | O seletor **Agregação** fica dentro da aba, e não na barra lateral: ele vale só para os gráficos, e cada outra aba tem o seu. Na lateral parecia um filtro geral — e as outras abas o ignoravam |
 | **Chuva** | Sai em **cascata**, não em linha: cada barra é a chuva daquele passo, empilhada no que já tinha caído, e a barra escura no fim é o total. No horário mostra as últimas 24 horas; no diário, um dia por barra |
 | **A regra é da variável** | A estação mede de 10 em 10 minutos e transmite de hora em hora, já resumido: MAX e MIN são os extremos daquela hora, INS é a leitura da hora cheia, chuva e radiação são acumulados. Por isso **a máxima do dia é a maior das máximas horárias**, nunca a média delas — e não existe mais escolher "média, máxima, mínima ou soma" para qualquer variável |
 | **Vento** | Velocidade e rajada aparecem em **km/h**, como nos produtos (a API manda em m/s). A **direção** sai em pontos, e não em linha: entre 350° e 10° o vento mal mudou, mas uma linha desceria o gráfico inteiro. Para o período há uma **rosa dos ventos** por estação, com as horas de cada rumo separadas por faixa de velocidade |
