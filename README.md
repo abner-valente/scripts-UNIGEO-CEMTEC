@@ -594,6 +594,24 @@ O **mesmo mapa interpolado dos produtos** — mesma interpolação IDW, mesmo re
 | **Baixar PNG** | Um botão por mapa, com o mesmo desenho da tela em 150 dpi. Os mapas do relatório, com título, logos e ranking, continuam saindo pelo `main.py` |
 | **GIF do período** | Um botão por mapa monta a **sequência** da janela — um quadro por hora (ou por dia), cada um com a data e a hora escritas dentro, porque fora do painel o GIF vira um arquivo solto. O mapa parado diz como estava naquela hora; a sequência mostra por onde a frente entrou. A escala de cores fica **travada no período inteiro**: esticada a cada quadro, as cores piscariam e quem olha veria variação onde não houve. Acima de 72 quadros ele passa a pular de tantas em tantas horas — o carimbo deixa o salto à vista. Fica atrás de um botão porque custa ~0,08 s por quadro |
 
+### Aba "Risco de Fogo"
+
+A regra **30-30-30** na tela, com o mesmo código do produto: `modulos/produtos/risco_fogo.py` é
+importado, não copiado. Duas implementações da regra divergiriam com o tempo, e aí a tela e o
+relatório diriam números diferentes sobre a mesma hora. `app/risco.py` só traduz o formato — o
+produto trabalha com uma lista de `(estação, leituras)`, o painel com uma tabela longa.
+
+| | |
+|---|---|
+| **A regra** | Conta quantas das três condições valem **em cada hora**: temperatura máxima ≥ 30 °C, umidade mínima ≤ 30 % e rajada ≥ 30 km/h. Hora a hora porque os extremos do dia acontecem em horários diferentes: 32 °C às 15 h, 28 % às 18 h e rajada às 03 h não são um dia de risco alto. Os limiares foram confirmados pela equipe em 28/09/2026 |
+| **O dado é o mesmo dos mapas** | Mesma janela, mesma chave de cache: se a pessoa já carregou a aba **Mapas Boletim**, o risco não consulta a API de novo |
+| **Hora a hora** | Deslizante + o mapa em quatro classes, com o botão de GIF. A caixa **"só as horas em que alguma estação chegou ao risco alto"** faz o deslizante parar só nelas. O critério é o nível **medido**: a superfície pode mostrar nível 2 numa célula onde nenhuma estação chegou a 2 |
+| **Por dia** | O **pior** nível que cada lugar alcançou no dia — um dia é de risco alto se houve uma hora em que as três condições valeram juntas |
+| **Período inteiro** | O pior nível da janela, as **horas em risco alto** célula a célula, e a tabela por estação com as mesmas colunas da planilha do produto (CSV) |
+| **Três gráficos** | Horas em cada nível, o calendário do pior nível de cada dia, e as condições atendidas de um dia — o gráfico que responde se o risco veio do calor, da secura ou do vento. A ordem das estações é a mesma nos três, para dar para comparar |
+| **Interpolação** | As três variáveis são interpoladas **separadas** e a regra é aplicada célula a célula. Interpolar o nível 0–3 direto produziria "1,7 condições" e espalharia risco médio onde estação nenhuma o registrou |
+| **Custo** | Três interpolações por hora, 31 ms cada: uma semana sai em ~5 s, com barra de progresso, e fica em cache |
+
 ### Aba "Chuva"
 
 Todos os mapas de chuva ficam aqui, e não junto dos outros, por um motivo de fundo: **a chuva é a única grandeza que precisa de dado fora do período escolhido**. Um acumulado de 96 h, ou o do mês, começa antes do início da janela da barra lateral. Nas outras abas, todo mapa respeita o período; misturar um que espia fora dele geraria exatamente a dúvida que o catálogo veio matar.
@@ -664,6 +682,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │   ├── variaveis.py      # Catálogo do que se pode mapear e traçar, com a regra de cada um
 │   ├── animacao.py       # GIF do mapa no tempo: quais quadros entram e o carimbo de cada um
 │   ├── chuva.py          # Acumulados que olham para trás do período e a cascata
+│   ├── risco.py          # Risco de fogo na tela: traduz o formato para a regra do produto
 │   ├── superficie.py     # Superfície interpolada como imagem, para o mapa navegável
 │   ├── qualidade.py      # Regras de qualidade das leituras (sem tela, por isso testáveis)
 │   └── requirements.txt  # Dependências só do explorador

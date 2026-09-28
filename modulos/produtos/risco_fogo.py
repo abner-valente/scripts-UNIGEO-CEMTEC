@@ -230,16 +230,20 @@ def _espec_classes(titulo: str, subtitulo: str, arquivo: str) -> EspecClasses:
     return EspecClasses(titulo, subtitulo, arquivo, config.CORES_RISCO, config.ROTULOS_RISCO)
 
 
-def _rotulos_condicoes() -> list[str]:
-    """Como cada condição aparece nas legendas, com o seu limiar."""
+def rotulos_condicoes() -> list[str]:
+    """Como cada condição aparece nas legendas, com o seu limiar.
+
+    Pública porque a aba de risco do painel mostra as mesmas legendas: a tela e o relatório
+    não podem nomear a mesma condição de dois jeitos.
+    """
     return [f"Temperatura máx. ≥ {config.LIMIAR_TEMP_MAX:g} °C",
             f"Umidade mín. ≤ {config.LIMIAR_UMIDADE_MIN:g} %",
             f"Rajada ≥ {config.LIMIAR_RAJADA:g} km/h"]
 
 
-def _indicadores_condicoes() -> Indicadores:
+def indicadores_condicoes() -> Indicadores:
     """Pontos das condições atendidas nos mapas horários: temperatura à esquerda, umidade no meio, rajada à direita."""
-    return Indicadores(COLUNAS_CONDICOES, _rotulos_condicoes(), config.CORES_CONDICOES,
+    return Indicadores(COLUNAS_CONDICOES, rotulos_condicoes(), config.CORES_CONDICOES,
                        "Condições atendidas (esquerda → direita)")
 
 
@@ -303,7 +307,7 @@ def _mapas_horarios(horas: dict, base: BaseCartografica, pasta: Path, todas_as_h
                                f"Mapa_Risco_Fogo_{config.UF}")
         estacoes = mapas.preparar_pontos(avaliada.estacoes, COLUNA_NIVEL_HORA, espec.subtitulo)
         mapas.mapa_classes_interpolado(avaliada.grade, estacoes, COLUNA_NIVEL_HORA, espec, base,
-                                       pasta / f"{espec.arquivo}_{local:%Y%m%d_%H}h.png", _indicadores_condicoes())
+                                       pasta / f"{espec.arquivo}_{local:%Y%m%d_%H}h.png", indicadores_condicoes())
 
 
 # =====================================================
@@ -353,7 +357,7 @@ def gerar_graficos(horas: pd.DataFrame, periodo: Periodo, pasta: Path) -> None:
         # Mesma ordem dos outros dois gráficos: barras horizontais crescem de baixo para cima
         condicoes = leituras.groupby("Estação")[COLUNAS_CONDICOES].sum().reindex(ordem).fillna(0)
         graficos.barras_agrupadas(
-            condicoes, config.CORES_CONDICOES, _rotulos_condicoes(), f"Condições Atendidas em {config.UF}",
+            condicoes, config.CORES_CONDICOES, rotulos_condicoes(), f"Condições Atendidas em {config.UF}",
             f"Horas de cada condição · {dia:%d/%m/%Y}", "Horas",
             pasta / "graficosDeCondicoes" / f"Grafico_Risco_Fogo_Condicoes_{config.UF}_{dia:%Y%m%d}.png")
 
