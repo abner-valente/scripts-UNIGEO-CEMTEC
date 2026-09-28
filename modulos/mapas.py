@@ -261,8 +261,11 @@ def mapa_classes_interpolado(grade, gdf, coluna: str, espec: EspecClasses, base:
     gdf.plot(ax=ax, color="black", markersize=50, alpha=0.7, edgecolor="white", linewidth=1.5)
 
     classes = _classes(gdf[coluna], espec)
-    _rotular(ax, gdf, classes.map(str), tamanho_fonte=_corpo_rotulo(9, tela), cor="white",
-             fundo="black", borda="white", opacidade=0.8)
+    if tela is None or tela.rotulos:
+        # Na tela o nível de cada estação entra junto com os outros valores, pela mesma caixa:
+        # 62 dígitos num mapa do tamanho de uma coluna cobrem a superfície que eles explicam.
+        _rotular(ax, gdf, classes.map(str), tamanho_fonte=_corpo_rotulo(9, tela), cor="white",
+                 fundo="black", borda="white", opacidade=0.8, halo=tela is not None)
     _legenda_classes(ax, espec, classes)
     if indicadores is not None:
         _desenhar_indicadores(ax, gdf, indicadores)

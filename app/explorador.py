@@ -28,9 +28,11 @@ from app import animacao
 from app import chuva as chuva_calc
 from app import dados as coleta
 from app import qualidade
+from app import risco
 from app import superficie
 from app import variaveis
 from modulos import config, inmet, mapas
+from modulos.produtos import risco_fogo
 
 # A API manda o vento em m/s; os produtos trabalham em km/h, e aqui seguimos a mesma unidade
 CONVERSOES = {"VEN_VEL": 3.6, "VEN_RAJ": 3.6}
@@ -590,6 +592,169 @@ def painel_da_chuva(rotulo: str, valores: pd.Series, janela: str, rotulos: bool,
                        file_name=f"Mapa_chuva_{rotulo.replace(' ', '')}.png")
 
 
+@st.cache_data(show_spinner=False, max_entries=2)
+def risco_avaliado(leituras: pd.DataFrame, estacoes_do_estado: pd.DataFrame):
+    """As horas da janela avaliadas pela regra 30-30-30, com a grade de cada uma.
+
+    São três interpolações por hora — 31 ms cada, ~5 s numa semana —, e por isso fica em cache e
+    com barra: quem mexe no deslizante não pode pagar isso de novo a cada passo.
+    """
+    completas = risco.por_estacao(leituras, estacoes_do_estado)
+    if not completas:
+        return [], {}
+    quais = risco.horas(completas)
+    barra = st.progress(0.0, text="Avaliando a regra 30-30-30 hora a hora")
+    avaliadas = {}
+    for indice, hora in enumerate(quais, start=1):
+        avaliadas.update(risco.avaliar(completas, [hora], base_cartografica()))
+        barra.progress(indice / len(quais),
+                       text=f"Avaliando a regra 30-30-30 — hora {indice} de {len(quais)}")
+    barra.empty()
+    return completas, avaliadas
+
+
+@st.cache_data(show_spinner=False, max_entries=30)
+def mapa_de_risco(grade, pontos: pd.DataFrame, coluna: str, quando: str, detalhes: bool,
+                  dpi: int = DPI_MAPA) -> bytes | None:
+    """PNG do mapa de níveis de risco: a superfície em quatro classes e as estações por cima.
+
+    Com `detalhes`, cada estação leva o seu nível escrito e os pontinhos das condições atendidas
+    — temperatura, umidade e rajada, da esquerda para a direita.
+    """
+    gdf = mapas.preparar_pontos(pontos, coluna, quando)
+    if gdf is None:
+        return None
+    espec = mapas.EspecClasses(f"Risco de fogo em {config.UF}", quando, "",
+                               config.CORES_RISCO, config.ROTULOS_RISCO)
+    figura = mapas.mapa_classes_interpolado(
+        grade, gdf, coluna, espec, base_cartografica(),
+        indicadores=risco_fogo.indicadores_condicoes() if detalhes else None,
+        tela=mapas.Tela(rotulos=detalhes))
+    arquivo = io.BytesIO()
+    figura.savefig(arquivo, format="png", dpi=dpi, bbox_inches="tight", facecolor="white")
+    return arquivo.getvalue()
+
+
+@st.cache_data(show_spinner=False, max_entries=6)
+def mapa_de_horas_altas(grade, pontos: pd.DataFrame, quando: str, detalhes: bool) -> bytes | None:
+    """PNG do mapa de exposição: em quantas horas cada lugar esteve no risco alto."""
+    gdf = mapas.preparar_pontos(pontos, risco_fogo.COLUNA_HORAS_ALTO, quando)
+    if gdf is None:
+        return None
+    espec = mapas.EspecMapa(tabela="", coluna=risco_fogo.COLUNA_HORAS_ALTO,
+                            titulo=f"Horas em risco alto em {config.UF}", subtitulo=quando,
+                            arquivo="", cmap="YlOrRd", ranking="",
+                            unidade="Horas em risco alto", decimais=0)
+    maximo = int(grade.max())
+    figura = mapas.mapa_de_grade(grade, gdf, espec, base_cartografica(),
+                                 niveis=np.arange(0, max(maximo, 1) + 1) if maximo < 12 else 12,
+                                 tela=mapas.Tela(rotulos=detalhes))
+    arquivo = io.BytesIO()
+    figura.savefig(arquivo, format="png", dpi=DPI_MAPA, bbox_inches="tight", facecolor="white")
+    return arquivo.getvalue()
+
+
+@st.cache_data(show_spinner=False, max_entries=2)
+def gif_do_risco(instantes: tuple, detalhes: bool, _avaliadas: dict) -> bytes | None:
+    """A sequência das horas de risco, com a data e a hora escritas em cada quadro.
+
+    `_avaliadas` não entra na chave do cache (é um dicionário de grades, caro de resumir): as
+    horas escolhidas já identificam o que está sendo desenhado.
+    """
+    barra = st.progress(0.0, text="Desenhando o GIF do risco")
+    quadros = []
+    for indice, hora in enumerate(instantes, start=1):
+        avaliada = _avaliadas[hora]
+        carimbo = animacao.carimbo(hora.tz_convert(config.FUSO_MS), por_dia=False)
+        png = mapa_de_risco(avaliada.grade, avaliada.estacoes, risco_fogo.COLUNA_NIVEL_HORA,
+                            carimbo, detalhes, DPI_GIF)
+        if png is not None:
+            quadros.append((png, carimbo))
+        barra.progress(indice / len(instantes),
+                       text=f"Desenhando o GIF do risco — quadro {indice} de {len(instantes)}")
+    barra.empty()
+    return animacao.montar(quadros) if quadros else None
+
+
+def ordem_das_estacoes(horaria: pd.DataFrame) -> list[str]:
+    """As estações da que passou mais horas em risco alto para a que passou menos.
+
+    A mesma ordem nos três gráficos: sem isso, comparar um com o outro vira caça ao nome.
+    """
+    por_nivel = (horaria.pivot_table(index="Estação", columns=risco_fogo.COLUNA_NIVEL_HORA,
+                                     values="dia", aggfunc="count")
+                 .reindex(columns=[1, risco.NIVEL_MEDIO, risco.NIVEL_ALTO]).fillna(0))
+    return list(por_nivel.sort_values([risco.NIVEL_ALTO, risco.NIVEL_MEDIO, 1],
+                                      ascending=False).index)
+
+
+def barras_de_niveis(horaria: pd.DataFrame, ordem: list[str]) -> alt.Chart:
+    """Quantas horas cada estação passou em cada nível, empilhadas."""
+    contagem = (horaria[horaria[risco_fogo.COLUNA_NIVEL_HORA] > 0]
+                .groupby(["Estação", risco_fogo.COLUNA_NIVEL_HORA]).size().reset_index(name="Horas"))
+    return (alt.Chart(contagem)
+            .mark_bar()
+            .encode(x=alt.X("Horas:Q", title="Horas",
+                            axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=12)),
+                    y=alt.Y("Estação:N", sort=ordem, title=None,
+                            axis=alt.Axis(labelFontSize=13, labelOverlap=False, labelLimit=230)),
+                    color=alt.Color(f"{risco_fogo.COLUNA_NIVEL_HORA}:O", title="Nível",
+                                    scale=alt.Scale(domain=[1, risco.NIVEL_MEDIO, risco.NIVEL_ALTO],
+                                                    range=config.CORES_RISCO[1:]),
+                                    legend=alt.Legend(orient="bottom",
+                                                      labelExpr="{'1': 'Baixo', '2': 'Médio', '3': 'Alto'}[datum.label]")),
+                    tooltip=["Estação", alt.Tooltip(f"{risco_fogo.COLUNA_NIVEL_HORA}:O", title="Nível"),
+                             "Horas"])
+            .properties(height=22 * max(contagem["Estação"].nunique(), 1) + 60))
+
+
+def calendario_de_risco(horaria: pd.DataFrame, ordem: list[str]) -> alt.Chart:
+    """O pior nível de cada estação em cada dia — a leitura de relance da semana."""
+    por_dia = (horaria.groupby(["Estação", "dia"])[risco_fogo.COLUNA_NIVEL_HORA].max()
+               .reset_index().assign(dia=lambda tabela: tabela["dia"].astype(str)))
+    return (alt.Chart(por_dia)
+            .mark_rect(stroke="#111111", strokeWidth=1)
+            .encode(x=alt.X("dia:O", title=None, axis=alt.Axis(labelAngle=-45, labelFontSize=11)),
+                    y=alt.Y("Estação:N", sort=ordem, title=None,
+                            axis=alt.Axis(labelFontSize=12, labelOverlap=False, labelLimit=230)),
+                    color=alt.Color(f"{risco_fogo.COLUNA_NIVEL_HORA}:O", title="Pior nível do dia",
+                                    scale=alt.Scale(domain=[0, 1, risco.NIVEL_MEDIO, risco.NIVEL_ALTO],
+                                                    range=config.CORES_RISCO),
+                                    legend=alt.Legend(orient="bottom",
+                                                      labelExpr="{'0': 'Sem condição', '1': 'Baixo', "
+                                                                "'2': 'Médio', '3': 'Alto'}[datum.label]")),
+                    tooltip=["Estação", alt.Tooltip("dia:O", title="Dia"),
+                             alt.Tooltip(f"{risco_fogo.COLUNA_NIVEL_HORA}:O", title="Pior nível")])
+            .properties(height=20 * max(por_dia["Estação"].nunique(), 1) + 60))
+
+
+def condicoes_do_dia(horaria: pd.DataFrame, dia, ordem: list[str]) -> alt.Chart:
+    """Quantas horas cada condição valeu, estação por estação, naquele dia.
+
+    É o gráfico que responde "o risco veio do calor, da secura ou do vento?" — a pergunta que o
+    nível sozinho não responde.
+    """
+    do_dia = horaria[horaria["dia"] == dia]
+    somas = (do_dia.groupby("Estação")[risco_fogo.COLUNAS_CONDICOES].sum().reset_index()
+             .melt("Estação", var_name="Condição", value_name="Horas"))
+    somas = somas[somas["Horas"] > 0]
+    rotulos = dict(zip(risco_fogo.COLUNAS_CONDICOES, risco_fogo.rotulos_condicoes()))
+    somas["Condição"] = somas["Condição"].map(rotulos)
+    return (alt.Chart(somas)
+            .mark_bar()
+            .encode(x=alt.X("Horas:Q", title="Horas",
+                            axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=12)),
+                    y=alt.Y("Estação:N", sort=ordem, title=None,
+                            axis=alt.Axis(labelFontSize=13, labelOverlap=False, labelLimit=230)),
+                    yOffset=alt.YOffset("Condição:N"),
+                    color=alt.Color("Condição:N", title=None,
+                                    scale=alt.Scale(domain=list(rotulos.values()),
+                                                    range=config.CORES_CONDICOES),
+                                    legend=alt.Legend(orient="bottom", columns=1)),
+                    tooltip=["Estação", "Condição", "Horas"])
+            .properties(height=30 * max(somas["Estação"].nunique(), 1) + 80))
+
+
 # =====================================================
 # FILTROS
 # =====================================================
@@ -651,8 +816,9 @@ if falharam:
 horas_esperadas = int((fim - inicio).total_seconds() // 3600)
 periodo_escolhido = (f"{intervalo[0]:%d/%m/%Y}" if intervalo[0] == intervalo[1]
                      else f"{intervalo[0]:%d/%m/%Y} a {intervalo[1]:%d/%m/%Y}")
-aba_series, aba_mapa, aba_chuva, aba_navegavel, aba_qualidade = st.tabs(
-    ["Estações: Séries Temporais", "Mapas Boletim", "Chuva", "Mapa Navegação", "Qualidade dos dados"])
+aba_series, aba_mapa, aba_chuva, aba_risco, aba_navegavel, aba_qualidade = st.tabs(
+    ["Estações: Séries Temporais", "Mapas Boletim", "Chuva", "Risco de Fogo", "Mapa Navegação",
+     "Qualidade dos dados"])
 
 # =====================================================
 # SÉRIES TEMPORAIS
@@ -964,6 +1130,166 @@ with aba_chuva:
 
             if ausentes_chuva:
                 st.caption(f"Sem dados no período ({len(ausentes_chuva)}): {', '.join(ausentes_chuva)}")
+
+# =====================================================
+# RISCO DE FOGO
+# =====================================================
+# A regra 30-30-30 é a mesma dos produtos, importada de modulos/produtos/risco_fogo.py: a tela e
+# o relatório não podem dizer números diferentes sobre a mesma hora. O dado também é o mesmo da
+# aba dos mapas — mesma janela, mesma chave de cache —, então esta aba não custa consulta nenhuma
+# a mais à API.
+with aba_risco:
+    st.caption(f"Conta quantas das três condições valem **em cada hora**: temperatura máxima "
+               f"≥ {config.LIMIAR_TEMP_MAX:g} °C, umidade mínima ≤ {config.LIMIAR_UMIDADE_MIN:g} % e "
+               f"rajada ≥ {config.LIMIAR_RAJADA:g} km/h. Hora a hora porque os extremos do dia "
+               "acontecem em horários diferentes: 32 °C às 15 h, 28 % às 18 h e rajada às 03 h não "
+               "são um dia de risco alto.")
+
+    if not st.session_state.get("mapa_liberado"):
+        st.info(f"Precisa das {len(estacoes)} estações do estado. Carregue-as na aba "
+                "**Mapas Boletim** — o risco usa o mesmo dado, sem consultar de novo.")
+    else:
+        leituras_risco, _ = carregar_leituras(tuple(estacoes["CD_ESTACAO"]),
+                                              tuple(estacoes["Estação"]), inicio, fim)
+        completas, avaliadas = risco_avaliado(leituras_risco, estacoes)
+
+        if not completas:
+            st.warning("Nenhuma estação tem temperatura, umidade e rajada no período: sem as três "
+                       "não dá para dizer quantas condições valeram.")
+        elif not avaliadas:
+            st.warning(f"Nenhuma hora teve {config.MIN_ESTACOES_INTERPOLACAO} estações com as três "
+                       "medidas: com tão poucos pontos a superfície inventaria mais do que mostra.")
+        else:
+            horaria = risco.hora_a_hora(completas)
+            ordem = ordem_das_estacoes(horaria)
+            modo_risco = MODOS_MAPA[st.radio("Agregação", list(MODOS_MAPA), horizontal=True,
+                                             key="modo_risco")]
+            detalhes = st.checkbox("Mostrar o nível e as condições de cada estação", value=False,
+                                   key="detalhes_risco",
+                                   help="O nível escrito em cada estação e, abaixo dela, um ponto "
+                                        "para cada condição atendida. Lado a lado eles se cobrem; "
+                                        "ligue ao ampliar um mapa.")
+
+            # --- hora a hora ---------------------------------------------------------------
+            if modo_risco == variaveis.HORA:
+                so_alto = st.checkbox(
+                    f"Só as horas em que alguma estação chegou ao {config.ROTULOS_RISCO[risco.NIVEL_ALTO].lower()}",
+                    value=False, key="so_risco_alto",
+                    help="O deslizante passa a parar só nessas horas. O critério é o nível medido "
+                         "nas estações, e não o da superfície: ela pode mostrar nível 2 onde "
+                         "nenhuma estação chegou a 2.")
+                mostradas = risco.horas_que_interessam(avaliadas) if so_alto else avaliadas
+
+                if not mostradas:
+                    st.info(f"Nenhuma estação chegou ao {config.ROTULOS_RISCO[risco.NIVEL_ALTO].lower()} "
+                            "em hora nenhuma do período. Desligue a caixa acima para ver todas as horas.")
+                else:
+                    quando = list(mostradas)
+                    hora = st.select_slider(
+                        "Quando", options=quando, value=quando[-1], key="quando_risco",
+                        format_func=lambda marca: f"{marca.tz_convert(config.FUSO_MS):%d/%m %H:%M}")
+                    avaliada = mostradas[hora]
+                    local = hora.tz_convert(config.FUSO_MS)
+                    _, meio, _ = st.columns([1, 3, 1])
+                    with meio:
+                        png = mapa_de_risco(avaliada.grade, avaliada.estacoes,
+                                            risco_fogo.COLUNA_NIVEL_HORA,
+                                            f"{local:%d/%m/%Y %H:%M}", detalhes)
+                        if png is None:
+                            st.warning("Sem estações com as três medidas nessa hora.")
+                        else:
+                            st.image(png, width="stretch")
+                            quantas = (avaliada.estacoes[risco_fogo.COLUNA_NIVEL_HORA]
+                                       == risco.NIVEL_ALTO).sum()
+                            st.caption(f"{len(avaliada.estacoes)} estações com as três medidas · "
+                                       f"{quantas} no risco alto · as três variáveis são "
+                                       "interpoladas separadas e a regra é aplicada célula a célula.")
+                            st.download_button("Baixar PNG — risco de fogo", png, mime="image/png",
+                                               key="baixar_risco",
+                                               file_name=f"Mapa_risco_fogo_{local:%Y%m%d_%H}h.png")
+                            if st.button("Gerar GIF — risco de fogo", key="botao_gif_risco",
+                                         help=f"{len(animacao.passos(quando))} quadros."):
+                                st.session_state["gif_risco"] = True
+                            if st.session_state.get("gif_risco"):
+                                instantes = tuple(animacao.passos(quando))
+                                gif = gif_do_risco(instantes, detalhes, mostradas)
+                                if gif is not None:
+                                    st.image(gif, width="stretch")
+                                    st.caption(f"{len(instantes)} quadros. {len(gif) / 1e6:.1f} MB.")
+                                    st.download_button("Baixar GIF — risco de fogo", gif,
+                                                       mime="image/gif", key="baixar_gif_risco",
+                                                       file_name=f"Animacao_risco_fogo_"
+                                                                 f"{intervalo[0]:%Y%m%d}_a_{intervalo[1]:%Y%m%d}.gif")
+
+            # --- por dia --------------------------------------------------------------------
+            elif modo_risco == variaveis.DIA:
+                dias = risco.por_dia(avaliadas)
+                dia = st.select_slider("Dia", options=list(dias), value=list(dias)[-1],
+                                       key="dia_risco", format_func=lambda data: f"{data:%d/%m/%Y}")
+                _, meio, _ = st.columns([1, 3, 1])
+                with meio:
+                    png = mapa_de_risco(dias[dia], risco.estacoes_do_dia(avaliadas, dia),
+                                        risco_fogo.COLUNA_NIVEL_HORA, f"{dia:%d/%m/%Y}", detalhes)
+                    if png is None:
+                        st.warning("Sem estações com as três medidas nesse dia.")
+                    else:
+                        st.image(png, width="stretch")
+                        st.caption("O **pior** nível que cada lugar alcançou no dia — e não o de "
+                                   "uma hora específica. Um dia é de risco alto se houve uma hora "
+                                   "em que as três condições valeram juntas.")
+                        st.download_button("Baixar PNG — risco do dia", png, mime="image/png",
+                                           key="baixar_risco_dia",
+                                           file_name=f"Mapa_risco_fogo_{dia:%Y%m%d}.png")
+
+            # --- período inteiro ------------------------------------------------------------
+            else:
+                tabela_risco = risco.resumo(completas, config.Periodo.de_datas(*intervalo))
+                esquerda, direita = st.columns(2)
+                with esquerda:
+                    st.markdown("**Pior nível do período**")
+                    png = mapa_de_risco(risco.pior_nivel(avaliadas), tabela_risco,
+                                        risco_fogo.COLUNA_NIVEL, periodo_escolhido, detalhes)
+                    if png is not None:
+                        st.image(png, width="stretch")
+                        st.caption("O maior nível que cada lugar alcançou em alguma hora da janela.")
+                with direita:
+                    st.markdown("**Horas em risco alto**")
+                    exposicao = risco.horas_em_risco_alto(avaliadas)
+                    png_horas = mapa_de_horas_altas(exposicao, tabela_risco, periodo_escolhido, detalhes)
+                    if png_horas is not None:
+                        st.image(png_horas, width="stretch")
+                        st.caption(f"Em quantas horas cada lugar esteve no risco alto — no máximo "
+                                   f"{int(exposicao.max())} h em alguma célula do estado.")
+
+                st.subheader("Por estação")
+                st.caption("Da estação de maior risco para a de menor. As colunas são as mesmas da "
+                           "planilha que o `main.py` gera para o produto.")
+                st.dataframe(tabela_risco, width="stretch", hide_index=True, height=340)
+                st.download_button(
+                    "Baixar CSV", tabela_risco.to_csv(index=False).encode("utf-8-sig"),
+                    file_name=f"risco_fogo_{intervalo[0]:%Y%m%d}_a_{intervalo[1]:%Y%m%d}.csv",
+                    mime="text/csv", key="baixar_tabela_risco")
+
+            # --- gráficos, em qualquer modo --------------------------------------------------
+            st.divider()
+            st.subheader("Horas em cada nível")
+            st.caption("Quantas horas cada estação passou em cada nível, no período inteiro. A "
+                       "ordem das estações é a mesma nos três gráficos, para dar para comparar.")
+            st.altair_chart(barras_de_niveis(horaria, ordem), width="stretch")
+
+            st.subheader("Calendário")
+            st.caption("O pior nível de cada estação em cada dia.")
+            st.altair_chart(calendario_de_risco(horaria, ordem), width="stretch")
+
+            st.subheader("Condições atendidas")
+            dias_com_dado = sorted(horaria["dia"].unique())
+            dia_condicoes = st.select_slider(
+                "Dia", options=dias_com_dado, value=dias_com_dado[-1], key="dia_condicoes",
+                format_func=lambda data: f"{data:%d/%m/%Y}")
+            st.caption("Quantas horas cada condição valeu naquele dia. É o gráfico que responde se "
+                       "o risco veio do calor, da secura ou do vento — o que o nível sozinho não diz.")
+            st.altair_chart(condicoes_do_dia(horaria, dia_condicoes, ordem), width="stretch")
+
 
 # =====================================================
 # MAPA NAVEGÁVEL (EM TESTE)
