@@ -7,6 +7,7 @@ estações de novo a cada clique tornaria a tela inutilizável.
 O cache fica em `cache/`, fora do controle de versão, e pode ser apagado a qualquer momento:
 o que faltar é baixado outra vez.
 """
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -24,12 +25,48 @@ def leituras(codigo: str, inicio: datetime, fim: datetime) -> pd.DataFrame:
     consultar de novo mais tarde.
     """
     guardadas = _ler(codigo)
-    if not _cobre(guardadas, inicio, fim):
-        guardadas = _juntar(guardadas, inmet.baixar_dados_estacao(codigo, inicio, fim))
+    faltando = _faltando(guardadas, inicio, fim)
+    for comeco, termino in faltando:
+        guardadas = _juntar(guardadas, inmet.baixar_dados_estacao(codigo, comeco, termino))
+    if faltando:
         _gravar(codigo, guardadas)
     if guardadas is None:
         return pd.DataFrame()
     return guardadas[(guardadas["dt_utc"] > inicio) & (guardadas["dt_utc"] <= fim)].copy()
+
+
+def varias(codigos: tuple[str, ...], nomes: tuple[str, ...], inicio: datetime, fim: datetime,
+           aviso=None) -> tuple[pd.DataFrame, list[str]]:
+    """Séries de várias estações e os nomes das que não vieram.
+
+    É uma consulta por estação, e são 62: uma atrás da outra, uma semana levava ~50 s. Em
+    paralelo, ~8 s. Quantas correm juntas é limite do processo inteiro (`modulos/inmet`), e não
+    deste lote — o painel é público, e duas pessoas consultando ao mesmo tempo dobrariam o
+    assédio à API.
+
+    A tabela sai na ordem em que as estações foram pedidas, e não na ordem em que chegaram: a
+    ordem de chegada muda a cada consulta, e com ela mudariam as cores do gráfico.
+    """
+    chegaram, falharam = {}, []
+    with ThreadPoolExecutor(max_workers=config.DOWNLOADS_SIMULTANEOS) as equipe:
+        tarefas = {equipe.submit(leituras, codigo, inicio, fim): nome
+                   for codigo, nome in zip(codigos, nomes)}
+        for concluidas, tarefa in enumerate(as_completed(tarefas), start=1):
+            nome = tarefas[tarefa]
+            try:
+                dados = tarefa.result()
+            except inmet.ErroINMET:
+                falharam.append(nome)
+            else:
+                if dados.empty:
+                    falharam.append(nome)
+                else:
+                    chegaram[nome] = dados
+            if aviso is not None:
+                aviso(concluidas, len(tarefas))
+
+    series = [chegaram[nome].assign(Estação=nome) for nome in nomes if nome in chegaram]
+    return (pd.concat(series, ignore_index=True) if series else pd.DataFrame()), sorted(falharam)
 
 
 def limpar_cache() -> int:
@@ -46,9 +83,26 @@ def tamanho_do_cache() -> tuple[int, float]:
     return len(arquivos), sum(arquivo.stat().st_size for arquivo in arquivos) / (1024 * 1024)
 
 
-def _cobre(guardadas: pd.DataFrame | None, inicio: datetime, fim: datetime) -> bool:
-    return (guardadas is not None and not guardadas.empty
-            and guardadas["dt_utc"].min() <= inicio and guardadas["dt_utc"].max() >= fim)
+def _faltando(guardadas: pd.DataFrame | None, inicio: datetime,
+              fim: datetime) -> list[tuple[datetime, datetime]]:
+    """Os pedaços da janela que o cache ainda não tem.
+
+    Baixar só o que falta é o que faz alargar o período sair barato: antes, pedir duas semanas
+    tendo uma guardada jogava a guardada fora e baixava as duas — o dobro do dado e, numa janela
+    longa, o dobro do tempo de resposta da API.
+
+    O cache é julgado pelos extremos, como sempre foi: um buraco no meio (estação fora do ar)
+    não se distingue de ausência de leitura, e pedir de novo não o preencheria.
+    """
+    if guardadas is None or guardadas.empty:
+        return [(inicio, fim)]
+    tem_desde, tem_ate = guardadas["dt_utc"].min(), guardadas["dt_utc"].max()
+    pedacos = []
+    if inicio < tem_desde:
+        pedacos.append((inicio, min(fim, tem_desde)))
+    if fim > tem_ate:
+        pedacos.append((max(inicio, tem_ate), fim))
+    return pedacos
 
 
 def _juntar(guardadas: pd.DataFrame | None, baixadas: pd.DataFrame | None) -> pd.DataFrame | None:
@@ -74,4 +128,9 @@ def _gravar(codigo: str, dados: pd.DataFrame | None) -> None:
     if dados is None or dados.empty:
         return
     PASTA_CACHE.mkdir(parents=True, exist_ok=True)
-    dados.to_pickle(_arquivo(codigo))
+    # Grava num arquivo à parte e só então o põe no lugar: com as estações baixando em paralelo,
+    # duas gravações da mesma estação ao mesmo tempo deixariam um pickle pela metade, que na
+    # próxima leitura quebraria a tela inteira.
+    provisorio = _arquivo(codigo).with_suffix(".parcial")
+    dados.to_pickle(provisorio)
+    provisorio.replace(_arquivo(codigo))

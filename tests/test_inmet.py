@@ -25,6 +25,15 @@ class RespostaFalsa:
             raise requests.HTTPError(f"HTTP {self.status_code}")
 
 
+def trocar_get(monkeypatch, resposta) -> None:
+    """Troca a consulta HTTP pelos dados do teste.
+
+    O inmet passou a falar por uma sessão reaproveitada (uma conexão por thread, em vez de uma
+    por estação), então é o `get` dela que os testes precisam interceptar.
+    """
+    monkeypatch.setattr(requests.Session, "get", lambda self, url, timeout: resposta(url, timeout))
+
+
 @pytest.mark.parametrize("original, formatado", [
     ("CAMPO GRANDE", "Campo Grande"),
     ("  SAO GABRIEL DO OESTE ", "Sao Gabriel do Oeste"),
@@ -39,7 +48,7 @@ def test_listar_estacoes_filtra_a_uf_e_converte_coordenadas(monkeypatch):
         {"CD_ESTACAO": "A702", "DC_NOME": "CAMPO GRANDE", "SG_ESTADO": "MS", "VL_LATITUDE": "-20.44", "VL_LONGITUDE": "-54.72"},
         {"CD_ESTACAO": "A901", "DC_NOME": "CUIABA", "SG_ESTADO": "MT", "VL_LATITUDE": "-15.6", "VL_LONGITUDE": "-56.1"},
     ]
-    monkeypatch.setattr(inmet.requests, "get", lambda url, timeout: RespostaFalsa(lista))
+    trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa(lista))
     estacoes = inmet.listar_estacoes("MS")
     assert estacoes["CD_ESTACAO"].tolist() == ["A702"]
     assert estacoes["Estação"].tolist() == ["Campo Grande"]
@@ -47,7 +56,7 @@ def test_listar_estacoes_filtra_a_uf_e_converte_coordenadas(monkeypatch):
 
 
 def test_listar_estacoes_com_falha_levanta_erro(monkeypatch):
-    monkeypatch.setattr(inmet.requests, "get", lambda url, timeout: RespostaFalsa(status_code=503))
+    trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa(status_code=503))
     with pytest.raises(inmet.ErroINMET):
         inmet.listar_estacoes()
 
@@ -57,7 +66,7 @@ def test_baixar_dados_converte_valores_e_horarios(monkeypatch):
         {"DT_MEDICAO": "2026-07-30", "HR_MEDICAO": "0000", "TEM_MIN": "18,5", "CHUVA": "0.2", "RAD_GLO": "-3,5"},
         {"DT_MEDICAO": "2026-07-30", "HR_MEDICAO": "1300", "TEM_MIN": None, "CHUVA": "0", "RAD_GLO": "1520"},
     ]
-    monkeypatch.setattr(inmet.requests, "get", lambda url, timeout: RespostaFalsa(registros))
+    trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa(registros))
     dados = inmet.baixar_dados_estacao("A702", *DIA.janela_busca)
 
     assert dados["dt_utc"].tolist() == [pd.Timestamp("2026-07-30 00:00", tz="UTC"), pd.Timestamp("2026-07-30 13:00", tz="UTC")]
@@ -81,7 +90,7 @@ def test_baixar_dados_pede_apenas_os_dias_necessarios(monkeypatch, periodo, trec
         urls.append(url)
         return RespostaFalsa([])
 
-    monkeypatch.setattr(inmet.requests, "get", get_falso)
+    trocar_get(monkeypatch, get_falso)
     inmet.baixar_dados_estacao("A702", *periodo.janela_busca)
     assert trecho_da_url in urls[0]
 
@@ -97,7 +106,7 @@ def test_falhas_da_api_viram_erro_sem_expor_o_token(monkeypatch, capsys, falha):
             return RespostaFalsa(status_code=500, text=f"erro interno em {url}")
         return RespostaFalsa(ValueError(f"resposta não é JSON: {url}"))
 
-    monkeypatch.setattr(inmet.requests, "get", get_falso)
+    trocar_get(monkeypatch, get_falso)
     with pytest.raises(inmet.ErroINMET) as erro:
         inmet.baixar_dados_estacao("A702", *DIA.janela_busca)
     assert "TOKEN-SECRETO" not in str(erro.value)
@@ -105,7 +114,7 @@ def test_falhas_da_api_viram_erro_sem_expor_o_token(monkeypatch, capsys, falha):
 
 
 def test_estacao_sem_leituras_no_periodo_retorna_none(monkeypatch):
-    monkeypatch.setattr(inmet.requests, "get", lambda url, timeout: RespostaFalsa([]))
+    trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa([]))
     assert inmet.baixar_dados_estacao("A702", *DIA.janela_busca) is None
 
 
@@ -119,7 +128,7 @@ def test_falha_passageira_e_repetida(monkeypatch):
             raise requests.ConnectionError("Remote end closed connection without response")
         return RespostaFalsa([{"DT_MEDICAO": "2026-07-30", "HR_MEDICAO": "1300", "CHUVA": "1,0"}])
 
-    monkeypatch.setattr(inmet.requests, "get", get_falso)
+    trocar_get(monkeypatch, get_falso)
     dados = inmet.baixar_dados_estacao("A702", *DIA.janela_busca)
 
     assert len(tentativas) == config.TENTATIVAS
@@ -134,7 +143,7 @@ def test_erro_de_token_nao_e_repetido(monkeypatch):
         tentativas.append(url)
         return RespostaFalsa(status_code=401, text="token inválido")
 
-    monkeypatch.setattr(inmet.requests, "get", get_falso)
+    trocar_get(monkeypatch, get_falso)
     with pytest.raises(inmet.ErroINMET):
         inmet.baixar_dados_estacao("A702", *DIA.janela_busca)
     assert len(tentativas) == 1

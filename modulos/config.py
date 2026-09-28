@@ -50,6 +50,11 @@ URL_DADOS = "https://apitempo.inmet.gov.br/token/estacao/{inicio}/{fim}/{codigo}
 TIMEOUT_ESTACOES = 20          # segundos
 TIMEOUT_DADOS = 60             # segundos
 PAUSA_ENTRE_REQUISICOES = 0.1  # segundos
+# Quantas consultas podem correr juntas, no processo inteiro. Medido contra a API: com 8 as
+# 62 estações de uma semana saem em ~8 s (em fila levavam ~50 s); com 16 o INMET derruba a
+# conexão. O limite é global de propósito — o painel é público, e cada pessoa que abre
+# dispara o seu lote.
+DOWNLOADS_SIMULTANEOS = 8
 TENTATIVAS = 3                 # tentativas por requisição quando a API falha por um instante
 PAUSA_ENTRE_TENTATIVAS = 2     # segundos antes de repetir; dobra a cada tentativa (2 s, 4 s, ...)
 HORAS_BUSCA_TEMPO_REAL = 96    # histórico baixado no modo tempo real (cobre o acumulado de 72 h)
