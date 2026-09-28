@@ -180,14 +180,23 @@ def barras_do_acumulado(valores: pd.Series, unidade: str, quantas: int | None) -
         # Só quem choveu: numa janela seca, quinze barras de 0,0 mm não dizem nada
         tabela = tabela[tabela["valor"] > 0].head(quantas)
     base = alt.Chart(tabela)
-    barras = base.mark_bar(color="#2171b5", height=13).encode(
-        x=alt.X("valor:Q", title=unidade, axis=alt.Axis(grid=True, gridOpacity=0.25)),
-        y=alt.Y("Estação:N", sort="-x", title=None, axis=alt.Axis(labelFontSize=10)),
+    # labelOverlap=False obriga o eixo a escrever todos os nomes. Com pouca altura ele descarta
+    # um sim, um não — e aí uma lista de 15 estações parece uma de 8.
+    eixo_estacao = alt.Y("Estação:N", sort="-x", title=None,
+                         axis=alt.Axis(labelFontSize=14, labelOverlap=False, labelLimit=230))
+    # size, e não height: em barra deitada é ele que define a espessura. Com height a barra
+    # engorda até preencher a faixa, e os nomes das estações ficam espremidos entre elas.
+    barras = base.mark_bar(color="#2171b5", size=20).encode(
+        x=alt.X("valor:Q", title=unidade,
+                axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=12, titleFontSize=13,
+                              tickCount=8)),
+        y=eixo_estacao,
         tooltip=[alt.Tooltip("Estação:N"), alt.Tooltip("valor:Q", title=unidade, format=".1f")])
-    numeros = base.mark_text(align="left", dx=4, color="#9a9a9a", fontSize=10).encode(
-        x=alt.X("valor:Q"), y=alt.Y("Estação:N", sort="-x"),
-        text=alt.Text("valor:Q", format=".1f"))
-    return (barras + numeros).properties(height=max(20 * len(tabela), 90))
+    numeros = base.mark_text(align="left", dx=6, color="#d0d0d0", fontSize=13).encode(
+        x=alt.X("valor:Q"), y=eixo_estacao, text=alt.Text("valor:Q", format=".1f"))
+    # Altura por estação, mais uma folga para o eixo de baixo: é o que garante espaço para cada
+    # nome. Com altura fixa, três estações ficavam espremidas e quinze viravam oito.
+    return (barras + numeros).properties(height=34 * len(tabela) + 60)
 
 
 def cascata_da_chuva(barras: pd.DataFrame, por_dia: bool) -> alt.Chart:
