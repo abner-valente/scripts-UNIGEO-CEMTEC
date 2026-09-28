@@ -654,12 +654,15 @@ with aba_series:
                 st.caption(f"Mostrando as {ROSAS_MAXIMAS} primeiras de {len(nomes)} estações escolhidas.")
 
     with st.expander("Ver e baixar os dados"):
-        # As colunas cruas por trás das grandezas escolhidas, sem repetir e na ordem do catálogo
-        das_grandezas = [coluna for produto in variaveis.disponiveis(modo_grafico, variaveis.GRAFICO)
-                         if produto.grandeza in escolhidas
-                         for coluna in produto.colunas if coluna in tabela]
-        colunas = ["Estação", "dt_local"] + list(dict.fromkeys(das_grandezas))
-        visivel = tabela[colunas].rename(columns={"dt_local": "Data/Hora (MS)"})
+        # Tudo o que a API devolveu, e não só as grandezas marcadas na barra lateral: quem baixa
+        # quer o dado bruto, e os códigos são os do próprio INMET.
+        visivel = coleta.planilha(tabela)
+        st.caption("Todas as colunas que a API do INMET devolve para as estações e o período "
+                   "escolhidos, com os códigos dela — inclusive as que nenhum gráfico usa, como a "
+                   "sensação térmica (`TEM_SEN`) e a tensão da bateria (`TEN_BAT`). "
+                   "**Vento em km/h**: a API manda em m/s e o painel converte ao carregar, como "
+                   "fazem os produtos. `Data/Hora (MS)` é o horário local; `DT_MEDICAO` e "
+                   "`HR_MEDICAO` são os da API, em UTC.")
         st.dataframe(visivel, width="stretch", height=300)
         st.download_button("Baixar CSV", visivel.to_csv(index=False).encode("utf-8-sig"),
                            file_name=f"leituras_{intervalo[0]:%Y%m%d}_a_{intervalo[1]:%Y%m%d}.csv", mime="text/csv")
