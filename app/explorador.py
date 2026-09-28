@@ -77,12 +77,15 @@ CENTRALIZAR_MAPA = """<style>
   margin-left: auto; margin-right: auto; align-self: center;
 }
 </style>"""
-# O balão do Vega corta o rótulo em 150 px, e "Campo Grande · Média compensada" não cabe —
-# vinha "Média compens…". O balão é um elemento só, pendurado no corpo da página fora do
-# gráfico, então a regra vale para todos eles. O seletor repete o caminho inteiro do estilo do
-# Streamlit: um mais curto perde na especificidade e não pega.
-BALAO_LARGO = """<style>
+# Dois ajustes no balão dos gráficos. Ele é um elemento só, pendurado no corpo da página fora
+# do gráfico, então as regras valem para todos eles; os seletores repetem o caminho inteiro do
+# estilo do Streamlit porque um mais curto perde na especificidade e não pega.
+#  1. O rótulo vinha cortado em 150 px: "Campo Grande · Média compens…".
+#  2. Linha sem valor sai do balão. É assim que a legenda filtra o que ele mostra: as colunas
+#     dele são fixas no spec, então a série escondida vira texto vazio em vez de sumir.
+ESTILO_BALAO = """<style>
 #vg-tooltip-element table tr td.key { max-width: 20rem; }
+#vg-tooltip-element table tr:has(td.value:empty) { display: none; }
 </style>"""
 
 # O streamlit redireciona a saída dos módulos, e no Windows ela vai em cp1252: sem isto, o
@@ -150,22 +153,47 @@ def series_da_grandeza(tabela: pd.DataFrame, grandeza: str, modo: str):
     return pd.concat(pedacos, ignore_index=True).dropna(subset=["valor"]), usados
 
 
-def _apelidos(longo: pd.DataFrame) -> tuple[dict[str, str], pd.Series]:
-    """Um nome curto e seguro para cada linha do gráfico, e o nome legível de cada um.
+def _apelidos(longo: pd.DataFrame) -> dict[tuple[str, str], str]:
+    """Um apelido curto e seguro para cada linha do gráfico: `s0`, `s1`...
 
-    O balão junta todas as linhas de um instante, e para isso o Vega transforma o valor desta
-    coluna em **nome de campo**. Ponto em nome de campo ali quer dizer caminho aninhado, e meia
-    dúzia de estações se chamam "Faz. Alvorada" ou parecido: o nome viraria dois níveis e o
-    balão mostraria vazio. Daí `s0`, `s1`... no dado e o nome legível só no rótulo.
+    O balão junta várias linhas num quadro só, e para isso o Vega transforma esses apelidos em
+    **nomes de campo**. Ponto em nome de campo ali quer dizer caminho aninhado, e meia dúzia de
+    estações se chamam "Faz. Alvorada" ou parecido: o nome viraria dois níveis e o balão
+    mostraria vazio. Daí o apelido no dado e o nome legível só no rótulo.
     """
-    uma_serie = longo["Série"].nunique() == 1
-    juntar = (lambda linha: linha["Estação"] if uma_serie
-              else f"{linha['Estação']} · {linha['Série']}")
-    # Por estação e depois por série: no balão, as três leituras da mesma estação ficam juntas
-    pares = longo[["Estação", "Série"]].drop_duplicates().sort_values(["Estação", "Série"])
-    legiveis = {juntar(linha): f"s{indice}" for indice, (_, linha) in enumerate(pares.iterrows())}
-    coluna = longo.apply(juntar, axis=1).map(legiveis)
-    return legiveis, coluna
+    pares = (longo[["Estação", "Série"]].drop_duplicates()
+             .sort_values(["Estação", "Série"]).itertuples(index=False))
+    return {(estacao, serie): f"s{indice}" for indice, (estacao, serie) in enumerate(pares)}
+
+
+def _regua(dados: pd.DataFrame, linhas_do_balao: list[tuple[str, str, str]], casas: int,
+           por_dia: bool, apontar: alt.Parameter) -> alt.Chart:
+    """Régua vertical e balão com as linhas do instante mais próximo do cursor.
+
+    O balão tem as colunas fixas no spec: esconder uma linha tirando o dado dela deixaria "NaN"
+    no lugar. Então cada linha vira um **texto pronto**, vazio quando a legenda escondeu aquela
+    série ou quando a estação não mediu naquela hora — e linha vazia some do balão por CSS.
+
+    Uma régua só, e não uma por estado da legenda: o Vega-Lite constrói uma única vizinhança de
+    cursor por gráfico, e as outras camadas ficariam sem nenhuma.
+    """
+    grafico = alt.Chart(dados).transform_pivot("chave", value="valor", groupby=["dt_local"])
+    balao = [alt.Tooltip("dt_local:T", title="Quando", format="%d/%m" if por_dia else "%d/%m %H:%M")]
+    for nome, apelido, serie in linhas_do_balao:
+        # Sem nada escolhido na legenda, tudo aparece; com uma série escolhida, só ela
+        visivel = (f"!length(data('isolar_store')) "
+                   f"|| vlSelectionTest('isolar_store', {{'Série': {serie!r}}})")
+        grafico = grafico.transform_calculate(**{
+            f"t{apelido}": f"({visivel}) && isValid(datum[{apelido!r}]) "
+                           f"? format(datum[{apelido!r}], '.{casas}f') : ''"})
+        balao.append(alt.Tooltip(f"t{apelido}:N", title=nome))
+
+    return (grafico
+            .mark_rule(color="#9a9a9a", strokeWidth=1)
+            .encode(x=alt.X("dt_local:T", title=None),
+                    opacity=alt.condition(apontar, alt.value(0.5), alt.value(0)),
+                    tooltip=balao)
+            .add_params(apontar))
 
 
 def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, casas: int = 1) -> alt.Chart:
@@ -173,13 +201,14 @@ def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, 
 
     Cinco estações com três séries dariam quinze linhas iguais. Cor para a estação e traço para
     a série (máxima, mínima, média) deixa as duas leituras possíveis no mesmo desenho; clicar na
-    legenda isola uma série.
+    legenda isola uma série, no desenho e também no balão.
     """
     # Arrastar move e Shift+roda aproxima. Sem o Shift, a roda do mouse em cima do gráfico
     # aproximaria em vez de rolar a página, e quem passa por vários gráficos fica preso no
     # primeiro (é o que o .interactive() faz por padrão).
     navegar = alt.selection_interval(bind="scales", zoom="wheel![event.shiftKey]")
-    isolar = alt.selection_point(fields=["Série"], bind="legend")
+    # Nomeada porque o balão precisa perguntar, lá dentro, que série a legenda escolheu
+    isolar = alt.selection_point(name="isolar", fields=["Série"], bind="legend")
     # O cursor em qualquer lugar do gráfico marca a hora mais próxima, e não só quando cai em
     # cima de um ponto: o Vega monta a vizinhança de cada instante e o balão traz todas as
     # estações daquela hora de uma vez — que é a comparação que se quer fazer.
@@ -190,8 +219,9 @@ def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, 
     por_dia = modo == variaveis.DIA
     formato = ("[timeFormat(datum.value, '%d/%m')]" if por_dia
                else "[timeFormat(datum.value, '%H:%M'), timeFormat(datum.value, '%d/%m')]")
-    nomes, coluna_chave = _apelidos(longo)
-    dados = longo.assign(chave=coluna_chave)
+    apelidos = _apelidos(longo)
+    chaves = pd.Series(list(zip(longo["Estação"], longo["Série"])), index=longo.index)
+    dados = longo.assign(chave=chaves.map(apelidos))
 
     eixo_x = alt.X("dt_local:T", title=None,
                    axis=alt.Axis(grid=True, gridOpacity=0.25, labelAngle=0, labelExpr=formato,
@@ -206,22 +236,16 @@ def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, 
               .encode(strokeDash=alt.StrokeDash("Série:N", title=None,
                                                 legend=alt.Legend(orient="bottom")))
               .add_params(navegar, isolar))
-    # O ponto da hora apontada cresce em todas as linhas: sem isto, o balão diz números que quem
-    # olha não sabe a qual altura do gráfico pertencem.
-    destaque = base.mark_point(size=150, filled=True).transform_filter(apontar)
+    # O ponto da hora apontada cresce, nas linhas que a legenda deixa à mostra: sem isto, o balão
+    # diz números que quem olha não sabe a qual altura do gráfico pertencem.
+    destaque = (base.mark_point(size=150, filled=True)
+                .transform_filter(apontar).transform_filter(isolar))
 
-    balao = [alt.Tooltip("dt_local:T", title="Quando", format="%d/%m" if por_dia else "%d/%m %H:%M")]
-    balao += [alt.Tooltip(f"{apelido}:Q", title=nome, format=f".{casas}f")
-              for nome, apelido in nomes.items()]
-    # O pivô é o que permite um balão só com todas as linhas: ele passa as séries daquele
-    # instante de linhas para colunas, e o balão lê uma linha só.
-    regua = (alt.Chart(dados)
-             .transform_pivot("chave", value="valor", groupby=["dt_local"])
-             .mark_rule(color="#9a9a9a", strokeWidth=1)
-             .encode(x=alt.X("dt_local:T", title=None),
-                     opacity=alt.condition(apontar, alt.value(0.5), alt.value(0)),
-                     tooltip=balao)
-             .add_params(apontar))
+    # Com uma série só (a direção do vento), repetir o nome dela em cada linha seria ruído
+    series = list(dict.fromkeys(serie for _, serie in apelidos))
+    linhas_do_balao = [(estacao if len(series) == 1 else f"{estacao} · {serie}", apelido, serie)
+                       for (estacao, serie), apelido in apelidos.items()]
+    regua = _regua(dados, linhas_do_balao, casas, por_dia, apontar)
 
     return alt.layer(linhas, destaque, regua).properties(height=ALTURA_GRAFICO)
 
@@ -543,9 +567,11 @@ with aba_series:
     # outras têm a sua própria. Na lateral ela parecia um filtro geral, e não era.
     modo_grafico = MODOS_GRAFICO[st.radio("Agregação", list(MODOS_GRAFICO), horizontal=True,
                                           key="modo_serie")]
-    st.markdown(BALAO_LARGO, unsafe_allow_html=True)
+    st.markdown(ESTILO_BALAO, unsafe_allow_html=True)
     st.caption(f"{len(tabela)} leituras de {tabela['Estação'].nunique()} estações · "
-               f"{len(tabela) / (horas_esperadas * len(nomes)):.0%} das horas do período têm registro")
+               f"{len(tabela) / (horas_esperadas * len(nomes)):.0%} das horas do período têm registro · "
+               "Na legenda, **clique numa série** para deixar só ela no gráfico e no balão; "
+               "**Shift+clique** na série destacada traz todas de volta.")
     if not escolhidas:
         st.info("Escolha ao menos uma variável na barra lateral.")
 
