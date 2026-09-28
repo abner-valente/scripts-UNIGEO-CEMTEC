@@ -168,7 +168,8 @@ def mapa_pontual(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartografica
 
 
 def mapa_interpolado(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartografica,
-                     caminho: Path | None = None, tela: Tela | None = None) -> Figure | None:
+                     caminho: Path | None = None, tela: Tela | None = None,
+                     niveis=None) -> Figure | None:
     """Superfície IDW recortada ao estado, com as estações e (opcionalmente) a direção do vento.
 
     Devolve None quando há estações de menos para interpolar: com poucos pontos a superfície
@@ -182,7 +183,9 @@ def mapa_interpolado(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartogra
     grade = calculos.interpolar_idw(gdf["Longitude"], gdf["Latitude"], gdf[espec.coluna],
                                     base.lon_grade, base.lat_grade, config.IDW_VIZINHOS, config.IDW_POTENCIA)
     valores = gdf[espec.coluna]
-    niveis = 20 if valores.max() > valores.min() else np.linspace(*_faixa_de_cores(valores), 11)
+    if niveis is None:
+        # Sem níveis dados, a escala se estica ao dado — como os relatórios sempre fizeram
+        niveis = 20 if valores.max() > valores.min() else np.linspace(*_faixa_de_cores(valores), 11)
     return mapa_de_grade(grade, gdf, espec, base, caminho, niveis, tela)
 
 
@@ -194,8 +197,12 @@ def mapa_de_grade(grade, gdf, espec: EspecMapa, base: BaseCartografica, caminho:
     risco de fogo, por exemplo, combina três variáveis interpoladas em cada hora.
     """
     fig, ax = _nova_figura((14, 12))
+    # `extend` pinta o que passa das pontas com a cor do extremo. Sem isso, numa escala fixa, um
+    # valor acima do teto sairia branco no mapa — como se não houvesse medição ali.
+    extremos = "max" if _so_acima(niveis) else "both"
     superficie = ax.contourf(base.lon_grade, base.lat_grade, _recortar(grade, base),
-                             levels=niveis, cmap=espec.cmap, alpha=0.8)
+                             levels=niveis, cmap=espec.cmap, alpha=0.8,
+                             extend=extremos if np.ndim(niveis) else "neither")
     superficie.set_clip_path(base.contorno_uf, transform=ax.transData)
     if tela is None or tela.barra_de_cores:
         barra = fig.colorbar(superficie, ax=ax, label=espec.unidade, shrink=0.75)
@@ -324,6 +331,12 @@ def _desenhar_indicadores(ax, gdf, indicadores: Indicadores) -> None:
 def _formato(espec: EspecMapa):
     """Formatação dos números do mapa (rótulos e ranking), com as casas decimais da especificação."""
     return f"{{:.{espec.decimais}f}}".format
+
+
+def _so_acima(niveis) -> bool:
+    """Se a escala só estende para cima — é o caso da chuva, onde abaixo da primeira classe não
+    choveu, e pintar isso de azul claro inventaria chuva que não houve."""
+    return bool(np.ndim(niveis)) and float(np.min(niveis)) > 0
 
 
 def _faixa_de_cores(valores: pd.Series) -> tuple[float, float]:

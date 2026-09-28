@@ -579,6 +579,9 @@ O **mesmo mapa interpolado dos produtos** — mesma interpolação IDW, mesmo re
 |---|---|
 | **Estações** | Todas as 62 de MS, e não só as escolhidas na barra lateral: com duas ou três a superfície inventaria o estado inteiro. Por isso a aba começa com um botão — a primeira consulta demora alguns minutos, e depois vem do cache |
 | **Três modos** | **Hora a hora** mostra a leitura como a estação mandou; **por dia** e **período inteiro** mostram os produtos do boletim, cada um com a sua regra. O deslizante anda de hora em hora ou de dia em dia; no período inteiro não há deslizante, porque é um mapa só para a janela |
+| **A escala de cores é fixa** | A mesma cor quer dizer o mesmo valor em qualquer mapa. Esticada ao dado de cada instante, ela enganava: num dia de 34 a 41 °C, os 36 °C saíam azuis e pareciam amenos. As faixas estão em [`app/variaveis.py`](app/variaveis.py) — temperatura 0 a 45 °C, umidade 0 a 100%, vento 0 a 130 km/h. Chuva e radiação vão por **classes**, escolhidas pela duração da janela, porque o acumulado de uma hora e o de um mês não cabem na mesma régua. A pressão é a exceção: fica ajustada ao dado, porque a API manda a pressão da estação, sem redução ao nível do mar, e entre altitudes diferentes o mapa desenharia o relevo |
+| **Quando a escala atrapalha** | Num dia em que o estado inteiro fica entre 20 e 25 °C, a escala fixa deixa o mapa quase de uma cor só. A caixa **"Ajustar a escala ao dado"** devolve o contraste — com o custo de as cores mudarem de significado |
+| **A régua embaixo** | Cada mapa traz a sua barra de cores deitada e fina, sob o desenho. Com escala fixa ela vale para qualquer mapa daquela grandeza |
 | **A regra é da variável** | Não existe mais escolher "média, máxima, mínima ou soma" para qualquer coisa: a máxima do dia é a **maior das máximas horárias**, a chuva do dia é a **soma**, a umidade do mapa é a **menor mínima**. O catálogo com todas as regras está em [`app/variaveis.py`](app/variaveis.py), e a regra de cada mapa vai escrita embaixo dele |
 | **Vários mapas lado a lado** | Os mapas escolhidos saem em linha, três por linha, no mesmo instante: dá para ver a temperatura alta bater com a umidade baixa sem trocar de tela |
 | **O que o mapa mostra** | Neste tamanho, o **padrão**: a superfície interpolada e as estações como pontos. Barra de cores, grade de latitude e longitude e valor de cada estação saem do desenho — com 62 estações numa coluna de ~470 px eles se cobrem e viram borrão, e a moldura de coordenadas toma a borda inteira. A **faixa de valores** (mínimo e máximo do instante) vai escrita sob cada mapa, e a caixa **"Mostrar o valor de cada estação"** traz os números de volta, para ler ampliando no ícone de tela cheia |
@@ -592,7 +595,9 @@ Todos os mapas de chuva ficam aqui, e não junto dos outros, por um motivo de fu
 
 | | |
 |---|---|
-| **Acumulados** | 3, 6, 12, 24, 48, 72, 96 h e o **mensal**. Cada janela conta para trás a partir do fim do período; o mensal começa no dia 1º |
+| **Até quando** | Um deslizante no topo escolhe o **instante de referência**, e toda janela conta para trás a partir dele. Sem isso ficava a dúvida de quem olha: "acumulado de 24 h, mas até que dia?" |
+| **Acumulados** | 3, 6, 12, 24, 48, 72, 96 h e o **mensal**, que começa no dia 1º |
+| **Barra primeiro, mapa sob demanda** | A barra diz **quanto** choveu em cada estação, ordenado — é o número que vai para o texto do boletim. O mapa diz **onde** choveu, e custa um desenho por janela no servidor; por isso fica atrás da caixa "Gerar também os mapas". A lista traz as 15 que mais choveram, e só quem choveu: numa janela seca, quinze barras de 0,0 mm não dizem nada |
 | **A carga é maior** | Por isso a aba tem o seu próprio botão: a consulta vai até o começo do mês (ou 96 h atrás, o que for mais antigo) |
 | **Quando não fecha** | Se o dado carregado não alcança o começo de uma janela, a tela avisa e não desenha aquele mapa — um acumulado de 96 h feito com 48 h de dado mostraria metade da chuva como se fosse o total |
 | **Hora a hora e por dia** | Também estão aqui, e esses respeitam o período escolhido, como as outras abas |
