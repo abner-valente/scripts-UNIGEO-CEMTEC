@@ -92,6 +92,27 @@ def test_estacao_sem_dados_nao_deixa_arquivo(cache_temporario, monkeypatch):
     assert not (cache_temporario / "cache").exists()
 
 
+def test_a_planilha_traz_tudo_o_que_a_api_devolveu():
+    """Quem baixa quer o dado bruto, e não só as grandezas marcadas no filtro da tela."""
+    leituras = pd.DataFrame({
+        "dt_utc": pd.to_datetime(["2026-09-15 12:00"], utc=True),
+        "dt_local": pd.to_datetime(["2026-09-15 08:00"]),
+        "Estação": ["Bonito"], "CHUVA": [0.0], "TEM_INS": [25.0],
+        "TEN_BAT": [13.1], "TEM_SEN": [26.0], "COLUNA_NOVA_DA_API": [1],
+    })
+
+    planilha = coleta.planilha(leituras)
+
+    assert {"CHUVA", "TEN_BAT", "TEM_SEN"} <= set(planilha.columns)   # nenhum filtro as tira
+    assert list(planilha.columns[:2]) == ["Estação", "Data/Hora (MS)"]
+    assert "dt_utc" not in planilha                                   # DT_MEDICAO já diz isso
+    assert planilha.columns[-1] == "COLUNA_NOVA_DA_API"               # o que não conhecemos sai no fim
+
+
+def test_planilha_de_tabela_vazia_nao_quebra():
+    assert coleta.planilha(pd.DataFrame()).empty
+
+
 def test_limpar_cache_remove_os_arquivos(cache_temporario, api_contada):
     coleta.leituras("A702", *DIA.janela)
     quantidade, megabytes = coleta.tamanho_do_cache()

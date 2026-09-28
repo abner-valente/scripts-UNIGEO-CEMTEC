@@ -17,6 +17,21 @@ from modulos import config, inmet
 
 PASTA_CACHE = config.RAIZ / "cache"
 
+# Ordem em que as colunas saem na tabela para ver e baixar. A API devolve as chaves em ordem
+# arbitrária (é JSON), e uma planilha com PRE_MAX antes de TEM_INS não se lê. O que não estiver
+# nesta lista sai no fim, como veio: se o INMET publicar uma coluna nova, ela aparece sozinha.
+ORDEM_DAS_COLUNAS = [
+    "Estação", "CD_ESTACAO", "DC_NOME", "UF", "VL_LATITUDE", "VL_LONGITUDE",
+    "Data/Hora (MS)", "DT_MEDICAO", "HR_MEDICAO",
+    "TEM_INS", "TEM_MAX", "TEM_MIN", "TEM_SEN",
+    "UMD_INS", "UMD_MAX", "UMD_MIN",
+    "PTO_INS", "PTO_MAX", "PTO_MIN",
+    "PRE_INS", "PRE_MAX", "PRE_MIN",
+    "VEN_VEL", "VEN_DIR", "VEN_RAJ",
+    "RAD_GLO", "CHUVA",
+    "TEN_BAT", "TEM_CPU",
+]
+
 
 def leituras(codigo: str, inicio: datetime, fim: datetime) -> pd.DataFrame:
     """Série horária de uma estação na janela (início, fim], vinda do cache quando ele já a cobre.
@@ -67,6 +82,24 @@ def varias(codigos: tuple[str, ...], nomes: tuple[str, ...], inicio: datetime, f
 
     series = [chegaram[nome].assign(Estação=nome) for nome in nomes if nome in chegaram]
     return (pd.concat(series, ignore_index=True) if series else pd.DataFrame()), sorted(falharam)
+
+
+def planilha(leituras: pd.DataFrame) -> pd.DataFrame:
+    """A tabela inteira, como a API a entrega, pronta para ver e baixar.
+
+    **Todas** as colunas, e não só as das grandezas escolhidas na barra lateral: quem baixa o
+    dado costuma querer o bruto — para conferir uma suspeita, levar para outro programa ou olhar
+    a bateria da estação —, e ter de voltar ao filtro para isso é atrito à toa.
+
+    `dt_utc` fica de fora porque DT_MEDICAO e HR_MEDICAO já dizem o mesmo, do jeito do INMET.
+    """
+    if leituras.empty:
+        return leituras
+    tabela = (leituras.rename(columns={"dt_local": "Data/Hora (MS)"})
+              .drop(columns=["dt_utc"], errors="ignore"))
+    conhecidas = [coluna for coluna in ORDEM_DAS_COLUNAS if coluna in tabela]
+    demais = [coluna for coluna in tabela.columns if coluna not in ORDEM_DAS_COLUNAS]
+    return tabela[conhecidas + demais]
 
 
 def limpar_cache() -> int:

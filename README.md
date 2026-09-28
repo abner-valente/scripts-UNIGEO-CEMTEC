@@ -572,6 +572,7 @@ O navegador abre em `http://localhost:8501`. Na barra lateral ficam o período, 
 | **Cache** | O que já foi baixado fica em `cache/`, fora do controle de versão, para a tela responder rápido a cada filtro. Alargar o período baixa **só os dias que faltam**. O botão **Limpar cache** apaga tudo; o que faltar é baixado de novo |
 | **A espera é de rede** | É uma consulta por estação, e são 62. Em fila, uma semana levava ~50 s e um mês, ~105 s — o processamento em si custa 0,2 s. As consultas saem **8 de cada vez** (`config.DOWNLOADS_SIMULTANEOS`), reaproveitando a conexão: a mesma semana sai em ~4 s. O limite é do processo inteiro, e não de cada pessoa que abre o painel — com 16 simultâneas o INMET derruba a conexão. Uma barra mostra quantas estações já chegaram |
 | **Na nuvem começa do zero** | O Streamlit Cloud reconstrói o contêiner a cada publicação e quando o app acorda de um período parado, e o `cache/` vai junto. Quem abrir logo depois paga a consulta inteira; a partir daí vem do cache |
+| **Baixar os dados** | O CSV traz **todas as colunas que a API devolve**, com os códigos do INMET, independente das grandezas escolhidas: inclusive as que nenhum gráfico usa, como a sensação térmica (`TEM_SEN`) e a tensão da bateria (`TEN_BAT`). A única coisa que não vem como a API mandou é o **vento, em km/h** — o painel converte ao carregar, como os produtos |
 | **Onde roda** | Na sua máquina. Não é um serviço: cada pessoa abre o seu |
 
 ### Aba "Mapas Boletim"
