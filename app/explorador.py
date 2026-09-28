@@ -111,20 +111,29 @@ def carregar_estacoes() -> pd.DataFrame:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def carregar_leituras(codigos: tuple[str, ...], nomes: tuple[str, ...],
-                      inicio: datetime, fim: datetime) -> tuple[pd.DataFrame, list[str]]:
-    """Séries das estações escolhidas, com a lista das que falharam."""
-    series, falharam = [], []
-    for codigo, nome in zip(codigos, nomes):
-        try:
-            leituras = coleta.leituras(codigo, inicio, fim)
-        except inmet.ErroINMET:
-            falharam.append(nome)
-            continue
-        if leituras.empty:
-            falharam.append(nome)
-            continue
-        series.append(leituras.assign(Estação=nome))
-    tabela = pd.concat(series, ignore_index=True) if series else pd.DataFrame()
+                      inicio: datetime, fim: datetime,
+                      _mensagem: str = "Consultando o INMET") -> tuple[pd.DataFrame, list[str]]:
+    """Séries das estações escolhidas, com a lista das que falharam.
+
+    A espera é de rede: uma consulta por estação, e são 62. A barra diz quantas já chegaram —
+    um giro sem número não diz se falta muito, e numa janela longa a pessoa desiste antes de o
+    mapa aparecer.
+
+    A barra nasce **aqui dentro** de propósito. O Streamlit grava os elementos desenhados dentro
+    de uma função cacheada e os redesenha quando a resposta vem do cache; uma barra criada fora
+    quebra esse redesenho, porque o lugar dela pode não existir mais. Como ela é apagada antes
+    do retorno, o redesenho não mostra nada — que é o certo, já que não houve espera.
+
+    `_mensagem` começa com sublinhado para ficar fora da chave do cache: duas abas pedindo a
+    mesma janela com textos diferentes baixariam tudo duas vezes.
+    """
+    barra = st.progress(0.0, text=_mensagem)
+
+    def avancar(concluidas: int, total: int) -> None:
+        barra.progress(concluidas / total, text=f"{_mensagem} — {concluidas} de {total} estações")
+
+    tabela, falharam = coleta.varias(codigos, nomes, inicio, fim, avancar)
+    barra.empty()
     for coluna, fator in CONVERSOES.items():
         if coluna in tabela:
             tabela[coluna] = tabela[coluna] * fator
@@ -550,8 +559,7 @@ fim = (datetime.combine(intervalo[1], datetime.min.time(), tzinfo=config.FUSO_MS
        + timedelta(days=1)).astimezone(config.FUSO_UTC)
 codigos = tuple(estacoes.set_index("Estação").loc[nomes, "CD_ESTACAO"])
 
-with st.spinner("Consultando o INMET (o que já estiver em cache não é baixado de novo)..."):
-    tabela, falharam = carregar_leituras(codigos, tuple(nomes), inicio, fim)
+tabela, falharam = carregar_leituras(codigos, tuple(nomes), inicio, fim)
 
 if tabela.empty:
     st.warning("Nenhuma das estações escolhidas tem dados nesse período.")
@@ -667,9 +675,8 @@ with aba_mapa:
             st.session_state["mapa_liberado"] = True
             st.rerun()
     else:
-        with st.spinner(f"Consultando as {len(estacoes)} estações do estado..."):
-            leituras_mapa, ausentes_mapa = carregar_leituras(tuple(estacoes["CD_ESTACAO"]),
-                                                             tuple(estacoes["Estação"]), inicio, fim)
+        leituras_mapa, ausentes_mapa = carregar_leituras(tuple(estacoes["CD_ESTACAO"]),
+                                                         tuple(estacoes["Estação"]), inicio, fim)
         # O modo mora aqui, e não na barra lateral, porque o mapa tem um a mais que o gráfico: o
         # período inteiro, que é um mapa só para a janela toda, sem deslizante.
         modo = MODOS_MAPA[st.radio("Agregação", list(MODOS_MAPA), horizontal=True, key="modo_mapa")]
@@ -765,10 +772,10 @@ with aba_chuva:
             st.session_state["chuva_liberada"] = True
             st.rerun()
     else:
-        with st.spinner(f"Consultando a chuva desde {inicio_chuva:%d/%m}..."):
-            leituras_chuva, ausentes_chuva = carregar_leituras(
-                tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]),
-                inicio_chuva.astimezone(config.FUSO_UTC), ate.astimezone(config.FUSO_UTC))
+        leituras_chuva, ausentes_chuva = carregar_leituras(
+            tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]),
+            inicio_chuva.astimezone(config.FUSO_UTC), ate.astimezone(config.FUSO_UTC),
+            f"Consultando a chuva desde {inicio_chuva:%d/%m}")
 
         if leituras_chuva.empty or chuva_calc.COLUNA not in leituras_chuva:
             st.warning("A API não devolveu chuva no período.")
@@ -882,9 +889,8 @@ with aba_navegavel:
     if not st.session_state.get("mapa_liberado"):
         st.info(f"Precisa das {len(estacoes)} estações do estado. Carregue-as na aba **Mapas Boletim**.")
     else:
-        with st.spinner(f"Consultando as {len(estacoes)} estações do estado..."):
-            leituras_navegavel, _ = carregar_leituras(tuple(estacoes["CD_ESTACAO"]),
-                                                      tuple(estacoes["Estação"]), inicio, fim)
+        leituras_navegavel, _ = carregar_leituras(tuple(estacoes["CD_ESTACAO"]),
+                                                  tuple(estacoes["Estação"]), inicio, fim)
         modo_nav = MODOS_MAPA[st.radio("Agregação", list(MODOS_MAPA), horizontal=True, key="modo_navegavel")]
         catalogo_nav = [produto for produto in variaveis.disponiveis(modo_nav, variaveis.MAPA)
                         if produto.grandeza != "Chuva"
@@ -974,8 +980,8 @@ with aba_qualidade:
                         help="Ignora a seleção da barra lateral. Na primeira vez demora, porque baixa tudo; "
                              "depois vem do cache.")
     if todas:
-        with st.spinner(f"Consultando as {len(estacoes)} estações do estado..."):
-            base, ausentes = carregar_leituras(tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]), inicio, fim)
+        base, ausentes = carregar_leituras(tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]),
+                                           inicio, fim)
     else:
         base, ausentes = tabela, falharam
 

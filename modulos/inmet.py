@@ -1,4 +1,5 @@
 """Acesso à API do INMET (apitempo.inmet.gov.br)."""
+import threading
 import time
 from datetime import datetime
 
@@ -6,6 +7,16 @@ import pandas as pd
 import requests
 
 from . import config
+
+# Uma conexão por thread, reaproveitada entre as consultas. Abrir conexão nova a cada estação
+# custava 0,34 s das 0,83 s de cada uma — quase metade da espera era aperto de mão.
+_CONEXAO = threading.local()
+# Teto de consultas simultâneas do processo inteiro, e não de cada lote: ver config.
+_VAGAS = threading.Semaphore(config.DOWNLOADS_SIMULTANEOS)
+
+
+def _sessao() -> requests.Session:
+    return _CONEXAO.__dict__.setdefault("sessao", requests.Session())
 
 # A API devolve tudo como texto. Estas são as colunas que continuam texto; todas as outras
 # (temperatura, umidade, chuva, vento, pressão, radiação, ponto de orvalho...) viram número.
@@ -32,7 +43,10 @@ def _consultar(url: str, timeout: int) -> list | dict:
     espera = config.PAUSA_ENTRE_TENTATIVAS
     for tentativa in range(1, config.TENTATIVAS + 1):
         try:
-            resposta = requests.get(url, timeout=timeout)
+            # A espera entre tentativas fica fora da vaga: segurá-la enquanto se dorme tiraria
+            # do ar uma das oito faixas justamente quando a API está ruim.
+            with _VAGAS:
+                resposta = _sessao().get(url, timeout=timeout)
             if 400 <= resposta.status_code < 500:  # token inválido, estação inexistente: repetir não resolve
                 raise ErroINMET(f"HTTP {resposta.status_code}: {_sem_token(resposta.text[:100])}")
             resposta.raise_for_status()
