@@ -214,7 +214,7 @@ def mapa_de_grade(grade, gdf, espec: EspecMapa, base: BaseCartografica, caminho:
     rotulos = gdf[espec.coluna].map(_formato(espec))
     sufixos_ranking = None
     if espec.direcao_vento:
-        _desenhar_setas_vento(ax, gdf)
+        _desenhar_setas_vento(ax, gdf, espec.coluna, tela)
         direcao = gdf["Direção (°)"]
         rotulos = rotulos + direcao.map(lambda d: "" if pd.isna(d) else f"\n{d:.0f}°")
         sufixos_ranking = direcao.map(lambda d: "" if pd.isna(d) else f" ({d:.0f}°)")
@@ -388,16 +388,20 @@ def _ranking(ax, gdf, espec: EspecMapa, tamanho_fonte, sufixos=None) -> None:
             bbox=dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor="black", alpha=0.9))
 
 
-def _desenhar_setas_vento(ax, gdf) -> None:
-    """Setas apontando para onde o vento sopra; comprimento proporcional à rajada."""
+def _desenhar_setas_vento(ax, gdf, coluna: str, tela: "Tela | None" = None) -> None:
+    """Setas apontando para onde o vento sopra; comprimento proporcional ao valor do mapa.
+
+    A medida é a coluna que o próprio mapa mostra — a rajada no mapa de rajadas, a velocidade no
+    de velocidade —, para a seta não crescer por um número que não está ali.
+    """
     for _, linha in gdf[gdf["Direção (°)"].notna()].iterrows():
         angulo = np.radians(linha["Direção (°)"])
-        comprimento = 0.4 * min(linha["Rajada (km/h)"] / 50.0, 1.5)
+        comprimento = 0.4 * min(linha[coluna] / 50.0, 1.5)
         ax.arrow(linha.geometry.x, linha.geometry.y, -np.sin(angulo) * comprimento, -np.cos(angulo) * comprimento,
                  head_width=0.08, head_length=0.12, fc="red", ec="red", linewidth=2, alpha=0.8, zorder=6)
     legenda = Line2D([0], [0], color="red", linewidth=2, marker=">", markersize=10, alpha=0.8,
                      label="Direção do vento (comprimento ∝ velocidade)")
-    ax.legend(handles=[legenda], loc="lower left", fontsize=10)
+    ax.legend(handles=[legenda], loc="lower left", fontsize=_corpo(tela))
 
 
 def _corpo(tela: "Tela | None") -> float:

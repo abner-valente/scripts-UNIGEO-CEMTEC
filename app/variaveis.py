@@ -50,13 +50,14 @@ class Produto:
     onde: tuple[str, ...] = (MAPA, GRAFICO)
     decimais: int = 1
     zero_na_base: bool = False     # o eixo do gráfico começa no zero (chuva, radiação, vento)
+    direcao: str | None = None     # chave de DIRECOES: a seta que acompanha o valor no mapa
 
 
 # =====================================================
 # CÁLCULOS
 # =====================================================
-def _compensada(dados: pd.DataFrame, colunas: tuple[str, ...]) -> float:
-    """Média compensada do INMET: (T9 + 2·T21 + Tmín + Tmáx) / 5.
+def _compensada_do_dia(dados: pd.DataFrame, colunas: tuple[str, ...]) -> float:
+    """Média compensada do INMET de um dia: (T9 + 2·T21 + Tmín + Tmáx) / 5.
 
     As 9 h e as 21 h são horário de MS, como a equipe definiu — ambas caem dentro do nosso dia
     (da leitura das 01 h à das 00 h), então não há deslocamento de dia nenhum.
@@ -70,6 +71,61 @@ def _compensada(dados: pd.DataFrame, colunas: tuple[str, ...]) -> float:
     if t9.empty or t21.empty:
         return float("nan")
     return (t9.iloc[0] + 2 * t21.iloc[0] + dados[minima].min() + dados[maxima].max()) / 5
+
+
+def _compensada(dados: pd.DataFrame, colunas: tuple[str, ...]) -> float:
+    """A compensada do dia; num período de vários dias, a média das compensadas diárias.
+
+    É assim que se fecha a média de um mês. Aplicar a fórmula ao período inteiro casaria as 9 h
+    do primeiro dia com a máxima de outro — um número que não é de dia nenhum. Dia incompleto sai
+    da média em vez de zerá-la.
+    """
+    por_dia = dados.groupby(_fatias(dados, DIA), sort=False).apply(
+        lambda dia: _compensada_do_dia(dia, colunas), include_groups=False)
+    return por_dia.mean()
+
+
+# =====================================================
+# DIREÇÃO DO VENTO
+# =====================================================
+# Direção não se interpola: entre 350° e 10° o vento mal mudou, mas a média daria 180°, o rumo
+# oposto. Então ela não vira superfície — vai como seta sobre cada estação. E a seta precisa
+# dizer a direção *daquele* número: na rajada, a da hora em que a rajada aconteceu; na
+# velocidade média, a resultante das horas.
+DIRECAO = "VEN_DIR"
+
+
+def _direcao_da_maior(dados: pd.DataFrame, coluna: str) -> float:
+    """A direção da hora em que aquela medida foi a maior — é a hora que o mapa está mostrando."""
+    validos = dados.dropna(subset=[coluna, DIRECAO])
+    if validos.empty:
+        return float("nan")
+    return float(validos.loc[validos[coluna].idxmax(), DIRECAO])
+
+
+def _direcao_resultante(dados: pd.DataFrame, coluna: str) -> float:
+    """A resultante das horas: soma vetorial, cada hora pesada pela sua velocidade.
+
+    É a conta que responde "de onde veio o vento no período". A média dos ângulos não responde:
+    12 h de norte e 12 h de sul dariam leste, um rumo que não soprou em hora nenhuma. Aqui os
+    dois se cancelam e sobra o resto, que é o que de fato aconteceu.
+    """
+    validos = dados.dropna(subset=[coluna, DIRECAO])
+    if validos.empty:
+        return float("nan")
+    angulos = np.radians(validos[DIRECAO])
+    leste = (validos[coluna] * np.sin(angulos)).sum()
+    norte = (validos[coluna] * np.cos(angulos)).sum()
+    # Comparar com zero cravado não serve: o seno de 180° não dá 0 exato, e doze horas de norte
+    # contra doze de sul sobrariam como um rumo qualquer. O que sobra tem de ser desprezível
+    # perto do quanto ventou — aí não há rumo resultante, e a estação fica sem seta.
+    if np.hypot(leste, norte) < 1e-9 * max(validos[coluna].sum(), 1.0):
+        return float("nan")
+    graus = float(np.degrees(np.arctan2(leste, norte)) % 360)
+    return 0.0 if graus >= 360.0 else graus   # 360° é o mesmo norte que 0°
+
+
+DIRECOES = {"da_maior": _direcao_da_maior, "resultante": _direcao_resultante}
 
 
 # Cálculos que o pandas sabe fazer sozinho, direto na coluna. O gráfico horário pede um valor
@@ -109,11 +165,13 @@ PRODUTOS = [
             "°C", PALETA_TEMPERATURA, "maior máxima horária da janela"),
     Produto("Temperatura mínima", "Temperatura", (DIA, PERIODO), ("TEM_MIN",), "menor",
             "°C", PALETA_TEMPERATURA, "menor mínima horária da janela"),
-    Produto("Temperatura média", "Temperatura", (DIA, PERIODO), ("TEM_INS",), "media",
+    Produto("Temperatura média", "Temperatura", (DIA,), ("TEM_INS",), "media",
             "°C", PALETA_TEMPERATURA, "média das leituras das horas cheias"),
-    Produto("Temperatura média compensada", "Temperatura", (DIA,), ("TEM_INS", "TEM_MAX", "TEM_MIN"),
-            "compensada", "°C", PALETA_TEMPERATURA, "(T9 + 2·T21 + Tmín + Tmáx) ÷ 5, horário de MS",
-            onde=(GRAFICO,)),
+    # A média do período é a compensada, e não a média das horas cheias: é a que fecha a média de
+    # um mês no INMET, e a que dá para comparar com a normal climatológica.
+    Produto("Temperatura média compensada", "Temperatura", (DIA, PERIODO),
+            ("TEM_INS", "TEM_MAX", "TEM_MIN"), "compensada", "°C", PALETA_TEMPERATURA,
+            "(T9 + 2·T21 + Tmín + Tmáx) ÷ 5, horário de MS; no período, a média das diárias"),
 
     # --- Umidade -----------------------------------------------------------
     Produto("Umidade máxima da hora", "Umidade", (HORA,), ("UMD_MAX",), "valor",
@@ -151,17 +209,23 @@ PRODUTOS = [
     # --- Vento -------------------------------------------------------------
     # A API manda em m/s; o explorador converte para km/h ao carregar, como fazem os produtos.
     Produto("Velocidade na hora", "Vento", (HORA,), ("VEN_VEL",), "valor",
-            "km/h", "turbo", "média da velocidade dentro da hora", zero_na_base=True),
+            "km/h", "turbo", "média da velocidade dentro da hora; a seta traz a direção da hora",
+            zero_na_base=True, direcao="resultante"),
     Produto("Rajada na hora", "Vento", (HORA,), ("VEN_RAJ",), "valor",
-            "km/h", "turbo", "maior velocidade instantânea dentro da hora", zero_na_base=True),
+            "km/h", "turbo",
+            "maior velocidade instantânea dentro da hora; a seta traz a direção da hora",
+            zero_na_base=True, direcao="da_maior"),
     # Só gráfico: interpolar ângulo não funciona — entre 350° e 10° a média daria 180°, o rumo
     # oposto. No mapa, direção se mostra com seta, como o relatório faz sobre a rajada.
     Produto("Direção na hora", "Vento", (HORA,), ("VEN_DIR",), "valor",
             "°", "twilight", "direção média dentro da hora", onde=(GRAFICO,), decimais=0),
     Produto("Rajada máxima", "Vento", (DIA, PERIODO), ("VEN_RAJ",), "maior",
-            "km/h", "turbo", "maior rajada horária da janela", zero_na_base=True),
+            "km/h", "turbo", "maior rajada horária da janela; a seta traz a direção daquela hora",
+            zero_na_base=True, direcao="da_maior"),
     Produto("Vento médio", "Vento", (DIA, PERIODO), ("VEN_VEL",), "media",
-            "km/h", "turbo", "média das velocidades horárias", zero_na_base=True),
+            "km/h", "turbo",
+            "média das velocidades horárias; a seta traz a resultante das horas da janela",
+            zero_na_base=True, direcao="resultante"),
 
     # --- Radiação ----------------------------------------------------------
     Produto("Radiação na hora", "Radiação", (HORA,), ("RAD_GLO",), "soma_sem_negativos",
@@ -279,6 +343,19 @@ def por_estacao(produto: Produto, leituras: pd.DataFrame) -> pd.Series:
     if leituras.empty or any(coluna not in leituras for coluna in produto.colunas):
         return pd.Series(dtype=float)
     return _colapsar(produto, leituras.groupby("Estação", sort=False)).rename(produto.nome)
+
+
+def direcoes(produto: Produto, leituras: pd.DataFrame) -> pd.Series:
+    """De onde veio o vento em cada estação, para a seta sobre o mapa.
+
+    Vazia quando o produto não leva seta — que é o caso de tudo o que não é vento.
+    """
+    if produto.direcao is None or leituras.empty or DIRECAO not in leituras:
+        return pd.Series(dtype=float)
+    regra = DIRECOES[produto.direcao]
+    return (leituras.groupby("Estação", sort=False)
+            .apply(lambda dados: regra(dados, produto.colunas[0]), include_groups=False)
+            .rename("Direção (°)"))
 
 
 def _fatias(leituras: pd.DataFrame, modo: str) -> pd.Series:
