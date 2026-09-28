@@ -42,6 +42,12 @@ def janela(fim: datetime, rotulo: str) -> tuple[datetime, datetime]:
     return fim - timedelta(hours=int(rotulo.split()[0])), fim
 
 
+def horas_da_janela(fim: datetime, rotulo: str) -> float:
+    """Quantas horas a janela cobre — é o que escolhe a escala de cores do mapa."""
+    comeco, termino = janela(fim, rotulo)
+    return (termino - comeco).total_seconds() / 3600
+
+
 def acumulado(leituras: pd.DataFrame, fim: datetime, rotulo: str) -> pd.Series:
     """Chuva somada por estação na janela, em milímetros."""
     if leituras.empty or COLUNA not in leituras:

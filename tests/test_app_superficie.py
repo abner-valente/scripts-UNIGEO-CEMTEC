@@ -82,3 +82,54 @@ def test_os_limites_seguem_o_enquadramento_dos_mapas():
 def test_o_uri_carrega_o_png():
     uri = superficie.como_uri(b"\x89PNG\r\n\x1a\n")
     assert uri.startswith("data:image/png;base64,")
+
+
+# =====================================================
+# ESCALA FIXA
+# =====================================================
+def test_escala_fixa_da_a_mesma_cor_ao_mesmo_valor():
+    """É o ponto da escala fixa: 25 °C tem a mesma cor num dia frio e num dia quente."""
+    faixa = np.linspace(0, 45, 21)
+    frio = np.array([[10.0, 25.0, 12.0]])
+    quente = np.array([[40.0, 25.0, 41.0]])
+
+    assert superficie._pela_escala(frio, faixa)[0][0, 1] == superficie._pela_escala(quente, faixa)[0][0, 1]
+
+
+def test_sem_escala_fixa_a_mesma_temperatura_muda_de_cor():
+    """O problema que a escala fixa resolve: a cor dependia do resto do mapa."""
+    frio = pd.Series([10.0, 25.0, 12.0])
+    quente = pd.Series([40.0, 25.0, 41.0])
+
+    assert (superficie._normalizar(np.array([25.0]), frio)[0]
+            != superficie._normalizar(np.array([25.0]), quente)[0])
+
+
+def test_classes_agrupam_valores_da_mesma_faixa():
+    """Dentro de uma classe a cor é uma só: 12 mm e 18 mm caem na mesma faixa de 10 a 20."""
+    classes = np.array([0.2, 1, 5, 10, 20])
+    dentro_da_faixa = superficie._pela_escala(np.array([[12.0, 18.0, 25.0]]), classes)[0]
+
+    assert dentro_da_faixa[0, 0] == dentro_da_faixa[0, 1]
+    assert dentro_da_faixa[0, 2] != dentro_da_faixa[0, 1]
+
+
+def test_abaixo_da_primeira_classe_de_chuva_nao_se_pinta(grade):
+    """Pintar 0 mm de azul claro inventaria chuva que não houve."""
+    classes = [0.2, 1, 5, 10, 20]
+    seco = ESTACOES.assign(Chuva=[0.0, 0.0, 0.0, 0.0, 0.0])
+
+    png = imagem(superficie.superficie_png(seco, "Chuva", grade, "Blues", classes))
+
+    assert (png[:, :, 3] == 0).all()  # imagem inteira transparente
+
+
+def test_valor_acima_do_teto_fica_na_cor_do_extremo(grade):
+    """Numa escala fixa, o que passa do teto não pode sumir do mapa."""
+    faixa = np.linspace(0, 45, 21)
+    quente = ESTACOES.assign(Temperatura=[60.0] * 5)  # acima do teto da escala
+
+    png = imagem(superficie.superficie_png(quente, "Temperatura", grade, "RdYlBu_r", faixa))
+
+    dentro = np.flipud(grade.dentro)
+    assert (png[:, :, 3][dentro] > 0).all()

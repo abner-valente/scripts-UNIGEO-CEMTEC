@@ -55,16 +55,37 @@ def limites() -> list[float]:
 
 
 def superficie_png(pontos: pd.DataFrame, coluna: str, grade_fina: Malha, paleta: str,
-                   opacidade: float = OPACIDADE) -> bytes:
-    """PNG da superfície IDW, transparente fora de Mato Grosso do Sul."""
+                   niveis=None, opacidade: float = OPACIDADE) -> bytes:
+    """PNG da superfície IDW, transparente fora de Mato Grosso do Sul.
+
+    Com `niveis`, as cores seguem a escala fixa do catálogo — a mesma do mapa do boletim, para
+    os dois não contarem histórias diferentes. Sem eles, a escala se ajusta ao dado.
+    """
     grade = calculos.interpolar_idw(pontos["Longitude"], pontos["Latitude"], pontos[coluna],
                                     grade_fina.lon, grade_fina.lat,
                                     config.IDW_VIZINHOS, config.IDW_POTENCIA)
-    cores = colormaps[paleta](_normalizar(grade, pontos[coluna]), alpha=opacidade, bytes=True)
+    if niveis is None:
+        normalizado, vazio = _normalizar(grade, pontos[coluna]), None
+    else:
+        normalizado, vazio = _pela_escala(grade, np.asarray(niveis, dtype=float))
+
+    cores = colormaps[paleta](normalizado, alpha=opacidade, bytes=True)
     cores[~grade_fina.dentro] = 0  # transparente fora do estado
+    if vazio is not None:
+        cores[vazio] = 0  # abaixo da primeira classe (chuva) não se pinta: ali não choveu
 
     # A primeira linha da imagem é o norte; a grade começa no sul
     return _png(Image.fromarray(np.flipud(cores), mode="RGBA"))
+
+
+def _pela_escala(grade: np.ndarray, niveis: np.ndarray):
+    """Leva a superfície para 0–1 pela escala fixa, em faixa contínua ou em classes."""
+    if len(niveis) > 12:  # faixa fixa vira muitos níveis; classes são poucas
+        return np.clip((grade - niveis.min()) / (niveis.max() - niveis.min()), 0, 1), None
+    # digitize devolve 0 para o que está abaixo da primeira classe
+    indices = np.digitize(grade, niveis)
+    normalizado = np.clip((indices - 0.5) / len(niveis), 0, 1)
+    return normalizado, (indices == 0) if niveis.min() > 0 else None
 
 
 def como_uri(png: bytes) -> str:

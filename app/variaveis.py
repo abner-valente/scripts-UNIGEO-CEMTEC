@@ -24,6 +24,9 @@ import pandas as pd
 
 # Modos de agregação. HORA mostra a leitura como veio da API; DIA e PERIODO resumem a janela.
 HORA, DIA, PERIODO = "hora", "dia", "periodo"
+# Uma paleta por grandeza: com escala fixa, máxima e mínima precisam das mesmas cores, senão os
+# dois mapas continuam incomparáveis entre si.
+PALETA_TEMPERATURA = "RdYlBu_r"
 # Onde o produto pode aparecer. A compensada, por exemplo, só faz sentido como série no tempo.
 MAPA, GRAFICO = "mapa", "grafico"
 
@@ -95,21 +98,21 @@ CALCULOS = {
 PRODUTOS = [
     # --- Temperatura -------------------------------------------------------
     Produto("Temperatura máxima da hora", "Temperatura", (HORA,), ("TEM_MAX",), "valor",
-            "°C", "YlOrRd", "maior valor medido dentro da hora"),
+            "°C", PALETA_TEMPERATURA, "maior valor medido dentro da hora"),
     Produto("Temperatura mínima da hora", "Temperatura", (HORA,), ("TEM_MIN",), "valor",
-            "°C", "coolwarm", "menor valor medido dentro da hora"),
+            "°C", PALETA_TEMPERATURA, "menor valor medido dentro da hora"),
     Produto("Temperatura na hora cheia", "Temperatura", (HORA,), ("TEM_INS",), "valor",
-            "°C", "RdYlBu_r", "leitura do instante da hora cheia", onde=(MAPA,)),
+            "°C", PALETA_TEMPERATURA, "leitura do instante da hora cheia", onde=(MAPA,)),
     Produto("Temperatura média da hora", "Temperatura", (HORA,), ("TEM_MAX", "TEM_MIN"),
-            "media_dos_extremos", "°C", "RdYlBu_r", "(máxima + mínima) da hora ÷ 2", onde=(GRAFICO,)),
+            "media_dos_extremos", "°C", PALETA_TEMPERATURA, "(máxima + mínima) da hora ÷ 2", onde=(GRAFICO,)),
     Produto("Temperatura máxima", "Temperatura", (DIA, PERIODO), ("TEM_MAX",), "maior",
-            "°C", "YlOrRd", "maior máxima horária da janela"),
+            "°C", PALETA_TEMPERATURA, "maior máxima horária da janela"),
     Produto("Temperatura mínima", "Temperatura", (DIA, PERIODO), ("TEM_MIN",), "menor",
-            "°C", "coolwarm", "menor mínima horária da janela"),
+            "°C", PALETA_TEMPERATURA, "menor mínima horária da janela"),
     Produto("Temperatura média", "Temperatura", (DIA, PERIODO), ("TEM_INS",), "media",
-            "°C", "RdYlBu_r", "média das leituras das horas cheias"),
+            "°C", PALETA_TEMPERATURA, "média das leituras das horas cheias"),
     Produto("Temperatura média compensada", "Temperatura", (DIA,), ("TEM_INS", "TEM_MAX", "TEM_MIN"),
-            "compensada", "°C", "RdYlBu_r", "(T9 + 2·T21 + Tmín + Tmáx) ÷ 5, horário de MS",
+            "compensada", "°C", PALETA_TEMPERATURA, "(T9 + 2·T21 + Tmín + Tmáx) ÷ 5, horário de MS",
             onde=(GRAFICO,)),
 
     # --- Umidade -----------------------------------------------------------
@@ -176,6 +179,49 @@ PRODUTOS = [
     Produto("Chuva acumulada", "Chuva", (DIA, PERIODO), ("CHUVA",), "soma",
             "mm", "Blues", "soma das horas da janela", zero_na_base=True),
 ]
+
+
+# =====================================================
+# ESCALA DE CORES
+# =====================================================
+# A escala é da grandeza, não de cada mapa. Esticada ao dado do instante, a mesma cor quer dizer
+# coisas diferentes em dias diferentes: num dia de 34 a 41 °C, os 36 °C saem azuis e parecem
+# ameno. Com faixa fixa, azul é sempre frio — e quem passar do teto fica na cor do extremo.
+FAIXAS_FIXAS = {
+    "Temperatura": (0.0, 45.0),   # geada no sul e os 44 °C do oeste cabem dentro
+    "Umidade": (0.0, 100.0),      # é o próprio domínio da variável
+    "Vento": (0.0, 130.0),
+}
+# Chuva e radiação acumulam: o total depende do tamanho da janela, e uma faixa só não serve para
+# uma hora e para um mês. Vão por classes, escolhidas pela duração da janela.
+CLASSES_CHUVA_CURTA = (0.2, 1, 5, 10, 20, 30, 50, 75, 100)     # até 96 h
+# Mensal e períodos longos. O teto é 300 mm porque é a máxima que o estado costuma alcançar no
+# mês: parar aí dá contraste onde o dado de fato varia, e o que passar fica na cor do extremo.
+CLASSES_CHUVA_LONGA = (1, 5, 25, 50, 100, 150, 200, 250, 300)
+CLASSES_RADIACAO_HORA = (100, 500, 1000, 1500, 2000, 2500, 3000, 3500)
+CLASSES_RADIACAO_DIA = (2500, 5000, 10000, 15000, 20000, 25000, 30000)
+HORAS_JANELA_CURTA = 96
+
+
+def escala(produto: Produto, horas_janela: float | None = None):
+    """Como colorir este produto: `("faixa", (mín, máx))`, `("classes", níveis)` ou None.
+
+    None quer dizer escala ajustada ao dado — é o caso da pressão, que a equipe preferiu manter
+    assim porque a API manda a pressão da estação, sem redução ao nível do mar: entre estações de
+    altitudes diferentes o mapa desenha mais o relevo do que o tempo.
+
+    `horas_janela` é a duração do que está sendo somado, e só importa para chuva e radiação.
+    """
+    if produto.grandeza in FAIXAS_FIXAS:
+        return "faixa", FAIXAS_FIXAS[produto.grandeza]
+    curta = horas_janela is None or horas_janela <= HORAS_JANELA_CURTA
+    if produto.grandeza == "Chuva":
+        return "classes", CLASSES_CHUVA_CURTA if curta else CLASSES_CHUVA_LONGA
+    if produto.grandeza == "Radiação":
+        if horas_janela is not None and horas_janela <= 1:
+            return "classes", CLASSES_RADIACAO_HORA
+        return ("classes", CLASSES_RADIACAO_DIA) if curta else None
+    return None
 
 
 # =====================================================

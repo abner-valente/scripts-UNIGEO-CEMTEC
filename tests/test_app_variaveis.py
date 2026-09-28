@@ -244,3 +244,35 @@ def test_rotulos_curtos_nao_colidem_dentro_da_mesma_grandeza():
             por_grandeza.setdefault(produto.grandeza, []).append(variaveis.rotulo_curto(produto))
         for grandeza, rotulos in por_grandeza.items():
             assert len(rotulos) == len(set(rotulos)), f"{grandeza} em {modo}: {rotulos}"
+
+
+# =====================================================
+# ESCALA DE CORES
+# =====================================================
+def test_grandezas_com_faixa_fixa_nao_dependem_do_dado():
+    """A mesma cor tem de querer dizer o mesmo valor em qualquer mapa."""
+    assert variaveis.escala(variaveis.por_nome("Temperatura máxima")) == ("faixa", (0.0, 45.0))
+    assert variaveis.escala(variaveis.por_nome("Umidade mínima")) == ("faixa", (0.0, 100.0))
+    assert variaveis.escala(variaveis.por_nome("Rajada máxima")) == ("faixa", (0.0, 130.0))
+
+
+def test_pressao_fica_ajustada_ao_dado():
+    """A API manda a pressão da estação, sem reduzir ao nível do mar: uma faixa fixa entre
+    altitudes diferentes desenharia o relevo, não o tempo."""
+    assert variaveis.escala(variaveis.por_nome("Pressão média")) is None
+
+
+def test_classe_da_chuva_muda_com_a_duracao_da_janela():
+    """O acumulado de uma hora e o de um mês não cabem na mesma régua."""
+    chuva = variaveis.por_nome("Chuva acumulada")
+    _, curta = variaveis.escala(chuva, horas_janela=24)
+    _, longa = variaveis.escala(chuva, horas_janela=24 * 30)
+
+    assert curta == variaveis.CLASSES_CHUVA_CURTA and longa == variaveis.CLASSES_CHUVA_LONGA
+    assert max(curta) == 100 and max(longa) == 300  # o teto mensal é a máxima usual do estado
+
+
+def test_a_chuva_nao_pinta_o_chao_da_escala():
+    """A primeira classe começa acima de zero: onde não choveu, o mapa fica branco."""
+    _, classes = variaveis.escala(variaveis.por_nome("Chuva na hora"), horas_janela=1)
+    assert min(classes) > 0
