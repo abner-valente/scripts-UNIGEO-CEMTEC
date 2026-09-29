@@ -118,9 +118,9 @@ def montar_tabelas(resumos: list[dict[str, dict]], periodo: Periodo) -> dict[str
 # =====================================================
 # MAPAS
 # =====================================================
-def especificacoes_mapas(periodo: Periodo) -> list[EspecMapa]:
+def especificacoes_mapas(periodo: Periodo, recorte: config.Recorte = config.RECORTE) -> list[EspecMapa]:
     """Mapas gerados pelo relatório, conforme o modo da consulta."""
-    sigla = config.UF
+    sigla = recorte.uf
     subtitulo = periodo.descrever_janela(*periodo.janela)
 
     especificacoes = [
@@ -165,14 +165,15 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
     Este produto não tem opções próprias de linha de comando; `opcoes` existe para manter a mesma
     assinatura em todos os produtos.
     """
+    recorte = (opcoes or {}).get("recorte", config.RECORTE)
     print("=" * 60)
-    print(f"📊 {TITULO} — {config.NOME_UF}")
+    print(f"📊 {TITULO} — {recorte.nome}")
     print(f"📅 Modo: {periodo.nome_modo}")
     print(f"📅 {periodo.descricao}")
     print("=" * 60)
 
     try:
-        coletados = inmet.baixar_estacoes(*periodo.janela_busca)
+        coletados = inmet.baixar_estacoes(*periodo.janela_busca, uf=recorte.uf)
     except inmet.ErroINMET as erro:
         print(f"❌ Erro ao listar estações: {erro}")
         return 1
@@ -186,10 +187,11 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
         print(f"   - {aba}: {len(tabela)} estações")
 
     pasta = periodo.pasta_saida(NOME)
-    excel.salvar_relatorio(tabelas, pasta / f"Relatorio_{config.UF}_{periodo.identificador}.xlsx")
+    excel.salvar_relatorio(tabelas, pasta / f"Relatorio_{recorte.uf}_{periodo.identificador}.xlsx")
 
     print("\n🗺️ Gerando mapas...")
-    mapas.gerar_mapas(tabelas, especificacoes_mapas(periodo), pasta / "mapas", periodo.identificador)
+    mapas.gerar_mapas(tabelas, especificacoes_mapas(periodo, recorte), pasta / "mapas",
+                      periodo.identificador, recorte)
 
     print("=" * 60)
     print(f"✅ Concluído. Arquivos em: {pasta}")

@@ -78,6 +78,7 @@ O modo é definido pelas datas:
 | Modo | Como pedir | Janela de tempo (horário de MS) |
 |---|---|---|
 | **Data específica** | `--dataini 15/09/2026` (ou `DATA_INICIAL` igual a `DATA_FINAL`) | O dia, da 00 h às 24 h |
+| **Estado** | `--uf MS` | Só as UFs com shapefile em `shp/` (padrão: MS). Troca junto o fuso, as estações e o enquadramento dos mapas |
 | **Período** | `--dataini 01/08/2026 --datafim 31/08/2026` (ou datas diferentes) | Da 00 h da data inicial às 24 h da data final |
 | **Tempo real** | `--tempo-real` (ou as duas datas `None`) | As últimas 24 horas, até o momento em que roda |
 
@@ -562,7 +563,7 @@ E abra:
 streamlit run app/explorador.py
 ```
 
-O navegador abre em `http://localhost:8501`. Na barra lateral ficam o período, as estações e as **grandezas**. Cada grandeza ganha o seu gráfico — escalas diferentes nunca se misturam num eixo só —, com as séries que a equipe de meteorologia definiu: no gráfico horário, a máxima, a mínima e a média da hora; no diário, as do dia mais a compensada. **Cor separa a estação, traço separa a série**, e clicar numa série da legenda deixa só ela no gráfico **e no balão** — Shift+clique na série destacada traz todas de volta. Zoom com Shift + roda, e tudo baixável em CSV. O cursor em **qualquer ponto** do gráfico marca a hora mais próxima com uma régua vertical e abre um balão só com **todas as estações daquele instante** — antes era preciso acertar o mouse em cima de um ponto, e o balão trazia uma linha de cada vez, que é justamente a comparação que não se queria fazer.
+O navegador abre em `http://localhost:8501`. Na barra lateral ficam o **estado**, o período, as estações e as **grandezas**. O seletor de estado só oferece as UFs que têm shapefile em `shp/` — hoje, MS; para acrescentar outra, gere os arquivos dela com [`ferramentas/simplificar_municipios.py`](ferramentas/simplificar_municipios.py). Trocar de estado troca junto o fuso (é ele que decide onde o dia começa), as estações e os shapefiles, e cada estado tem o seu lugar no cache: duas pessoas no mesmo painel, em estados diferentes, não veem o mapa uma da outra. Cada grandeza ganha o seu gráfico — escalas diferentes nunca se misturam num eixo só —, com as séries que a equipe de meteorologia definiu: no gráfico horário, a máxima, a mínima e a média da hora; no diário, as do dia mais a compensada. **Cor separa a estação, traço separa a série**, e clicar numa série da legenda deixa só ela no gráfico **e no balão** — Shift+clique na série destacada traz todas de volta. Zoom com Shift + roda, e tudo baixável em CSV. O cursor em **qualquer ponto** do gráfico marca a hora mais próxima com uma régua vertical e abre um balão só com **todas as estações daquele instante** — antes era preciso acertar o mouse em cima de um ponto, e o balão trazia uma linha de cada vez, que é justamente a comparação que não se queria fazer.
 
 | | |
 |---|---|

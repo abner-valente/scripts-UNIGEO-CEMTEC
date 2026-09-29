@@ -123,13 +123,13 @@ def carregar_base(recorte: config.Recorte = config.RECORTE) -> BaseCartografica:
 
 
 def gerar_mapas(tabelas: dict[str, pd.DataFrame], especificacoes: list[EspecMapa], pasta: Path,
-                identificador: str) -> None:
+                identificador: str, recorte: config.Recorte = config.RECORTE) -> None:
     """Gera, na pasta indicada, os mapas descritos pelas especificações (identificador vai no nome dos arquivos)."""
     if not tabelas:
         print("⚠️ Nenhum dado foi coletado. Os mapas não serão gerados.")
         return
     try:
-        base = carregar_base()
+        base = carregar_base(recorte)
     except Exception as erro:
         print(f"⚠️ Não foi possível carregar os shapefiles: {erro}")
         return

@@ -1,4 +1,5 @@
 """Produto risco_fogo: a regra 30-30-30 hora a hora, as grades horárias e a execução completa."""
+from types import SimpleNamespace
 from datetime import date, datetime
 
 import numpy as np
@@ -178,8 +179,10 @@ def test_mapa_horario_recebe_as_estacoes_da_hora(monkeypatch, tmp_path):
     estacoes = pd.DataFrame({"Estação": ["A", "B"], "Latitude": [-20.0, -21.0], "Longitude": [-55.0, -54.0],
                              "Nível na Hora": [0, 2]})
     horas = {utc("2026-09-16 15:00"): risco_fogo.HoraAvaliada(np.zeros((2, 2)), estacoes)}
+    # A base entra só pelo recorte: é dela que saem a sigla do título e o fuso do subtítulo
+    base = SimpleNamespace(recorte=config.RECORTE)
 
-    risco_fogo._mapas_horarios(horas, base=None, pasta=tmp_path, todas_as_horas=True)
+    risco_fogo._mapas_horarios(horas, base=base, pasta=tmp_path, todas_as_horas=True)
 
     assert desenhados == [[0, 2]]
 

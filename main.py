@@ -77,12 +77,14 @@ def ler_consulta(argumentos: list[str] | None = None) -> tuple[ModuleType, Perio
     As opções são os argumentos que valem só para alguns produtos (ex.: --hrtodas, do risco_fogo);
     cada produto usa as que conhece e ignora o resto.
     """
-    parser = argparse.ArgumentParser(description="Produtos meteorológicos INMET — Mato Grosso do Sul.")
+    parser = argparse.ArgumentParser(description="Produtos meteorológicos a partir das estações do INMET.")
     parser.add_argument("--produto", choices=sorted(PRODUTOS), help=f"produto a gerar (padrão: {PRODUTO})")
+    parser.add_argument("--uf", choices=config.ufs_disponiveis(), default=config.UF,
+                        help=f"estado a mapear (padrão: {config.UF}); só as UFs com shapefile em shp/")
     parser.add_argument("--dataini", type=ler_data, help="data inicial (DD/MM/AAAA)")
     parser.add_argument("--datafim", type=ler_data, help="data final (DD/MM/AAAA); se omitida, igual à inicial")
-    parser.add_argument("--hrini", type=ler_hora, help="hora de início, horário de MS (0 a 24; padrão: 0)")
-    parser.add_argument("--hrfim", type=ler_hora, help="hora de fim, horário de MS (0 a 24; padrão: 24)")
+    parser.add_argument("--hrini", type=ler_hora, help="hora de início, no horário do estado (0 a 24; padrão: 0)")
+    parser.add_argument("--hrfim", type=ler_hora, help="hora de fim, no horário do estado (0 a 24; padrão: 24)")
     parser.add_argument("--tempo-real", action="store_true", help="monitoramento das últimas 24 h")
     parser.add_argument("--hrtodas", action="store_true",
                         help="risco_fogo: gera o mapa de todas as horas, e não só as de risco alto")
@@ -93,20 +95,25 @@ def ler_consulta(argumentos: list[str] | None = None) -> tuple[ModuleType, Perio
         parser.error(f"produto desconhecido: {nome_produto!r} (disponíveis: {', '.join(sorted(PRODUTOS))})")
     produto = PRODUTOS[nome_produto]
 
-    opcoes = {"hrtodas": args.hrtodas}
+    # O recorte viaja nas opções, como os outros argumentos que só alguns produtos usam. O fuso
+    # dele vai no período: é o fuso que decide onde o dia começa, e um dia de MT não começa na
+    # mesma hora que um do Paraná.
+    recorte = config.recorte_de(args.uf)
+    opcoes = {"hrtodas": args.hrtodas, "recorte": recorte}
 
     inicio, fim = (args.dataini, args.datafim) if (args.dataini or args.datafim) else (DATA_INICIAL, DATA_FINAL)
     if args.tempo_real or (inicio is None and fim is None):
         if args.hrini is not None or args.hrfim is not None:
             parser.error("--hrini e --hrfim só valem com datas (--dataini e --datafim), não no tempo real")
-        return produto, Periodo.tempo_real(), opcoes
+        return produto, Periodo.tempo_real(fuso=recorte.fuso), opcoes
 
     hora_inicial = args.hrini if args.hrini is not None else HORA_INICIAL
     hora_final = args.hrfim if args.hrfim is not None else HORA_FINAL
     try:
         return produto, Periodo.de_datas(inicio or fim, fim or inicio,
                                          0 if hora_inicial is None else hora_inicial,
-                                         24 if hora_final is None else hora_final), opcoes
+                                         24 if hora_final is None else hora_final,
+                                         fuso=recorte.fuso), opcoes
     except ValueError as erro:
         parser.error(str(erro))
 
