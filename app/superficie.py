@@ -37,21 +37,21 @@ class Malha:
     dentro: np.ndarray
 
 
-def malha(estado, resolucao: int = RESOLUCAO) -> Malha:
-    """Grade regular sobre o enquadramento do estado, com a máscara de quem cai dentro dele.
+def malha(estado, resolucao: int = RESOLUCAO, recorte: config.Recorte = config.RECORTE) -> Malha:
+    """Grade regular sobre o enquadramento do recorte, com a máscara de quem cai dentro dele.
 
     `estado` é a geometria do contorno (o `uf` da base cartográfica, unido). O shapely resolve
     160 mil pontos em centésimos de segundo; o mesmo teste pelo caminho do matplotlib leva
     quase três segundos.
     """
-    lon, lat = calculos.criar_grade(
-        (config.LON_MIN, config.LON_MAX, config.LAT_MIN, config.LAT_MAX), resolucao)
+    lon, lat = calculos.criar_grade(recorte.limites, resolucao)
     return Malha(lon, lat, shapely.contains_xy(estado, lon, lat))
 
 
-def limites() -> list[float]:
+def limites(recorte: config.Recorte = config.RECORTE) -> list[float]:
     """Enquadramento da imagem como o BitmapLayer espera: oeste, sul, leste, norte."""
-    return [config.LON_MIN, config.LAT_MIN, config.LON_MAX, config.LAT_MAX]
+    oeste, leste, sul, norte = recorte.limites
+    return [oeste, sul, leste, norte]
 
 
 def superficie_png(pontos: pd.DataFrame, coluna: str, grade_fina: Malha, paleta: str,

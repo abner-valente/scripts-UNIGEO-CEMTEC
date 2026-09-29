@@ -1,4 +1,5 @@
 """Acesso à API do INMET, com as respostas HTTP simuladas."""
+from dataclasses import replace
 from datetime import date, datetime
 
 import pandas as pd
@@ -80,6 +81,18 @@ def test_o_recorte_respeita_a_margem(monkeypatch):
 
     assert len(inmet.estacoes_do_recorte()) == 1                     # com a margem de 1,5°, entra
     assert inmet.estacoes_do_recorte(margem=0.0).empty               # sem margem, fica de fora
+
+
+def test_o_recorte_recebido_escolhe_quem_entra(monkeypatch):
+    """O enquadramento vem do recorte da chamada, não de uma constante do módulo."""
+    trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa([
+        estacao("A702", "CAMPO GRANDE", "MS", -20.4, -54.7),
+        estacao("A800", "SINOP", "MT", -11.9, -55.5),     # 5° acima do enquadramento de MS
+    ]))
+    norte_adentro = replace(config.RECORTE, limites=(-58.5, -50.5, -24.5, -11.0))
+
+    assert len(inmet.estacoes_do_recorte()) == 1                       # só MS entra no de MS
+    assert len(inmet.estacoes_do_recorte(norte_adentro)) == 2
 
 
 def test_listar_estacoes_filtra_a_uf_e_converte_coordenadas(monkeypatch):

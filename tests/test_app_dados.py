@@ -92,6 +92,23 @@ def test_estacao_sem_dados_nao_deixa_arquivo(cache_temporario, monkeypatch):
     assert not (cache_temporario / "cache").exists()
 
 
+def test_a_hora_local_sai_do_utc_e_nao_do_arquivo(cache_temporario, api_contada):
+    """O cache guarda o que foi baixado uma vez; o fuso é de quem lê.
+
+    Sem isso, o mesmo pickle serviria MS (GMT-04) e o Paraná (GMT-03) com a hora de quem gravou
+    primeiro — uma hora errada em silêncio, que estragaria o fechamento do dia.
+    """
+    from zoneinfo import ZoneInfo
+
+    em_ms = coleta.leituras("A702", *DIA.janela)
+    em_sp = coleta.leituras("A702", *DIA.janela, fuso=ZoneInfo("America/Sao_Paulo"))
+
+    assert len(api_contada) == 1                       # a segunda leitura veio do mesmo cache
+    assert str(em_ms["dt_local"].dt.tz) == "America/Campo_Grande"
+    assert str(em_sp["dt_local"].dt.tz) == "America/Sao_Paulo"
+    assert em_ms["dt_utc"].equals(em_sp["dt_utc"])     # o instante é o mesmo; o relógio é que muda
+
+
 def test_a_planilha_traz_tudo_o_que_a_api_devolveu():
     """Quem baixa quer o dado bruto, e não só as grandezas marcadas no filtro da tela."""
     leituras = pd.DataFrame({

@@ -2,6 +2,7 @@
 import threading
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -87,11 +88,11 @@ def _todas_as_estacoes() -> pd.DataFrame:
     return estacoes.dropna(subset=["VL_LATITUDE", "VL_LONGITUDE"])
 
 
-def estacoes_do_recorte(limites: tuple[float, float, float, float] | None = None,
+def estacoes_do_recorte(recorte: config.Recorte = config.RECORTE,
                         margem: float = config.MARGEM_RECORTE) -> pd.DataFrame:
     """As estações que ajudam a interpolar o enquadramento — de qualquer estado.
 
-    `limites` é (oeste, leste, sul, norte); sem eles, o enquadramento da UF em config. A margem
+    A margem
     existe porque a estação do outro lado da divisa descreve a borda tão bem quanto a de cá: sem
     ela, os 8 vizinhos que o IDW enxerga numa célula da divisa estão todos para dentro, e a
     superfície extrapola tendo dado disponível.
@@ -99,8 +100,7 @@ def estacoes_do_recorte(limites: tuple[float, float, float, float] | None = None
     A coluna `SG_ESTADO` continua ali: é por ela que se separa o que é do produto do que é só
     apoio para a conta.
     """
-    oeste, leste, sul, norte = limites or (config.LON_MIN, config.LON_MAX,
-                                           config.LAT_MIN, config.LAT_MAX)
+    oeste, leste, sul, norte = recorte.limites
     estacoes = _todas_as_estacoes()
     dentro = (estacoes["VL_LONGITUDE"].between(oeste - margem, leste + margem)
               & estacoes["VL_LATITUDE"].between(sul - margem, norte + margem))
@@ -114,7 +114,8 @@ def listar_estacoes(uf: str = config.UF) -> pd.DataFrame:
     return estacoes
 
 
-def baixar_dados_estacao(codigo: str, inicio: datetime, fim: datetime) -> pd.DataFrame | None:
+def baixar_dados_estacao(codigo: str, inicio: datetime, fim: datetime,
+                         fuso: ZoneInfo = config.FUSO_MS) -> pd.DataFrame | None:
     """Dados horários de uma estação com as leituras da janela (início, fim].
 
     A API trabalha com dias UTC inteiros (data final inclusiva); o recorte exato por
@@ -137,7 +138,7 @@ def baixar_dados_estacao(codigo: str, inicio: datetime, fim: datetime) -> pd.Dat
         # HR_MEDICAO vem como "HHMM" (ex.: "1300"), em UTC
         horas = dados["HR_MEDICAO"].map(lambda hora: f"{str(hora).zfill(4)[:2]}:00")
         dados["dt_utc"] = pd.to_datetime(dados["DT_MEDICAO"] + " " + horas, errors="coerce", utc=True)
-        dados["dt_local"] = dados["dt_utc"].dt.tz_convert(config.FUSO_MS)
+        dados["dt_local"] = dados["dt_utc"].dt.tz_convert(fuso)
     except (KeyError, TypeError, ValueError) as erro:
         raise ErroINMET(f"resposta em formato inesperado ({erro})") from erro
 

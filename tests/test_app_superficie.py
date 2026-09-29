@@ -76,7 +76,8 @@ def test_estado_todo_com_o_mesmo_valor_nao_quebra(grade):
 
 
 def test_os_limites_seguem_o_enquadramento_dos_mapas():
-    assert superficie.limites() == [config.LON_MIN, config.LAT_MIN, config.LON_MAX, config.LAT_MAX]
+    oeste, leste, sul, norte = config.RECORTE.limites
+    assert superficie.limites() == [oeste, sul, leste, norte]
 
 
 def test_o_uri_carrega_o_png():

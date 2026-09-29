@@ -10,6 +10,7 @@ o que faltar é baixado outra vez.
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -33,7 +34,8 @@ ORDEM_DAS_COLUNAS = [
 ]
 
 
-def leituras(codigo: str, inicio: datetime, fim: datetime) -> pd.DataFrame:
+def leituras(codigo: str, inicio: datetime, fim: datetime,
+             fuso: ZoneInfo = config.FUSO_MS) -> pd.DataFrame:
     """Série horária de uma estação na janela (início, fim], vinda do cache quando ele já a cobre.
 
     As horas mais recentes do dia em curso podem não estar no cache: para o dia de hoje, prefira
@@ -47,11 +49,15 @@ def leituras(codigo: str, inicio: datetime, fim: datetime) -> pd.DataFrame:
         _gravar(codigo, guardadas)
     if guardadas is None:
         return pd.DataFrame()
-    return guardadas[(guardadas["dt_utc"] > inicio) & (guardadas["dt_utc"] <= fim)].copy()
+    dentro = guardadas[(guardadas["dt_utc"] > inicio) & (guardadas["dt_utc"] <= fim)].copy()
+    # A hora local é recalculada a partir do UTC em vez de vir do arquivo: assim o mesmo pickle
+    # serve a MS (GMT-04) e ao Paraná (GMT-03), e ninguém precisa lembrar em que fuso ele foi
+    # gravado — que é o tipo de detalhe que vira uma hora errada em silêncio.
+    return dentro.assign(dt_local=dentro["dt_utc"].dt.tz_convert(fuso))
 
 
 def varias(codigos: tuple[str, ...], nomes: tuple[str, ...], inicio: datetime, fim: datetime,
-           aviso=None) -> tuple[pd.DataFrame, list[str]]:
+           aviso=None, fuso: ZoneInfo = config.FUSO_MS) -> tuple[pd.DataFrame, list[str]]:
     """Séries de várias estações e os nomes das que não vieram.
 
     É uma consulta por estação, e são 62: uma atrás da outra, uma semana levava ~50 s. Em
@@ -64,7 +70,7 @@ def varias(codigos: tuple[str, ...], nomes: tuple[str, ...], inicio: datetime, f
     """
     chegaram, falharam = {}, []
     with ThreadPoolExecutor(max_workers=config.DOWNLOADS_SIMULTANEOS) as equipe:
-        tarefas = {equipe.submit(leituras, codigo, inicio, fim): nome
+        tarefas = {equipe.submit(leituras, codigo, inicio, fim, fuso): nome
                    for codigo, nome in zip(codigos, nomes)}
         for concluidas, tarefa in enumerate(as_completed(tarefas), start=1):
             nome = tarefas[tarefa]

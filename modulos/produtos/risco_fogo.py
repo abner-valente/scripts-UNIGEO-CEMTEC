@@ -72,13 +72,13 @@ def niveis_por_hora(leituras: pd.DataFrame) -> pd.Series:
     return pd.Series(niveis, index=pd.Index(leituras["dt_utc"]), dtype=int)
 
 
-def dia_da_leitura(horas: pd.DatetimeIndex):
-    """Dia (no horário de MS) a que cada leitura pertence.
+def dia_da_leitura(horas: pd.DatetimeIndex, fuso=None):
+    """Dia (no horário do recorte) a que cada leitura pertence.
 
     Cada leitura fecha a hora anterior, então a das 00:00 pertence ao dia que acabou de terminar.
     Sem esse ajuste, uma consulta de sete dias produz oito dias, o último com uma hora só.
     """
-    return (horas - pd.Timedelta(hours=1)).tz_convert(config.FUSO_MS).date
+    return (horas - pd.Timedelta(hours=1)).tz_convert(fuso or config.FUSO_MS).date
 
 
 def horas_da_janela(periodo: Periodo) -> pd.DatetimeIndex:
