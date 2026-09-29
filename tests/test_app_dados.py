@@ -1,6 +1,7 @@
 """Cache local do explorador: quando ele evita a API e quando precisa baixar de novo."""
 from datetime import date
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -83,6 +84,46 @@ def test_varias_sai_na_ordem_pedida_e_separa_quem_falhou(cache_temporario, monke
 
     assert list(dict.fromkeys(tabela["Estação"])) == ["Campo Grande", "Bonito"]
     assert falharam == ["Fantasma"]
+
+
+def test_hora_guardada_vazia_e_reconsultada(cache_temporario, monkeypatch, serie):
+    """O INMET publica a linha da hora antes das medidas, e as preenche depois.
+
+    Aconteceu de verdade: o painel mostrou "nenhuma estação mediu" numa tarde inteira e continuou
+    mostrando no dia seguinte, com a API já tendo os valores. Julgar a cobertura pela última
+    *linha* guardava o vazio para sempre — e consultar de novo não adiantava, porque a linha
+    estava lá.
+    """
+    chamadas = []
+    resposta = serie("2026-09-15", "2026-09-16 05:00")
+    medidas = [coluna for coluna in resposta.columns if coluna not in coleta.IDENTIFICACAO]
+    resposta.loc[resposta["dt_utc"] >= pd.Timestamp("2026-09-15 20:00", tz="UTC"), medidas] = np.nan
+
+    def baixar(codigo, inicio, fim):
+        chamadas.append((inicio, fim))
+        return resposta
+
+    monkeypatch.setattr(inmet, "baixar_dados_estacao", baixar)
+
+    coleta.leituras("A702", *DIA.janela)
+    coleta.leituras("A702", *DIA.janela)
+
+    assert len(chamadas) == 2                                          # a ponta foi pedida de novo
+    assert chamadas[1][0] == pd.Timestamp("2026-09-15 19:00", tz="UTC")  # da última hora com medida
+
+
+def test_a_reconferencia_nao_volta_alem_do_teto(cache_temporario, monkeypatch, serie):
+    """Uma estação fora do ar em julho não pode ser rebaixada inteira a cada consulta."""
+    vazia = serie("2026-09-15", "2026-09-16 05:00")
+    medidas = [coluna for coluna in vazia.columns if coluna not in coleta.IDENTIFICACAO]
+    vazia[medidas] = np.nan
+    monkeypatch.setattr(inmet, "baixar_dados_estacao", lambda codigo, inicio, fim: vazia)
+
+    coleta.leituras("A702", *DIA.janela)
+    faltando = coleta._faltando(coleta._ler("A702"), *DIA.janela)
+
+    comeco, fim = faltando[0]
+    assert (fim - comeco).total_seconds() / 3600 <= coleta.HORAS_A_RECONFERIR
 
 
 def test_estacao_sem_dados_nao_deixa_arquivo(cache_temporario, monkeypatch):

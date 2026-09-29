@@ -8,7 +8,7 @@ O cache fica em `cache/`, fora do controle de versão, e pode ser apagado a qual
 o que faltar é baixado outra vez.
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -17,6 +17,14 @@ import pandas as pd
 from modulos import config, inmet
 
 PASTA_CACHE = config.RAIZ / "cache"
+
+# Colunas que toda linha tem mesmo quando nada foi medido: elas dizem de que estação e de que
+# hora a linha é, e por isso não servem para saber se a medição já chegou.
+IDENTIFICACAO = {"DC_NOME", "UF", "CD_ESTACAO", "DT_MEDICAO", "HR_MEDICAO",
+                 "VL_LATITUDE", "VL_LONGITUDE", "dt_utc", "dt_local", "Estação"}
+# Teto de quanto se reconfere para trás. Existe para uma janela antiga com buraco permanente —
+# estação que ficou fora do ar em julho — não ser rebaixada inteira a cada consulta.
+HORAS_A_RECONFERIR = 48
 
 # Ordem em que as colunas saem na tabela para ver e baixar. A API devolve as chaves em ordem
 # arbitrária (é JSON), e uma planilha com PRE_MAX antes de TEM_INS não se lê. O que não estiver
@@ -38,8 +46,8 @@ def leituras(codigo: str, inicio: datetime, fim: datetime,
              fuso: ZoneInfo = config.FUSO_MS) -> pd.DataFrame:
     """Série horária de uma estação na janela (início, fim], vinda do cache quando ele já a cobre.
 
-    As horas mais recentes do dia em curso podem não estar no cache: para o dia de hoje, prefira
-    consultar de novo mais tarde.
+    As horas mais recentes são sempre reconsultadas: elas chegam da API com a linha criada e as
+    medidas ainda vazias, e só se enchem mais tarde.
     """
     guardadas = _ler(codigo)
     faltando = _faltando(guardadas, inicio, fim)
@@ -135,13 +143,30 @@ def _faltando(guardadas: pd.DataFrame | None, inicio: datetime,
     """
     if guardadas is None or guardadas.empty:
         return [(inicio, fim)]
-    tem_desde, tem_ate = guardadas["dt_utc"].min(), guardadas["dt_utc"].max()
+    tem_desde = guardadas["dt_utc"].min()
     pedacos = []
     if inicio < tem_desde:
         pedacos.append((inicio, min(fim, tem_desde)))
-    if fim > tem_ate:
-        pedacos.append((max(inicio, tem_ate), fim))
+
+    # A ponta recente é sempre refeita. O INMET publica a linha da hora **antes** das medidas e
+    # as preenche depois; julgar a cobertura pela última linha faz o vazio ficar guardado para
+    # sempre — o mapa da tarde nasce em branco e continua em branco no dia seguinte, e consultar
+    # de novo não adianta porque a linha está lá.
+    confiavel = _ultima_com_medida(guardadas)
+    piso = fim - timedelta(hours=HORAS_A_RECONFERIR)
+    ponta = max(confiavel, piso) if confiavel is not None else piso
+    if fim > ponta:
+        pedacos.append((max(inicio, ponta), fim))
     return pedacos
+
+
+def _ultima_com_medida(guardadas: pd.DataFrame):
+    """A última hora guardada que trouxe alguma medição — até onde o cache é de confiança."""
+    medidas = [coluna for coluna in guardadas.columns if coluna not in IDENTIFICACAO]
+    if not medidas:
+        return None
+    preenchidas = guardadas[guardadas[medidas].notna().any(axis=1)]
+    return None if preenchidas.empty else preenchidas["dt_utc"].max()
 
 
 def _juntar(guardadas: pd.DataFrame | None, baixadas: pd.DataFrame | None) -> pd.DataFrame | None:
