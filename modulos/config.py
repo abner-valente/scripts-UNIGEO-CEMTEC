@@ -5,6 +5,7 @@ concentrado aqui. As datas da consulta são definidas em main.py.
 """
 import os
 from dataclasses import dataclass
+from functools import lru_cache
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -62,6 +63,75 @@ RECORTES = {
                   fuso=ZoneInfo("America/Campo_Grande")),
 }
 RECORTE = RECORTES["MS"]
+
+# Nome e fuso de cada estado, para montar o recorte de quem ainda não tem entrada escrita à mão.
+# Um fuso por estado é aproximação onde o estado tem mais de um — o oeste do Amazonas é GMT-05 e
+# o resto GMT-04 —, mas o produto é estadual e o dia é o da capital.
+ESTADOS = {
+    "AC": ("Acre", "America/Rio_Branco"),            "AL": ("Alagoas", "America/Maceio"),
+    "AP": ("Amapá", "America/Belem"),                "AM": ("Amazonas", "America/Manaus"),
+    "BA": ("Bahia", "America/Bahia"),                "CE": ("Ceará", "America/Fortaleza"),
+    "DF": ("Distrito Federal", "America/Sao_Paulo"), "ES": ("Espírito Santo", "America/Sao_Paulo"),
+    "GO": ("Goiás", "America/Sao_Paulo"),            "MA": ("Maranhão", "America/Fortaleza"),
+    "MT": ("Mato Grosso", "America/Cuiaba"),         "MS": ("Mato Grosso do Sul", "America/Campo_Grande"),
+    "MG": ("Minas Gerais", "America/Sao_Paulo"),     "PA": ("Pará", "America/Belem"),
+    "PB": ("Paraíba", "America/Fortaleza"),          "PR": ("Paraná", "America/Sao_Paulo"),
+    "PE": ("Pernambuco", "America/Recife"),          "PI": ("Piauí", "America/Fortaleza"),
+    "RJ": ("Rio de Janeiro", "America/Sao_Paulo"),   "RN": ("Rio Grande do Norte", "America/Fortaleza"),
+    "RS": ("Rio Grande do Sul", "America/Sao_Paulo"), "RO": ("Rondônia", "America/Porto_Velho"),
+    "RR": ("Roraima", "America/Boa_Vista"),          "SC": ("Santa Catarina", "America/Sao_Paulo"),
+    "SP": ("São Paulo", "America/Sao_Paulo"),        "SE": ("Sergipe", "America/Maceio"),
+    "TO": ("Tocantins", "America/Araguaina"),
+}
+# Folga entre o contorno do estado e a borda do desenho, ao derivar o enquadramento de uma UF
+# nova. É a que MS tem: cerca de 0,3° sobrando de cada lado.
+MARGEM_ENQUADRAMENTO = 0.35
+
+
+def shapes_de(uf: str) -> tuple[Path, Path]:
+    """Os dois shapefiles de uma UF, na convenção de nome da pasta shp/."""
+    return PASTA_SHP / f"{uf}_UF_2022.shp", PASTA_SHP / f"{uf}_mun_simplificado.shp"
+
+
+def ufs_disponiveis() -> list[str]:
+    """As UFs que têm shapefile na pasta — é o que limita quais estados dá para mapear.
+
+    Os arquivos saem da ferramenta `ferramentas/simplificar_municipios.py`, sob demanda: carregar
+    os 5.570 municípios do país a cada mapa pesaria na máquina sem servir para nada.
+    """
+    disponiveis = []
+    for uf in sorted(ESTADOS):
+        contorno, municipios = shapes_de(uf)
+        if contorno.exists() and municipios.exists():
+            disponiveis.append(uf)
+    return disponiveis
+
+
+@lru_cache(maxsize=None)
+def recorte_de(uf: str) -> Recorte:
+    """O recorte de uma UF: escrito à mão quando existe, derivado do shapefile quando não.
+
+    MS é escrito à mão de propósito — derivar o enquadramento da geometria mudaria os números
+    por arredondamento, e com eles todo mapa já publicado. Para as demais, o enquadramento sai do
+    contorno mais uma margem, que é como os de MS foram escolhidos na origem.
+    """
+    if uf in RECORTES:
+        return RECORTES[uf]
+    if uf not in ESTADOS:
+        raise KeyError(f"UF desconhecida: {uf}")
+    contorno, municipios = shapes_de(uf)
+    if not contorno.exists():
+        raise FileNotFoundError(f"Sem shapefile para {uf}: esperado {contorno.name} em shp/")
+
+    import geopandas as gpd  # só aqui: quem não desenha mapa não precisa carregar geopandas
+
+    oeste, sul, leste, norte = gpd.read_file(contorno).to_crs("EPSG:4326").total_bounds
+    nome, fuso = ESTADOS[uf]
+    margem = MARGEM_ENQUADRAMENTO
+    return Recorte(uf=uf, nome=nome, shape_uf=contorno, shape_mun=municipios,
+                   limites=(round(oeste - margem, 2), round(leste + margem, 2),
+                            round(sul - margem, 2), round(norte + margem, 2)),
+                   fuso=ZoneInfo(fuso))
 
 # Atalhos para o recorte padrão, nos lugares em que só ele faz sentido: o nome do estado nos
 # títulos dos produtos e o fuso de quem não recebe recorte nenhum. O enquadramento e os

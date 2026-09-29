@@ -126,3 +126,39 @@ def test_o_subtitulo_traz_o_fuso_do_recorte():
                              fuso=ZoneInfo("America/Sao_Paulo"))
     assert em_sp.descrever_janela(*em_sp.janela).endswith("GMT-03")
 
+
+def test_so_aparecem_as_ufs_que_tem_shapefile():
+    """O seletor não pode oferecer um estado que o mapa não consegue desenhar."""
+    for uf in config.ufs_disponiveis():
+        contorno, municipios = config.shapes_de(uf)
+        assert contorno.exists() and municipios.exists()
+    assert "MS" in config.ufs_disponiveis()
+
+
+def test_uf_sem_shapefile_avisa_em_vez_de_quebrar_no_meio():
+    with pytest.raises(FileNotFoundError, match="Sem shapefile"):
+        config.recorte_de("AC")
+    with pytest.raises(KeyError, match="UF desconhecida"):
+        config.recorte_de("XX")
+
+
+def test_o_recorte_derivado_enquadra_o_estado_com_folga(monkeypatch, tmp_path):
+    """Para as UFs sem entrada escrita à mão, o enquadramento sai do contorno mais uma margem."""
+    import geopandas as gpd
+    import shapely
+
+    contorno = tmp_path / "PR_UF_2022.shp"
+    gpd.GeoDataFrame(geometry=[shapely.box(-54.6, -26.7, -48.0, -22.5)],
+                     crs="EPSG:4326").to_file(contorno)
+    monkeypatch.setattr(config, "PASTA_SHP", tmp_path)
+    config.recorte_de.cache_clear()
+
+    derivado = config.recorte_de("PR")
+
+    margem = config.MARGEM_ENQUADRAMENTO
+    assert derivado.limites == (round(-54.6 - margem, 2), round(-48.0 + margem, 2),
+                                round(-26.7 - margem, 2), round(-22.5 + margem, 2))
+    assert derivado.nome == "Paraná"
+    assert str(derivado.fuso) == "America/Sao_Paulo"
+    config.recorte_de.cache_clear()
+

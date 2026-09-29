@@ -112,22 +112,22 @@ def resumir_estacao(leituras: pd.DataFrame, estacao: pd.Series, periodo: Periodo
         "Horas com Dados": int(len(niveis)),
     }
     if periodo.modo == "periodo":
-        linha.update(_dias_por_nivel(niveis))
+        linha.update(_dias_por_nivel(niveis, periodo.fuso))
     linha.update({
         "Temp. Máxima (°C)": round(float(leituras["TEM_MAX"].max()), 1),
         "Umidade Mínima (%)": round(float(leituras["UMD_MIN"].min()), 1),
         "Rajada Máxima (km/h)": round(float(leituras["rajada_kmh"].max()), 1),
-        "Primeiro Horário em Risco Médio (MS)": _primeiro_horario(niveis, NIVEL_MEDIO),
-        "Primeiro Horário em Risco Alto (MS)": _primeiro_horario(niveis, NIVEL_ALTO),
+        "Primeiro Horário em Risco Médio (MS)": _primeiro_horario(niveis, NIVEL_MEDIO, periodo.fuso),
+        "Primeiro Horário em Risco Alto (MS)": _primeiro_horario(niveis, NIVEL_ALTO, periodo.fuso),
         "Latitude": estacao["VL_LATITUDE"],
         "Longitude": estacao["VL_LONGITUDE"],
     })
     return linha
 
 
-def _dias_por_nivel(niveis: pd.Series) -> dict:
-    """Em quantos dias (no horário de MS) o pior nível da estação foi o alto e em quantos foi o médio."""
-    por_dia = niveis.groupby(dia_da_leitura(pd.DatetimeIndex(niveis.index))).max()
+def _dias_por_nivel(niveis: pd.Series, fuso=None) -> dict:
+    """Em quantos dias (no horário do estado) o pior nível da estação foi o alto e em quantos foi o médio."""
+    por_dia = niveis.groupby(dia_da_leitura(pd.DatetimeIndex(niveis.index), fuso)).max()
     return {"Dias com Risco Alto": int((por_dia == NIVEL_ALTO).sum()),
             "Dias com Risco Médio": int((por_dia == NIVEL_MEDIO).sum())}
 
@@ -139,7 +139,7 @@ def montar_tabela(resumos: list[dict]) -> pd.DataFrame:
     )
 
 
-def _primeiro_horario(niveis: pd.Series, nivel: int) -> str:
+def _primeiro_horario(niveis: pd.Series, nivel: int, fuso=None) -> str:
     """Primeira hora em que a estação alcançou esse nível, no horário de MS (vazio se nunca alcançou).
 
     Serve para acompanhar quando o risco começou a subir, mesmo nos dias que não chegam ao nível alto.
@@ -147,7 +147,7 @@ def _primeiro_horario(niveis: pd.Series, nivel: int) -> str:
     alcancadas = niveis[niveis >= nivel]
     if alcancadas.empty:
         return ""
-    return alcancadas.index.min().tz_convert(config.FUSO_MS).strftime("%d/%m/%Y %H:%M")
+    return alcancadas.index.min().tz_convert(fuso or config.FUSO_MS).strftime("%d/%m/%Y %H:%M")
 
 
 # =====================================================
@@ -263,12 +263,13 @@ def gerar_mapas(tabela: pd.DataFrame, horas: dict, periodo: Periodo, base: BaseC
     identificador = periodo.identificador
     subtitulo = periodo.descrever_janela(*periodo.janela)
 
-    espec = _espec_classes(f"Risco de Fogo — Nível Máx. em {config.UF}", subtitulo,
-                           f"Mapa_Risco_Fogo_Nivel_{config.UF}")
+    sigla = base.recorte.uf
+    espec = _espec_classes(f"Risco de Fogo — Nível Máx. em {sigla}", subtitulo,
+                           f"Mapa_Risco_Fogo_Nivel_{sigla}")
     mapas.mapa_classes_pontual(gdf, COLUNA_NIVEL, espec, base, pasta / f"{espec.arquivo}_{identificador}.png")
 
-    exposicao = EspecMapa(ABA, COLUNA_HORAS_ALTO, f"Horas Agregadas de risco alto de fogo em {config.UF}", subtitulo,
-                          f"Mapa_Risco_Fogo_Horas_{config.UF}", "YlOrRd", "Horas em risco alto",
+    exposicao = EspecMapa(ABA, COLUNA_HORAS_ALTO, f"Horas Agregadas de risco alto de fogo em {sigla}", subtitulo,
+                          f"Mapa_Risco_Fogo_Horas_{sigla}", "YlOrRd", "Horas em risco alto",
                           "5 MAIORES EXPOSIÇÕES", decimais=0)  # horas são contagens: sem casas decimais
     mapas.mapa_pontual(gdf, exposicao, base, pasta / f"{exposicao.arquivo}_{identificador}.png")
 
@@ -301,10 +302,10 @@ def _mapas_horarios(horas: dict, base: BaseCartografica, pasta: Path, todas_as_h
     pasta.mkdir(parents=True, exist_ok=True)
     print(f"\n🕐 Mapas horários: {len(selecionadas)} de {len(horas)} horas")
     for hora, avaliada in sorted(selecionadas.items()):
-        local = hora.tz_convert(config.FUSO_MS)
-        espec = _espec_classes(f"Risco de Fogo em {config.UF}",
-                               f"{local:%d/%m/%Y %H:%M} GMT-04",
-                               f"Mapa_Risco_Fogo_{config.UF}")
+        local = hora.tz_convert(base.recorte.fuso)
+        espec = _espec_classes(f"Risco de Fogo em {base.recorte.uf}",
+                               f"{local:%d/%m/%Y %H:%M} {config._gmt(local)}",
+                               f"Mapa_Risco_Fogo_{base.recorte.uf}")
         estacoes = mapas.preparar_pontos(avaliada.estacoes, COLUNA_NIVEL_HORA, espec.subtitulo)
         mapas.mapa_classes_interpolado(avaliada.grade, estacoes, COLUNA_NIVEL_HORA, espec, base,
                                        pasta / f"{espec.arquivo}_{local:%Y%m%d_%H}h.png", indicadores_condicoes())
@@ -313,23 +314,24 @@ def _mapas_horarios(horas: dict, base: BaseCartografica, pasta: Path, todas_as_h
 # =====================================================
 # GRÁFICOS (só no período)
 # =====================================================
-def tabela_horaria(completas: list) -> pd.DataFrame:
+def tabela_horaria(completas: list, fuso=None) -> pd.DataFrame:
     """Uma linha por estação e hora, com as condições atendidas, o nível e o dia daquela leitura."""
     quadros = []
     for estacao, leituras in completas:
         atendidas = condicoes_atendidas(leituras["TEM_MAX"], leituras["UMD_MIN"], leituras["rajada_kmh"])
         quadro = pd.DataFrame(dict(zip(COLUNAS_CONDICOES, atendidas)))
         quadro.insert(0, "Estação", estacao["Estação"])
-        quadro["dia"] = dia_da_leitura(pd.DatetimeIndex(leituras["dt_utc"]))
+        quadro["dia"] = dia_da_leitura(pd.DatetimeIndex(leituras["dt_utc"]), fuso)
         quadros.append(quadro)
     tabela = pd.concat(quadros, ignore_index=True)
     tabela[COLUNA_NIVEL_HORA] = tabela[COLUNAS_CONDICOES].sum(axis=1)
     return tabela
 
 
-def gerar_graficos(horas: pd.DataFrame, periodo: Periodo, pasta: Path) -> None:
+def gerar_graficos(horas: pd.DataFrame, periodo: Periodo, pasta: Path,
+                   recorte: config.Recorte = config.RECORTE) -> None:
     """Três gráficos do período: horas por nível, calendário dos dias e as condições de cada dia."""
-    titulo = f"Risco de Fogo por Estação em {config.UF}"
+    titulo = f"Risco de Fogo por Estação em {recorte.uf}"
     janela = periodo.descrever_janela(*periodo.janela)
 
     # Ordem das estações: quem passou mais horas em risco alto primeiro. Vale para os três gráficos,
@@ -343,7 +345,7 @@ def gerar_graficos(horas: pd.DataFrame, periodo: Periodo, pasta: Path) -> None:
     graficos.barras_empilhadas(
         por_nivel.loc[ordem], config.CORES_RISCO[1:], config.ROTULOS_RISCO[1:], titulo,
         f"Horas em cada nível de risco · {janela}", "Horas",
-        pasta / f"Grafico_Risco_Fogo_Niveis_{config.UF}_{periodo.identificador}.png",
+        pasta / f"Grafico_Risco_Fogo_Niveis_{recorte.uf}_{periodo.identificador}.png",
         cores_do_texto=[graficos.TINTA, graficos.TINTA, "white"])
 
     calendario = (horas.pivot_table(index="Estação", columns="dia", values=COLUNA_NIVEL_HORA, aggfunc="max")
@@ -351,15 +353,15 @@ def gerar_graficos(horas: pd.DataFrame, periodo: Periodo, pasta: Path) -> None:
     calendario.columns = [f"{dia:%d/%m}" for dia in calendario.columns]
     graficos.calendario(
         calendario, config.CORES_RISCO, config.ROTULOS_RISCO, titulo, f"Pior nível de cada dia · {janela}",
-        pasta / f"Grafico_Risco_Fogo_Calendario_{config.UF}_{periodo.identificador}.png")
+        pasta / f"Grafico_Risco_Fogo_Calendario_{recorte.uf}_{periodo.identificador}.png")
 
     for dia, leituras in horas.groupby("dia"):
         # Mesma ordem dos outros dois gráficos: barras horizontais crescem de baixo para cima
         condicoes = leituras.groupby("Estação")[COLUNAS_CONDICOES].sum().reindex(ordem).fillna(0)
         graficos.barras_agrupadas(
-            condicoes, config.CORES_CONDICOES, rotulos_condicoes(), f"Condições Atendidas em {config.UF}",
+            condicoes, config.CORES_CONDICOES, rotulos_condicoes(), f"Condições Atendidas em {recorte.uf}",
             f"Horas de cada condição · {dia:%d/%m/%Y}", "Horas",
-            pasta / "graficosDeCondicoes" / f"Grafico_Risco_Fogo_Condicoes_{config.UF}_{dia:%Y%m%d}.png")
+            pasta / "graficosDeCondicoes" / f"Grafico_Risco_Fogo_Condicoes_{recorte.uf}_{dia:%Y%m%d}.png")
 
 
 # =====================================================
@@ -368,14 +370,15 @@ def gerar_graficos(horas: pd.DataFrame, periodo: Periodo, pasta: Path) -> None:
 def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
     """Coleta os dados, calcula o risco e grava a planilha e os mapas. Retorna 0 se deu certo."""
     opcoes = opcoes or {}
+    recorte = opcoes.get("recorte", config.RECORTE)
     print("=" * 60)
-    print(f"🔥 {TITULO} — {config.NOME_UF}")
+    print(f"🔥 {TITULO} — {recorte.nome}")
     print(f"📅 Modo: {periodo.nome_modo}")
     print(f"📅 {periodo.descricao}")
     print("=" * 60)
 
     try:
-        coletados = inmet.baixar_estacoes(*periodo.janela)
+        coletados = inmet.baixar_estacoes(*periodo.janela, uf=recorte.uf)
     except inmet.ErroINMET as erro:
         print(f"❌ Erro ao listar estações: {erro}")
         return 1
@@ -398,11 +401,11 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
         print(f"   {config.ROTULOS_RISCO[nivel]}: {(tabela[COLUNA_NIVEL] == nivel).sum()} estações")
 
     pasta = periodo.pasta_saida(NOME)
-    excel.salvar_relatorio({ABA: tabela}, pasta / f"Risco_Fogo_{config.UF}_{periodo.identificador}.xlsx")
+    excel.salvar_relatorio({ABA: tabela}, pasta / f"Risco_Fogo_{recorte.uf}_{periodo.identificador}.xlsx")
 
     print("\n🗺️ Gerando mapas...")
     try:
-        base = mapas.carregar_base()
+        base = mapas.carregar_base(recorte)
     except Exception as erro:
         print(f"⚠️ Não foi possível carregar os shapefiles: {erro}")
         return 1
@@ -411,7 +414,7 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
 
     if periodo.modo == "periodo":
         print("\n📈 Gerando gráficos...")
-        gerar_graficos(tabela_horaria(completas), periodo, pasta)
+        gerar_graficos(tabela_horaria(completas, periodo.fuso), periodo, pasta, recorte)
 
     print("=" * 60)
     print(f"✅ Concluído. Arquivos em: {pasta}")
