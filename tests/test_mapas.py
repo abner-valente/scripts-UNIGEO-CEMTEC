@@ -1,4 +1,5 @@
 """Mapas: base cartográfica (máscara da grade e recorte pelo estado), estações e indicadores."""
+from dataclasses import replace
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -163,6 +164,19 @@ def test_na_tela_o_valor_vai_contornado_e_sem_caixa(base):
     assert na_tela.axes[0].texts[0].get_bbox_patch() is None
     assert na_tela.axes[0].texts[0].get_path_effects()  # o contorno é o que segura a leitura
     assert relatorio.axes[0].texts[0].get_bbox_patch() is not None  # na folha inteira, cabe
+
+
+def test_a_base_segue_o_enquadramento_do_recorte(base):
+    """O recorte anda junto com a chamada: quem pedir outro enquadramento recebe outra grade."""
+    apertado = replace(config.RECORTE, limites=(-56.0, -53.0, -22.0, -19.0))
+
+    outra = mapas.carregar_base(apertado)
+
+    assert outra.recorte is apertado
+    assert base.recorte is config.RECORTE
+    assert (outra.lon_grade.min(), outra.lon_grade.max()) == (-56.0, -53.0)
+    oeste, leste, _, _ = config.RECORTE.limites
+    assert (base.lon_grade.min(), base.lon_grade.max()) == (oeste, leste)
 
 
 def test_o_apoio_entra_na_interpolacao(base, monkeypatch):

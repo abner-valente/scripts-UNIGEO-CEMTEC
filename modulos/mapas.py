@@ -97,18 +97,19 @@ class BaseCartografica:
     dentro_uf: np.ndarray    # máscara: pontos da grade dentro do estado, com margem de 2 células
     contorno_uf: mpath.Path  # contorno exato do estado, usado para recortar a superfície interpolada
     logos: list
+    recorte: config.Recorte  # de que estado é tudo isto: viaja junto para ninguém precisar supor
 
 
-def carregar_base() -> BaseCartografica:
-    uf = gpd.read_file(config.SHAPE_UF).to_crs("EPSG:4326")
-    municipios = gpd.read_file(config.SHAPE_MUN).to_crs("EPSG:4326")
-    lon_grade, lat_grade = calculos.criar_grade(
-        (config.LON_MIN, config.LON_MAX, config.LAT_MIN, config.LAT_MAX), config.RESOLUCAO_GRADE
-    )
+def carregar_base(recorte: config.Recorte = config.RECORTE) -> BaseCartografica:
+    """Camadas, grade e logos de um recorte. Sem recorte, o padrão — que é MS."""
+    oeste, leste, sul, norte = recorte.limites
+    uf = gpd.read_file(recorte.shape_uf).to_crs("EPSG:4326")
+    municipios = gpd.read_file(recorte.shape_mun).to_crs("EPSG:4326")
+    lon_grade, lat_grade = calculos.criar_grade((oeste, leste, sul, norte), config.RESOLUCAO_GRADE)
     # A superfície é calculada um pouco além da divisa (2 células da grade) e depois recortada
     # exatamente pelo contorno do estado: a cor chega até a divisa, sem falhas em degrau.
     estado = uf.geometry.union_all()
-    passo = max(config.LON_MAX - config.LON_MIN, config.LAT_MAX - config.LAT_MIN) / (config.RESOLUCAO_GRADE - 1)
+    passo = max(leste - oeste, norte - sul) / (config.RESOLUCAO_GRADE - 1)
     dentro_uf = shapely.contains_xy(estado.buffer(2 * passo), lon_grade, lat_grade)
 
     logos = []
@@ -117,7 +118,8 @@ def carregar_base() -> BaseCartografica:
             logos.append((plt.imread(arquivo), retangulo))
         else:
             print(f"⚠️ Logo não encontrado: {arquivo}")
-    return BaseCartografica(uf, municipios, lon_grade, lat_grade, dentro_uf, _caminho_matplotlib(estado), logos)
+    return BaseCartografica(uf, municipios, lon_grade, lat_grade, dentro_uf,
+                            _caminho_matplotlib(estado), logos, recorte)
 
 
 def gerar_mapas(tabelas: dict[str, pd.DataFrame], especificacoes: list[EspecMapa], pasta: Path,
@@ -444,8 +446,10 @@ def _finalizar(fig, ax, espec, base: BaseCartografica, caminho: Path | None,
     """
     if tela is None:
         ax.set_title(f"{espec.titulo}\n{espec.subtitulo} — INMET/SEMADESC", fontsize=16, weight="bold", pad=20)
-    ax.set_xlim(config.LON_MIN, config.LON_MAX)
-    ax.set_ylim(config.LAT_MIN, config.LAT_MAX)
+    # O enquadramento vem da base, e não do módulo: é a base que sabe de que recorte ela é
+    oeste, leste, sul, norte = base.recorte.limites
+    ax.set_xlim(oeste, leste)
+    ax.set_ylim(sul, norte)
     if tela is None:
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")

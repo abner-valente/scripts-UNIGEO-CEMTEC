@@ -518,7 +518,9 @@ Os logos ficam em `img/`, em **PNG com fundo transparente** — uma imagem com f
 
 ### Demais parâmetros
 
-Ficam em [`modulos/config.py`](modulos/config.py): UF, pastas, endereços, tempos limite e tentativas da API, limites e resolução dos mapas, posição dos logos, parâmetros da interpolação e limiares do risco de fogo.
+Ficam em [`modulos/config.py`](modulos/config.py): pastas, endereços, tempos limite e tentativas da API, resolução dos mapas, posição dos logos, parâmetros da interpolação e limiares do risco de fogo.
+
+**O estado não é uma constante: é um `Recorte`.** A dataclass reúne o que faz um estado ser ele mesmo — sigla, nome, os dois shapefiles, o enquadramento e o **fuso** — e é ela que viaja nas chamadas (`carregar_base(recorte)`, `estacoes_do_recorte(recorte)`, `Periodo.de_datas(..., fuso=)`). Quem não passa nada recebe o padrão, que é MS, e nada muda. Não é uma variável global que se troca: o painel serve várias pessoas no mesmo processo, e a escolha de uma não pode mudar o mapa que a outra está olhando. O fuso está dentro do recorte porque é ele que decide onde o dia começa — MS (GMT-04) e Paraná (GMT-03) partem o mesmo dia em horas diferentes.
 
 ### Quando a API do INMET falha
 
@@ -668,7 +670,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 .
 ├── main.py               # Ponto de entrada: escolha do produto e das datas
 ├── modulos/              # Peças compartilhadas por todos os produtos
-│   ├── config.py         # Configurações, leitura do .env e a classe Periodo (janelas de tempo)
+│   ├── config.py         # Configurações, o Recorte (o estado mapeado) e o Periodo (janelas de tempo)
 │   ├── inmet.py          # Acesso à API do INMET (estações e dados horários)
 │   ├── calculos.py       # Recorte no tempo, extremos, acumulados e interpolação IDW
 │   ├── mapas.py          # Mapas pontuais, interpolados e de classes (níveis de risco)

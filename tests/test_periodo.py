@@ -1,5 +1,6 @@
 """Janelas de tempo compartilhadas pelos produtos (config.Periodo)."""
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -92,3 +93,36 @@ def test_pasta_de_saida_separada_por_produto_e_modo(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "PASTA_SAIDA", tmp_path)
     periodo = Periodo.de_datas(date(2026, 8, 1), date(2026, 8, 31))
     assert periodo.pasta_saida("relatorio_inmet") == tmp_path / "relatorio_inmet" / "periodo" / "20260801_a_20260831"
+
+
+# =====================================================
+# O RECORTE
+# =====================================================
+def test_o_recorte_padrao_e_ms_e_os_nomes_antigos_apontam_para_ele():
+    """Uma verdade só sobre onde MS fica: os apelidos saem do recorte, não de outra constante."""
+    assert config.RECORTE is config.RECORTES["MS"]
+    assert (config.UF, config.NOME_UF) == (config.RECORTE.uf, config.RECORTE.nome)
+    assert config.RECORTE.shape_uf.name.startswith("MS_")
+    assert config.FUSO_MS is config.RECORTE.fuso
+
+
+def test_o_enquadramento_de_ms_e_o_que_sempre_foi():
+    """Derivá-lo da geometria mudaria por arredondamento, e com ele todo mapa já publicado."""
+    assert config.RECORTES["MS"].limites == (-58.5, -50.5, -24.5, -17.0)
+
+
+def test_o_fuso_do_recorte_decide_onde_o_dia_comeca():
+    """MT e PR partem o mesmo dia em horas diferentes: o fuso não pode ser do módulo."""
+    em_ms = Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30))
+    em_sp = Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30), fuso=ZoneInfo("America/Sao_Paulo"))
+
+    assert em_ms.janela == (utc(2026, 7, 30, 4), utc(2026, 7, 31, 4))
+    assert em_sp.janela == (utc(2026, 7, 30, 3), utc(2026, 7, 31, 3))   # uma hora antes
+    assert em_sp.primeiro_dia == date(2026, 7, 30)                      # e o dia continua sendo o dele
+
+
+def test_o_subtitulo_traz_o_fuso_do_recorte():
+    em_sp = Periodo.de_datas(date(2026, 9, 14), date(2026, 9, 15), 8, 8,
+                             fuso=ZoneInfo("America/Sao_Paulo"))
+    assert em_sp.descrever_janela(*em_sp.janela).endswith("GMT-03")
+
