@@ -352,3 +352,19 @@ def test_a_chuva_nao_pinta_o_chao_da_escala():
     """A primeira classe começa acima de zero: onde não choveu, o mapa fica branco."""
     _, classes = variaveis.escala(variaveis.por_nome("Chuva na hora"), horas_janela=1)
     assert min(classes) > 0
+
+
+def test_o_que_vem_escolhido_existe_no_catalogo():
+    """Um produto renomeado deixaria o mapa abrir vazio: o seletor descarta o nome que não acha."""
+    for modo, nomes in variaveis.PADRAO_MAPA.items():
+        catalogo = {produto.nome for produto in variaveis.disponiveis(modo, variaveis.MAPA)}
+        faltam = [nome for nome in nomes if nome not in catalogo]
+        assert not faltam, f"{modo}: {faltam}"
+
+
+def test_o_padrao_traz_temperatura_umidade_e_vento_em_toda_agregacao():
+    """É o trio do boletim; se um sair, quem abre a aba deixa de ver a grandeza inteira."""
+    assert set(variaveis.PADRAO_MAPA) == {variaveis.HORA, variaveis.DIA, variaveis.PERIODO}
+    for modo, nomes in variaveis.PADRAO_MAPA.items():
+        grandezas = {variaveis.por_nome(nome).grandeza for nome in nomes}
+        assert grandezas == {"Temperatura", "Umidade", "Vento"}, f"{modo}: {grandezas}"

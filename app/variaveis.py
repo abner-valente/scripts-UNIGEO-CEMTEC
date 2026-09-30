@@ -87,6 +87,21 @@ def _compensada(dados: pd.DataFrame, colunas: tuple[str, ...]) -> float:
 
 
 # =====================================================
+# O QUE JÁ VEM ESCOLHIDO
+# =====================================================
+# O trio do boletim em cada agregação. Mora aqui, e não no painel, porque são nomes de
+# produtos: um produto renomeado sem mexer nesta tabela deixaria o mapa abrir vazio, e o
+# seletor não tem como avisar — ele só descarta o nome que não achou.
+PADRAO_MAPA = {
+    HORA: ("Temperatura na hora cheia", "Umidade mínima da hora", "Rajada na hora"),
+    DIA: ("Temperatura média", "Umidade mínima", "Rajada máxima"),
+    # No período não existe "Temperatura média": a média de vários dias é a compensada, como a
+    # equipe definiu. É o mesmo produto, sob a regra que vale ali.
+    PERIODO: ("Temperatura média compensada", "Umidade mínima", "Rajada máxima"),
+}
+
+
+# =====================================================
 # DIREÇÃO DO VENTO
 # =====================================================
 # Direção não se interpola: entre 350° e 10° o vento mal mudou, mas a média daria 180°, o rumo
