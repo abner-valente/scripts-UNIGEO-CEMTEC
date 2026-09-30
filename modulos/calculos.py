@@ -6,6 +6,8 @@ import pandas as pd
 from pyproj import Transformer
 from scipy.spatial import cKDTree
 
+from . import config
+
 
 def recortar(dados: pd.DataFrame, inicio: datetime, fim: datetime) -> pd.DataFrame:
     """Leituras da janela (início, fim].
@@ -28,11 +30,17 @@ def indice_extremo(dados: pd.DataFrame, coluna: str, minimo: bool):
     return dados[coluna].idxmin() if minimo else dados[coluna].idxmax()
 
 
-def data_hora(dados: pd.DataFrame, indice) -> dict:
-    """Data e hora de um registro, em UTC e no horário de MS, prontas para a planilha."""
+def data_hora(dados: pd.DataFrame, indice, uf: str = config.UF) -> dict:
+    """Data e hora de um registro, em UTC e no horário do estado, prontas para a planilha.
+
+    A sigla entra no nome da coluna porque é ela que diz de que horário se fala. Uma planilha
+    de SC com a coluna "Data/Hora (MS)" faria quem lê entender horário de Campo Grande onde
+    está o de Florianópolis — o valor sempre esteve certo, o rótulo é que não acompanhava.
+    Em MS o nome não muda, e as planilhas já publicadas continuam iguais.
+    """
     return {
         "Data/Hora (UTC)": dados.at[indice, "dt_utc"].strftime("%d/%m/%Y %H:%M"),
-        "Data/Hora (MS)": dados.at[indice, "dt_local"].strftime("%d/%m/%Y %H:%M"),
+        f"Data/Hora ({uf})": dados.at[indice, "dt_local"].strftime("%d/%m/%Y %H:%M"),
     }
 
 

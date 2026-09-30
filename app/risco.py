@@ -57,11 +57,11 @@ def da_uf(completas: list, uf: str = config.UF) -> list:
             if estacao.get("SG_ESTADO") == uf]
 
 
-def resumo(completas: list, periodo: config.Periodo) -> pd.DataFrame:
+def resumo(completas: list, periodo: config.Periodo, uf: str = config.UF) -> pd.DataFrame:
     """Uma linha por estação, da de maior risco para a de menor — a tabela da planilha do produto."""
     if not completas:
         return pd.DataFrame()
-    return risco_fogo.montar_tabela([risco_fogo.resumir_estacao(leituras, estacao, periodo)
+    return risco_fogo.montar_tabela([risco_fogo.resumir_estacao(leituras, estacao, periodo, uf)
                                      for estacao, leituras in completas])
 
 

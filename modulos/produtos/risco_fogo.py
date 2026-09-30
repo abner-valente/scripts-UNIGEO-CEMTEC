@@ -97,10 +97,12 @@ def horas_da_janela(periodo: Periodo) -> pd.DatetimeIndex:
 # =====================================================
 # CÁLCULOS POR ESTAÇÃO
 # =====================================================
-def resumir_estacao(leituras: pd.DataFrame, estacao: pd.Series, periodo: Periodo) -> dict:
+def resumir_estacao(leituras: pd.DataFrame, estacao: pd.Series, periodo: Periodo,
+                    uf: str = config.UF) -> dict:
     """Linha da planilha: nível máximo, horas em cada nível e os valores que dispararam as condições.
 
-    Num período, acrescenta também em quantos dias a estação chegou a cada nível.
+    Num período, acrescenta também em quantos dias a estação chegou a cada nível. A sigla vai
+    junto porque nomeia as colunas de horário local — são elas que dizem de que fuso se fala.
     """
     niveis = niveis_por_hora(leituras)
     linha = {
@@ -117,8 +119,8 @@ def resumir_estacao(leituras: pd.DataFrame, estacao: pd.Series, periodo: Periodo
         "Temp. Máxima (°C)": round(float(leituras["TEM_MAX"].max()), 1),
         "Umidade Mínima (%)": round(float(leituras["UMD_MIN"].min()), 1),
         "Rajada Máxima (km/h)": round(float(leituras["rajada_kmh"].max()), 1),
-        "Primeiro Horário em Risco Médio (MS)": _primeiro_horario(niveis, NIVEL_MEDIO, periodo.fuso),
-        "Primeiro Horário em Risco Alto (MS)": _primeiro_horario(niveis, NIVEL_ALTO, periodo.fuso),
+        f"Primeiro Horário em Risco Médio ({uf})": _primeiro_horario(niveis, NIVEL_MEDIO, periodo.fuso),
+        f"Primeiro Horário em Risco Alto ({uf})": _primeiro_horario(niveis, NIVEL_ALTO, periodo.fuso),
         "Latitude": estacao["VL_LATITUDE"],
         "Longitude": estacao["VL_LONGITUDE"],
     })
@@ -395,7 +397,8 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
         print("❌ Nenhuma estação tem as três variáveis no período. Nada a calcular.")
         return 1
 
-    tabela = montar_tabela([resumir_estacao(leituras, estacao, periodo) for estacao, leituras in completas])
+    tabela = montar_tabela([resumir_estacao(leituras, estacao, periodo, recorte.uf)
+                            for estacao, leituras in completas])
     print("\n🔥 Estações por nível de risco:")
     for nivel in range(len(config.ROTULOS_RISCO) - 1, -1, -1):
         print(f"   {config.ROTULOS_RISCO[nivel]}: {(tabela[COLUNA_NIVEL] == nivel).sum()} estações")

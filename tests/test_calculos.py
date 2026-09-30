@@ -35,6 +35,19 @@ def test_indice_do_extremo_e_data_hora(serie):
     assert calculos.data_hora(dados, indice) == {"Data/Hora (UTC)": "30/07/2026 18:00", "Data/Hora (MS)": "30/07/2026 14:00"}
 
 
+def test_a_coluna_de_horario_local_leva_a_sigla_do_estado(serie):
+    """O valor sempre saiu do fuso certo; o rótulo é que dizia (MS) em qualquer estado.
+
+    Uma planilha de SC com a coluna "Data/Hora (MS)" faz quem lê entender horário de Campo
+    Grande onde está o de Florianópolis.
+    """
+    dados = serie("2026-07-30", "2026-07-31")
+    indice = calculos.indice_extremo(dados, "TEM_MAX", minimo=False)
+
+    assert "Data/Hora (SC)" in calculos.data_hora(dados, indice, "SC")
+    assert "Data/Hora (MS)" in calculos.data_hora(dados, indice)   # sem sigla, o padrão do projeto
+
+
 def test_extremo_sem_dados_validos(serie):
     dados = serie("2026-07-30", "2026-07-31", TEM_MIN=np.nan)
     assert calculos.indice_extremo(dados, "TEM_MIN", minimo=True) is None

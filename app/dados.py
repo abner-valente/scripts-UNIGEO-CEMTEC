@@ -26,12 +26,17 @@ IDENTIFICACAO = {"DC_NOME", "UF", "CD_ESTACAO", "DT_MEDICAO", "HR_MEDICAO",
 # estação que ficou fora do ar em julho — não ser rebaixada inteira a cada consulta.
 HORAS_A_RECONFERIR = 48
 
+# Nome da coluna de horário local, sem a sigla. Ela entra na hora de montar a tabela: é a
+# sigla que diz de que fuso se fala, e "Data/Hora (MS)" num CSV de SC seria mentira.
+DATA_LOCAL = "Data/Hora"
+
+
 # Ordem em que as colunas saem na tabela para ver e baixar. A API devolve as chaves em ordem
 # arbitrária (é JSON), e uma planilha com PRE_MAX antes de TEM_INS não se lê. O que não estiver
 # nesta lista sai no fim, como veio: se o INMET publicar uma coluna nova, ela aparece sozinha.
 ORDEM_DAS_COLUNAS = [
     "Estação", "CD_ESTACAO", "DC_NOME", "UF", "VL_LATITUDE", "VL_LONGITUDE",
-    "Data/Hora (MS)", "DT_MEDICAO", "HR_MEDICAO",
+    DATA_LOCAL, "DT_MEDICAO", "HR_MEDICAO",
     "TEM_INS", "TEM_MAX", "TEM_MIN", "TEM_SEN",
     "UMD_INS", "UMD_MAX", "UMD_MIN",
     "PTO_INS", "PTO_MAX", "PTO_MIN",
@@ -98,7 +103,7 @@ def varias(codigos: tuple[str, ...], nomes: tuple[str, ...], inicio: datetime, f
     return (pd.concat(series, ignore_index=True) if series else pd.DataFrame()), sorted(falharam)
 
 
-def planilha(leituras: pd.DataFrame) -> pd.DataFrame:
+def planilha(leituras: pd.DataFrame, uf: str = config.UF) -> pd.DataFrame:
     """A tabela inteira, como a API a entrega, pronta para ver e baixar.
 
     **Todas** as colunas, e não só as das grandezas escolhidas na barra lateral: quem baixa o
@@ -109,10 +114,12 @@ def planilha(leituras: pd.DataFrame) -> pd.DataFrame:
     """
     if leituras.empty:
         return leituras
-    tabela = (leituras.rename(columns={"dt_local": "Data/Hora (MS)"})
+    data_local = f"{DATA_LOCAL} ({uf})"
+    tabela = (leituras.rename(columns={"dt_local": data_local})
               .drop(columns=["dt_utc"], errors="ignore"))
-    conhecidas = [coluna for coluna in ORDEM_DAS_COLUNAS if coluna in tabela]
-    demais = [coluna for coluna in tabela.columns if coluna not in ORDEM_DAS_COLUNAS]
+    ordem = [data_local if coluna == DATA_LOCAL else coluna for coluna in ORDEM_DAS_COLUNAS]
+    conhecidas = [coluna for coluna in ordem if coluna in tabela]
+    demais = [coluna for coluna in tabela.columns if coluna not in ordem]
     return tabela[conhecidas + demais]
 
 
