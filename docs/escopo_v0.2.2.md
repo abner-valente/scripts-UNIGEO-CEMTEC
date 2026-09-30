@@ -73,7 +73,7 @@ sentido fazer só de um lado. Mas quem roda o `main.py` hoje não deve notar dif
    fuso, passada adiante em vez de lida do módulo. Sem variável global mutável: o painel serve
    várias pessoas no mesmo processo, e duas escolhendo UFs diferentes brigariam.
 3. **Seletor de UF** na barra lateral (MS como padrão) e `--uf` no `main.py`.
-4. **Shapefiles das demais UFs**, sob demanda.
+4. **Shapefiles das demais UFs**, sob demanda. *(Feito em 30/09/2026: os 25 com estação.)*
 
 ## O que já está feito
 
@@ -117,6 +117,24 @@ Os quatro itens saíram. Sobre o item 4, o que se aprendeu fazendo:
 - **Risco principal:** mexer em `carregar_base` e no enquadramento toca os produtos. Os mapas do
   boletim só passam a usar vizinhos quando a equipe olhar o efeito no painel e decidir — a
   capacidade entra agora, o uso nos produtos é uma decisão à parte.
+
+## Os 25 estados
+
+Gerados em 30/09/2026. São **25, e não 27**: RR e SE têm todas as estações em pane, e estado sem
+estação não rende mapa — o seletor não deve oferecer o que não desenha. Quando voltarem, é um
+comando cada.
+
+- **4,0 MB** no repositório para os 25 (contorno + municipal simplificado). O maior arquivo de
+  `shp/` continua sendo o `MS_mun.shp` original, com 17,3 MB. O bruto do IBGE são 261 MB e fica
+  em `shp/fonte/`, fora do git.
+- **Ilha oceânica não entra no enquadramento** (`config.ILHA_DISTANTE = 1.0`). Trindade esticava
+  o ES de 2,2° para 13° de largura; Fernando de Noronha fazia o mesmo com PE. O enquadramento
+  passa a sair do corpo principal mais o que estiver a até 1° dele — Marajó, Ilha de Santa
+  Catarina e Ilhabela continuam dentro. Dos 25, só ES e PE eram afetados.
+- **As formas ficam muito mais variadas do que MS.** A proporção largura/altura vai de 0,61 (TO)
+  a 2,96 (PE), contra 1,05 de MS. A figura aguenta — PE e TO foram conferidos —, mas sobra espaço
+  vazio nas duas pontas, e o bloco de logos continua no alto à direita, onde em alguns estados há
+  estado embaixo. Junto da questão de identidade visual, que segue aberta.
 
 ## O custo de carregar, e o caminho que não tomamos
 

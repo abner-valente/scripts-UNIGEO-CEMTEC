@@ -135,11 +135,21 @@ def test_so_aparecem_as_ufs_que_tem_shapefile():
     assert "MS" in config.ufs_disponiveis()
 
 
-def test_uf_sem_shapefile_avisa_em_vez_de_quebrar_no_meio():
+def test_uf_sem_shapefile_avisa_em_vez_de_quebrar_no_meio(monkeypatch, tmp_path):
+    """Sem os arquivos, o recorte diz qual falta em vez de estourar no meio do desenho.
+
+    A pasta vazia entra por monkeypatch de propósito: apontar para uma UF que hoje não tem
+    shapefile faria o teste parar de testar no dia em que ela ganhasse um.
+    """
+    monkeypatch.setattr(config, "PASTA_SHP", tmp_path)
+    config.recorte_de.cache_clear()
+
     with pytest.raises(FileNotFoundError, match="Sem shapefile"):
         config.recorte_de("AC")
     with pytest.raises(KeyError, match="UF desconhecida"):
         config.recorte_de("XX")
+
+    config.recorte_de.cache_clear()
 
 
 def test_o_recorte_derivado_enquadra_o_estado_com_folga(monkeypatch, tmp_path):
@@ -166,12 +176,14 @@ def test_o_recorte_derivado_enquadra_o_estado_com_folga(monkeypatch, tmp_path):
 
 
 def test_todo_estado_disponivel_cabe_no_proprio_enquadramento():
-    """Vale para cada UF acrescentada: o que a ferramenta gerou abre, e o estado inteiro aparece.
+    """Vale para cada UF acrescentada: o que a ferramenta gerou abre, e o estado aparece inteiro.
 
     Um contorno que passa da borda sai cortado no mapa sem ninguém avisar — o desenho continua,
-    só que faltando pedaço de estado.
+    só que faltando pedaço de estado. O que se exige é o **corpo principal**: ilha oceânica
+    distante fica fora do enquadramento de propósito, senão o mapa do ES viraria oceano.
     """
     import geopandas as gpd
+    import shapely
 
     for uf in config.ufs_disponiveis():
         recorte = config.recorte_de(uf)
@@ -181,8 +193,23 @@ def test_todo_estado_disponivel_cabe_no_proprio_enquadramento():
         municipios = gpd.read_file(recorte.shape_mun).to_crs("EPSG:4326")
         assert not contorno.empty and not municipios.empty, uf
 
+        partes = list(shapely.get_parts(shapely.union_all(contorno.geometry.values)))
+        principal = max(partes, key=lambda parte: parte.area)
+        perto = shapely.union_all([parte for parte in partes
+                                   if parte.distance(principal) <= config.ILHA_DISTANTE])
+
         oeste, leste, sul, norte = recorte.limites
-        oeste_real, sul_real, leste_real, norte_real = contorno.total_bounds
+        oeste_real, sul_real, leste_real, norte_real = perto.bounds
         assert oeste <= oeste_real and leste_real <= leste, uf
         assert sul <= sul_real and norte_real <= norte, uf
+
+
+def test_a_ilha_oceanica_nao_estica_o_enquadramento():
+    """Trindade fica a 1.100 km do ES: enquadrar por ela daria um mapa de oceano."""
+    recorte = config.recorte_de("ES")
+    largura = recorte.limites[1] - recorte.limites[0]
+    altura = recorte.limites[3] - recorte.limites[2]
+
+    assert largura < 3.5, f"ES saiu com {largura:.2f}° de largura — a ilha voltou"
+    assert largura < altura          # o ES continental é mais alto que largo
 

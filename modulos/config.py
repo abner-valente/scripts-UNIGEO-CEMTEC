@@ -86,6 +86,12 @@ ESTADOS = {
 # Folga entre o contorno do estado e a borda do desenho, ao derivar o enquadramento de uma UF
 # nova. É a que MS tem: cerca de 0,3° sobrando de cada lado.
 MARGEM_ENQUADRAMENTO = 0.35
+# Ilha mais longe que isto do corpo principal do estado não conta para o enquadramento. A malha
+# do IBGE traz o território inteiro: Trindade fica a 1.100 km do Espírito Santo e Fernando de
+# Noronha a 545 km de Pernambuco. Enquadrar por elas dá um mapa de oceano com o estado no canto —
+# o do ES sairia com 13° de largura para 3,4° de altura, quando o continental tem 2,2°. Ilha
+# perto da costa continua entrando: Marajó, a Ilha de Santa Catarina, Ilhabela.
+ILHA_DISTANTE = 1.0            # graus (~110 km)
 
 
 def shapes_de(uf: str) -> tuple[Path, Path]:
@@ -124,8 +130,15 @@ def recorte_de(uf: str) -> Recorte:
         raise FileNotFoundError(f"Sem shapefile para {uf}: esperado {contorno.name} em shp/")
 
     import geopandas as gpd  # só aqui: quem não desenha mapa não precisa carregar geopandas
+    import shapely
 
-    oeste, sul, leste, norte = gpd.read_file(contorno).to_crs("EPSG:4326").total_bounds
+    inteiro = shapely.union_all(gpd.read_file(contorno).to_crs("EPSG:4326").geometry.values)
+    partes = list(shapely.get_parts(inteiro))
+    principal = max(partes, key=lambda parte: parte.area)
+    # O enquadramento sai do corpo principal mais o que estiver perto dele; ilha oceânica
+    # distante continua no shapefile, só não estica o desenho (ver ILHA_DISTANTE).
+    perto = [parte for parte in partes if parte.distance(principal) <= ILHA_DISTANTE]
+    oeste, sul, leste, norte = shapely.union_all(perto).bounds
     nome, fuso = ESTADOS[uf]
     margem = MARGEM_ENQUADRAMENTO
     return Recorte(uf=uf, nome=nome, shape_uf=contorno, shape_mun=municipios,
