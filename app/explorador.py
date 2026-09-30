@@ -63,6 +63,9 @@ MAPAS_POR_LINHA = 3  # acima disso cada mapa fica estreito demais para se lerem 
 # Altura dos gráficos de série. Em 320 px, quatro estações com duas séries cada davam oito
 # linhas quase coladas: não dava para dizer qual era qual.
 ALTURA_GRAFICO = 420
+# Corpo do número escrito sobre a barra. Vale para a barra deitada e para a cascata: são a mesma
+# leitura em dois desenhos, e tamanhos diferentes fariam um parecer menos importante que o outro.
+CORPO_ROTULO = 13
 # Mapa navegável: o mapa base é o Carto (sem chave de acesso) e o enquadramento inicial sai do
 # recorte — o centro do estado e um zoom que cabe o maior lado dele na tela.
 ZOOM_POR_GRAU = 5.9 + 3.0  # calibrado em MS, que tem 8° de largura e abre bem no zoom 5,9
@@ -302,7 +305,7 @@ def barras_do_acumulado(valores: pd.Series, unidade: str, quantas: int | None) -
                               tickCount=8)),
         y=eixo_estacao,
         tooltip=[alt.Tooltip("Estação:N"), alt.Tooltip("valor:Q", title=unidade, format=".1f")])
-    numeros = base.mark_text(align="left", dx=6, color="#d0d0d0", fontSize=13).encode(
+    numeros = base.mark_text(align="left", dx=6, color="#d0d0d0", fontSize=CORPO_ROTULO).encode(
         x=alt.X("valor:Q"), y=eixo_estacao, text=alt.Text("valor:Q", format=".1f"))
     # Altura por estação, mais uma folga para o eixo de baixo: é o que garante espaço para cada
     # nome. Com altura fixa, três estações ficavam espremidas e quinze viravam oito.
@@ -333,7 +336,7 @@ def cascata_da_chuva(barras: pd.DataFrame, por_dia: bool, facetar: bool = True) 
     # O número vai em cima da barra, e só onde choveu: a hora seca é a maioria das horas, e um
     # "0.0" em cada uma cobriria justamente as barras que interessam.
     numeros = (base.transform_filter(alt.datum.valor > 0)
-               .mark_text(baseline="bottom", dy=-3, fontSize=9, color="#d0d0d0")
+               .mark_text(baseline="bottom", dy=-4, fontSize=CORPO_ROTULO, color="#d0d0d0")
                .encode(y=alt.Y("topo:Q"), text=alt.Text("valor:Q", format=".1f")))
     empilhado = (desenho + numeros).properties(height=220 if facetar else 300)
     if not facetar:
