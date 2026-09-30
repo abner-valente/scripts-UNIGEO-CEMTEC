@@ -53,12 +53,6 @@ NOMES_CURTOS = {
 MODOS_MAPA = {"Hora a hora": variaveis.HORA, "Por dia": variaveis.DIA, "Período inteiro": variaveis.PERIODO}
 # O gráfico não tem o período inteiro: um valor só não faz série no tempo.
 MODOS_GRAFICO = {"Hora a hora": variaveis.HORA, "Por dia": variaveis.DIA}
-# O que já vem escolhido: o trio do boletim. Quem quiser outro troca no seletor.
-PADRAO_MAPA = {
-    variaveis.HORA: ["Temperatura na hora cheia", "Umidade na hora cheia", "Rajada na hora"],
-    variaveis.DIA: ["Temperatura máxima", "Temperatura mínima", "Umidade mínima"],
-    variaveis.PERIODO: ["Temperatura máxima", "Temperatura mínima", "Umidade mínima"],
-}
 # Acumulados que já vêm escolhidos na aba da chuva: os três do boletim
 PADRAO_CHUVA = ["24 h", "48 h", "72 h"]
 DPI_MAPA = 150       # serve para a tela e para o PNG baixado: um desenho só, codificado uma vez
@@ -322,19 +316,23 @@ def cascata_da_chuva(barras: pd.DataFrame, por_dia: bool) -> alt.Chart:
     ninguém somar de cabeça. A do total sai do chão, para comparar de relance.
     """
     ordem = list(barras.sort_values("ordem")["Passo"].unique())
-    return (alt.Chart(barras)
-            .mark_bar(size=14 if por_dia else 8)
-            .encode(x=alt.X("Passo:N", title=None, sort=ordem,
-                            axis=alt.Axis(labelAngle=-45, labelFontSize=9)),
-                    y=alt.Y("base:Q", title="Chuva (mm)",
-                            axis=alt.Axis(grid=True, gridOpacity=0.25, format=".1f")),
-                    y2="topo:Q",
-                    color=alt.Color("tipo:N", title=None,
-                                    scale=alt.Scale(domain=["passo", "total"], range=["#6baed6", "#08306b"]),
-                                    legend=None),
-                    tooltip=[alt.Tooltip("Estação:N"), alt.Tooltip("Passo:N", title="Quando"),
-                             alt.Tooltip("valor:Q", title="Chuva (mm)", format=".1f"),
-                             alt.Tooltip("topo:Q", title="Acumulado (mm)", format=".1f")])
+    base = alt.Chart(barras).encode(
+        x=alt.X("Passo:N", title=None, sort=ordem, axis=alt.Axis(labelAngle=-45, labelFontSize=9)))
+    desenho = base.mark_bar(size=14 if por_dia else 8).encode(
+        y=alt.Y("base:Q", title="Chuva (mm)", axis=alt.Axis(grid=True, gridOpacity=0.25, format=".1f")),
+        y2="topo:Q",
+        color=alt.Color("tipo:N", title=None,
+                        scale=alt.Scale(domain=["passo", "total"], range=["#6baed6", "#08306b"]),
+                        legend=None),
+        tooltip=[alt.Tooltip("Estação:N"), alt.Tooltip("Passo:N", title="Quando"),
+                 alt.Tooltip("valor:Q", title="Chuva (mm)", format=".1f"),
+                 alt.Tooltip("topo:Q", title="Acumulado (mm)", format=".1f")])
+    # O número vai em cima da barra, e só onde choveu: a hora seca é a maioria das horas, e um
+    # "0.0" em cada uma cobriria justamente as barras que interessam.
+    numeros = (base.transform_filter(alt.datum.valor > 0)
+               .mark_text(baseline="bottom", dy=-3, fontSize=9, color="#d0d0d0")
+               .encode(y=alt.Y("topo:Q"), text=alt.Text("valor:Q", format=".1f")))
+    return ((desenho + numeros)
             .properties(height=220)
             .facet(facet=alt.Facet("Estação:N", title=None), columns=2))
 
@@ -842,9 +840,12 @@ with st.sidebar:
                            help="Cada estação vira uma linha no gráfico. Os mapas usam sempre "
                                 "todas as estações do estado.")
     # Uma grandeza dá um gráfico, com as suas séries dentro (máxima, mínima, média): escalas
-    # diferentes nunca se misturam num eixo só.
-    escolhidas = st.multiselect("Grandezas", variaveis.grandezas(variaveis.HORA, variaveis.GRAFICO),
-                                default=["Temperatura", "Chuva", "Vento"],
+    # diferentes nunca se misturam num eixo só. A chuva ficou de fora: ela não vira linha, vira
+    # cascata, e a cascata mora na aba Chuva, junto do resto do que se lê dela.
+    escolhidas = st.multiselect("Grandezas",
+                                [nome for nome in variaveis.grandezas(variaveis.HORA, variaveis.GRAFICO)
+                                 if nome != "Chuva"],
+                                default=["Temperatura", "Vento"],
                                 help="Cada grandeza ganha o seu gráfico, com as séries que a equipe "
                                      "de meteorologia definiu.")
 
@@ -900,26 +901,6 @@ with aba_series:
         st.info("Escolha ao menos uma variável na barra lateral.")
 
     for grandeza in escolhidas:
-        if grandeza == "Chuva":
-            # A chuva não sai em linha: o que se lê dela é quanto caiu em cada passo e quanto
-            # somou no fim — é a cascata que o boletim usa.
-            por_dia_chuva = modo_grafico == variaveis.DIA
-            barras = chuva_calc.cascata(tabela, por_dia=por_dia_chuva)
-            st.subheader("Chuva")
-            if barras.empty:
-                st.warning("Chuva: a API não devolveu essa medição no período.")
-            elif barras["valor"].sum() == 0:
-                # Um quadro vazio parece defeito; a frase deixa claro que o dado existe e é zero
-                st.info("Não choveu em nenhuma das estações escolhidas " +
-                        ("no período." if por_dia_chuva else "nas últimas 24 horas do período."))
-            else:
-                st.altair_chart(cascata_da_chuva(barras, por_dia_chuva), width="stretch")
-                st.caption("Cada barra é a chuva daquele passo, empilhada no que já tinha caído; a barra "
-                           "escura no fim é o total. " +
-                           ("Um dia por barra." if por_dia_chuva
-                            else "As últimas 24 horas do período — uma semana daria 168 barras."))
-            continue
-
         longo, produtos = series_da_grandeza(tabela, grandeza, modo_grafico)
         if longo.empty:
             st.warning(f"{grandeza}: a API não devolveu essa medição no período.")
@@ -1005,7 +986,7 @@ with aba_mapa:
                     and all(coluna in leituras_mapa for coluna in produto.colunas)]
         escolhidos = st.multiselect(
             "Mapas", [produto.nome for produto in catalogo],
-            default=[nome for nome in PADRAO_MAPA[modo] if nome in {p.nome for p in catalogo}],
+            default=[nome for nome in variaveis.PADRAO_MAPA[modo] if nome in {p.nome for p in catalogo}],
             key=f"mapas_{modo}",
             help="Cada um traz a sua regra: a máxima do dia é a maior das máximas horárias, "
                  "nunca a média delas.")
@@ -1030,9 +1011,9 @@ with aba_mapa:
 
                 marcar, ajustar_escala = st.columns([1, 1])
                 with marcar:
-                    rotulos = st.checkbox("Mostrar o valor de cada estação", value=False,
-                                          help="Lado a lado os valores se cobrem. Ligue quando for "
-                                               "ampliar um mapa ou baixar o PNG.")
+                    rotulos = st.checkbox("Mostrar o valor de cada estação", value=True,
+                                          help="Lado a lado os valores se cobrem: desligue para ler "
+                                               "só o padrão das cores, ou amplie o mapa na tela cheia.")
                 with ajustar_escala:
                     ajustar = st.checkbox("Ajustar a escala ao dado", value=False, key="ajustar_mapa",
                                           help="Desligada, a escala é fixa: a mesma cor quer dizer o "
@@ -1068,8 +1049,8 @@ with aba_mapa:
                 st.caption(f"Interpolação IDW (potência {config.IDW_POTENCIA}, {config.IDW_VIZINHOS} vizinhos) "
                            f"sobre as {len(estacoes)} estações do estado mais {len(vizinhas)} de fora dele, "
                            "que seguram a superfície na borda sem entrar em tabela nem ranking. Neste tamanho "
-                           "o mapa mostra o padrão, e a faixa de valores vai escrita sob cada um; para ver "
-                           "estação por estação, ligue a caixa acima e amplie o mapa no ícone de tela cheia.")
+                           "o mapa mostra o padrão, e a faixa de valores vai escrita sob cada um; para ler "
+                           "estação por estação, amplie o mapa no ícone de tela cheia.")
                 if ausentes_mapa:
                     st.caption(f"Sem dados no período ({len(ausentes_mapa)}): {', '.join(ausentes_mapa)}")
 
@@ -1079,6 +1060,29 @@ with aba_mapa:
 # A chuva tem aba própria porque é a única que precisa de dado fora do período escolhido: o
 # acumulado de 96 h, e o do mês, começam antes do início da janela da barra lateral.
 with aba_chuva:
+    # A cascata abre a aba porque é a única parte que não depende da consulta do mês: ela sai das
+    # estações escolhidas na barra lateral e da janela dela, que já estão em mãos. Vinha da aba de
+    # séries, onde a chuva era a única grandeza que não virava linha.
+    st.subheader("Cascata das estações escolhidas")
+    por_dia_cascata = MODOS_GRAFICO[st.radio("Agregação", list(MODOS_GRAFICO), horizontal=True,
+                                             key="modo_cascata")] == variaveis.DIA
+    barras = chuva_calc.cascata(tabela, por_dia=por_dia_cascata)
+    if barras.empty:
+        st.warning("A API não devolveu chuva nas estações escolhidas.")
+    elif barras["valor"].sum() == 0:
+        # Um quadro vazio parece defeito; a frase deixa claro que o dado existe e é zero
+        st.info("Não choveu em nenhuma das estações escolhidas " +
+                ("no período." if por_dia_cascata else "nas últimas 24 horas do período."))
+    else:
+        st.altair_chart(cascata_da_chuva(barras, por_dia_cascata), width="stretch")
+        st.caption("Cada barra é a chuva daquele passo, empilhada no que já tinha caído; a barra "
+                   "escura no fim é o total. O rótulo só vai onde choveu — num período seco seriam "
+                   "dezenas de zeros cobrindo o desenho. " +
+                   ("Um dia por barra." if por_dia_cascata
+                    else "As últimas 24 horas do período — uma semana daria 168 barras."))
+
+    st.divider()
+    st.subheader("Acumulados de todo o estado")
     # O deslizante vem das horas do período, e não do dado: é ele que decide até quando somar, e
     # portanto o que precisa ser baixado.
     horas_do_periodo = pd.date_range(inicio.astimezone(recorte.fuso) + pd.Timedelta(hours=1),
@@ -1160,7 +1164,7 @@ with aba_chuva:
                                    key="mapas_chuva"):
                         marcar, ajustar_escala = st.columns([1, 1])
                         with marcar:
-                            rotulos_chuva = st.checkbox("Mostrar o valor de cada estação", value=False,
+                            rotulos_chuva = st.checkbox("Mostrar o valor de cada estação", value=True,
                                                         key="valores_chuva")
                         with ajustar_escala:
                             ajustar_chuva = st.checkbox("Ajustar a escala ao dado", value=False,
@@ -1196,7 +1200,7 @@ with aba_chuva:
                                 else (lambda marca: f"{marca:%d/%m %H:%M}"))
                     momento = st.select_slider("Quando", options=paradas, value=paradas[-1],
                                                format_func=formatar, key=f"quando_chuva_{modo}")
-                    rotulos_chuva = st.checkbox("Mostrar o valor de cada estação", value=False,
+                    rotulos_chuva = st.checkbox("Mostrar o valor de cada estação", value=True,
                                                 key="valores_chuva_momento")
                     niveis_chuva = niveis_da_escala(produto, 1.0 if modo == variaveis.HORA else 24.0)
                     carimbo = (f"{momento:%Y%m%d}" if modo == variaveis.DIA else f"{momento:%Y%m%d_%H}h")
@@ -1466,7 +1470,7 @@ with aba_navegavel:
                               line_width_min_pixels=1, stroked=True, radius_min_pixels=4,
                               get_radius=2500, pickable=True),
                 ]
-                if st.checkbox("Mostrar o valor de cada estação", value=False, key="valores_navegavel",
+                if st.checkbox("Mostrar o valor de cada estação", value=True, key="valores_navegavel",
                                help="Aproxime para os valores deixarem de se cobrir."):
                     camadas.append(
                         pdk.Layer("TextLayer", data=pontos, get_position=["Longitude", "Latitude"],
