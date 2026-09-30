@@ -59,8 +59,9 @@ class Produto:
 def _compensada_do_dia(dados: pd.DataFrame, colunas: tuple[str, ...]) -> float:
     """Média compensada do INMET de um dia: (T9 + 2·T21 + Tmín + Tmáx) / 5.
 
-    As 9 h e as 21 h são horário de MS, como a equipe definiu — ambas caem dentro do nosso dia
-    (da leitura das 01 h à das 00 h), então não há deslocamento de dia nenhum.
+    As 9 h e as 21 h são horário do estado escolhido, como a equipe definiu — `dt_local` já vem
+    no fuso dele. Ambas caem dentro do nosso dia (da leitura das 01 h à das 00 h), então não há
+    deslocamento de dia nenhum.
 
     Sem a leitura das 9 h ou das 21 h a fórmula não fecha, e o dia fica em branco: um buraco no
     gráfico é honesto, um número inventado não.
@@ -171,7 +172,7 @@ PRODUTOS = [
     # um mês no INMET, e a que dá para comparar com a normal climatológica.
     Produto("Temperatura média compensada", "Temperatura", (DIA, PERIODO),
             ("TEM_INS", "TEM_MAX", "TEM_MIN"), "compensada", "°C", PALETA_TEMPERATURA,
-            "(T9 + 2·T21 + Tmín + Tmáx) ÷ 5, horário de MS; no período, a média das diárias"),
+            "(T9 + 2·T21 + Tmín + Tmáx) ÷ 5, no horário do estado; no período, a média das diárias"),
 
     # --- Umidade -----------------------------------------------------------
     Produto("Umidade máxima da hora", "Umidade", (HORA,), ("UMD_MAX",), "valor",

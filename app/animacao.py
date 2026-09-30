@@ -66,9 +66,9 @@ def montar(quadros: list[tuple[bytes, str]], ms_por_quadro: int = MS_POR_QUADRO)
 def _carimbar(imagem: Image.Image, texto: str) -> None:
     """Escreve o instante no alto à esquerda, sobre uma tarja clara.
 
-    Ali o mapa de MS não chega — o canto noroeste do enquadramento é vazio —, então o carimbo não
-    cobre dado nenhum. A tarja existe porque sem ela o texto sumiria sobre as cores claras da
-    escala.
+    Ali o desenho não chega: em MS e em MT o canto noroeste do enquadramento é vazio, então o
+    carimbo não cobre dado nenhum. Vale conferir ao acrescentar um estado cujo contorno encoste
+    nesse canto. A tarja existe porque sem ela o texto sumiria sobre as cores claras da escala.
     """
     desenho = ImageDraw.Draw(imagem)
     fonte = _fonte(max(14, imagem.width // 28))

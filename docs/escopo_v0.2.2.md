@@ -75,6 +75,26 @@ sentido fazer só de um lado. Mas quem roda o `main.py` hoje não deve notar dif
 3. **Seletor de UF** na barra lateral (MS como padrão) e `--uf` no `main.py`.
 4. **Shapefiles das demais UFs**, sob demanda.
 
+## O que já está feito
+
+Os quatro itens saíram. Sobre o item 4, o que se aprendeu fazendo:
+
+- A `simplificar_municipios.py` passou a receber `--uf` e a **baixar sozinha** a malha de 2022 do
+  IBGE, que publica um arquivo por UF. Antes os dois caminhos de MS estavam escritos no corpo
+  dela, e a procedência do `MS_UF_2022.shp` não estava registrada em lugar nenhum — dava para
+  deduzi-la pelo esquema de colunas, e só.
+- O **bruto não é versionado** (`shp/fonte/`, no .gitignore): são 12 MB por estado que o IBGE
+  devolve quando pedir. Versionados ficam os dois arquivos que os mapas leem — 1,8 MB no MT —,
+  porque a nuvem do Streamlit clona o repositório e não baixa nada na hora de desenhar.
+- **MS é a exceção e continua sendo:** o municipal dele é um arquivo da equipe, não do IBGE.
+  A ferramenta prefere a fonte local `<UF>_mun.shp` quando ela existe, então rodar de novo não
+  troca o dado de vocês pelo do IBGE.
+- **MT ficou pronto** (141 municípios, 51 estações próprias e 55 de apoio, 21 delas de MS — a
+  recíproca do item 1). Os 11 mapas do boletim saem em 23 s.
+- **Os logos são de MS.** Todo mapa leva o brasão do Estado de Mato Grosso do Sul e o texto
+  "CEMTEC — Centro de Monitoramento do Tempo e do Clima de Mato Grosso do Sul", inclusive o de
+  MT. É decisão de identidade visual, não de código, e está em aberto.
+
 ## Custo e risco
 
 - O download de MS **dobra**: 59 → 113 estações, de ~4,4 s para ~9 s numa semana. Da segunda vez

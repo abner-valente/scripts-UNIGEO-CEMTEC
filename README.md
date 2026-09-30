@@ -563,7 +563,7 @@ E abra:
 streamlit run app/explorador.py
 ```
 
-O navegador abre em `http://localhost:8501`. Na barra lateral ficam o **estado**, o período, as estações e as **grandezas**. O seletor de estado só oferece as UFs que têm shapefile em `shp/` — hoje, MS; para acrescentar outra, gere os arquivos dela com [`ferramentas/simplificar_municipios.py`](ferramentas/simplificar_municipios.py). Trocar de estado troca junto o fuso (é ele que decide onde o dia começa), as estações e os shapefiles, e cada estado tem o seu lugar no cache: duas pessoas no mesmo painel, em estados diferentes, não veem o mapa uma da outra. Cada grandeza ganha o seu gráfico — escalas diferentes nunca se misturam num eixo só —, com as séries que a equipe de meteorologia definiu: no gráfico horário, a máxima, a mínima e a média da hora; no diário, as do dia mais a compensada. **Cor separa a estação, traço separa a série**, e clicar numa série da legenda deixa só ela no gráfico **e no balão** — Shift+clique na série destacada traz todas de volta. Zoom com Shift + roda, e tudo baixável em CSV. O cursor em **qualquer ponto** do gráfico marca a hora mais próxima com uma régua vertical e abre um balão só com **todas as estações daquele instante** — antes era preciso acertar o mouse em cima de um ponto, e o balão trazia uma linha de cada vez, que é justamente a comparação que não se queria fazer.
+O navegador abre em `http://localhost:8501`. Na barra lateral ficam o **estado**, o período, as estações e as **grandezas**. O seletor de estado só oferece as UFs que têm shapefile em `shp/` — hoje, MS e MT; para acrescentar outra, rode `python ferramentas/simplificar_municipios.py --uf SIGLA`, que busca a malha do estado no IBGE (veja [Shapefiles](#shapefiles)). Trocar de estado troca junto o fuso (é ele que decide onde o dia começa), as estações e os shapefiles, e cada estado tem o seu lugar no cache: duas pessoas no mesmo painel, em estados diferentes, não veem o mapa uma da outra. Cada grandeza ganha o seu gráfico — escalas diferentes nunca se misturam num eixo só —, com as séries que a equipe de meteorologia definiu: no gráfico horário, a máxima, a mínima e a média da hora; no diário, as do dia mais a compensada. **Cor separa a estação, traço separa a série**, e clicar numa série da legenda deixa só ela no gráfico **e no balão** — Shift+clique na série destacada traz todas de volta. Zoom com Shift + roda, e tudo baixável em CSV. O cursor em **qualquer ponto** do gráfico marca a hora mais próxima com uma régua vertical e abre um balão só com **todas as estações daquele instante** — antes era preciso acertar o mouse em cima de um ponto, e o balão trazia uma linha de cada vez, que é justamente a comparação que não se queria fazer.
 
 | | |
 |---|---|
@@ -691,12 +691,12 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │   ├── superficie.py     # Superfície interpolada como imagem, para o mapa navegável
 │   ├── qualidade.py      # Regras de qualidade das leituras (sem tela, por isso testáveis)
 │   └── requirements.txt  # Dependências só do explorador
-├── ferramentas/          # Scripts auxiliares (ex.: gerar o shapefile simplificado dos municípios)
+├── ferramentas/          # Scripts auxiliares (ex.: preparar os shapefiles de um estado)
 ├── tests/                # Testes automatizados (pytest), com a API do INMET simulada
 ├── .github/workflows/    # Execução automática dos testes no GitHub (GitHub Actions)
 ├── docs/                 # Documentos da equipe (ex.: questões para a meteorologia, guia de migração)
 │   └── img/              # Mapas de exemplo usados neste README, um subdiretório por produto
-├── shp/                  # Shapefiles: limite estadual e municípios (original e simplificado)
+├── shp/                  # Shapefiles de cada estado: limite estadual e municípios
 ├── img/                  # Logos inseridos nos mapas (PNG com fundo transparente)
 ├── saida/                # Resultados gerados (fora do controle de versão)
 ├── legado/               # Scripts originais de cada produto (ex.: legado/relatorio_inmet/), para comparação
@@ -710,10 +710,19 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 
 ### Shapefiles
 
-Todos os mapas usam os shapefiles de `shp/` (SIRGAS 2000, EPSG:4674, reprojetados para WGS 84/EPSG:4326 na execução):
+Todos os mapas usam os shapefiles de `shp/` (SIRGAS 2000, EPSG:4674, reprojetados para WGS 84/EPSG:4326 na execução). São **dois por estado**, e é a existência deles que faz a UF aparecer no seletor do painel e na lista de `--uf` do `main.py`:
 
-- `MS_UF_2022` — limite estadual (malha IBGE 2022).
-- `MS_mun` — limites dos 79 municípios, versão original e detalhada (~755 mil vértices).
-- `MS_mun_simplificado` — versão usada nos mapas, simplificada com tolerância de 0,001° (~100 m, menos de meio pixel): ~5% dos vértices e sem diferença visível. Serve só para desenho; para cálculos de área ou análises espaciais, use o original. Se a malha municipal for atualizada, substitua os arquivos `MS_mun.*` e gere a versão simplificada de novo com `python ferramentas/simplificar_municipios.py`.
+- `<UF>_UF_2022` — limite estadual (malha IBGE 2022). Enquadra o desenho e recorta a superfície interpolada.
+- `<UF>_mun_simplificado` — limites municipais, só para traçar as linhas cinzas. Simplificados com tolerância de 0,001° (~100 m, menos de meio pixel): sem diferença visível no mapa e bem mais leves de desenhar. Cada município é simplificado por conta própria, então as divisas entre vizinhos podem ter frestas de poucos metros — servem para desenhar, não para medir área.
+
+Prontos hoje: **MS** e **MT**. Para acrescentar um estado:
+
+```bash
+python ferramentas/simplificar_municipios.py --uf GO
+```
+
+A ferramenta baixa a malha de 2022 do IBGE, que publica um arquivo por UF, guarda o bruto em `shp/fonte/` — fora do git, porque é grande e o IBGE o devolve quando precisar — e grava em `shp/` só os dois arquivos que os mapas leem. Versionar esses dois é obrigatório: a nuvem do Streamlit clona o repositório e não tem como baixar nada na hora de desenhar.
+
+MS é a exceção: o municipal dele (`MS_mun`, os 79 municípios com ~755 mil vértices) é um arquivo da equipe, e não a malha do IBGE. Quando existe uma fonte local `<UF>_mun.shp`, é ela que vale. Se essa malha for atualizada, substitua os `MS_mun.*` e gere de novo com `--refazer`.
 
 > Cada shapefile é formado por vários arquivos com o mesmo nome (`.shp`, `.shx`, `.dbf`, `.prj`, `.cpg`), que precisam ficar juntos na mesma pasta.
