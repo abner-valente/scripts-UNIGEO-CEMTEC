@@ -1,4 +1,4 @@
-"""Explorador de séries temporais das estações automáticas do INMET em MS.
+"""Explorador de séries temporais das estações automáticas do INMET, por estado.
 
 Ferramenta de análise, separada dos produtos: aqui não se gera planilha nem mapa, se olha o dado
 para entender tendências e conferir a qualidade da medição. Os produtos continuam sendo gerados
@@ -824,8 +824,9 @@ with st.sidebar:
     ufs = config.ufs_disponiveis()
     uf = st.selectbox("Estado", ufs, index=ufs.index(config.UF) if config.UF in ufs else 0,
                       format_func=lambda sigla: f"{sigla} — {config.ESTADOS[sigla][0]}",
-                      help="Para acrescentar um estado, gere os shapefiles dele em shp/ com "
-                           "ferramentas/simplificar_municipios.py.")
+                      help="Para acrescentar um estado, rode "
+                           "ferramentas/simplificar_municipios.py --uf SIGLA, que busca a "
+                           "malha dele no IBGE.")
     recorte = config.recorte_de(uf)
     hoje = date.today()
     intervalo = st.date_input("Período", value=(hoje - timedelta(days=7), hoje - timedelta(days=1)),
@@ -983,7 +984,7 @@ with aba_mapa:
     if not st.session_state.get("mapa_liberado"):
         st.info(f"O mapa interpola as {len(estacoes)} estações do estado, e não só as escolhidas na barra "
                 "lateral. Na primeira vez a consulta demora alguns minutos; depois vem do cache.")
-        if st.button("Carregar todas as estações de MS", type="primary"):
+        if st.button(f"Carregar todas as estações de {uf}", type="primary"):
             st.session_state["mapa_liberado"] = True
             st.rerun()
     else:

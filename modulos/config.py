@@ -129,8 +129,10 @@ def recorte_de(uf: str) -> Recorte:
     nome, fuso = ESTADOS[uf]
     margem = MARGEM_ENQUADRAMENTO
     return Recorte(uf=uf, nome=nome, shape_uf=contorno, shape_mun=municipios,
-                   limites=(round(oeste - margem, 2), round(leste + margem, 2),
-                            round(sul - margem, 2), round(norte + margem, 2)),
+                   # float() porque total_bounds devolve np.float64, e o enquadramento entra
+                   # na chave de cache do painel: melhor que seja o tipo nativo.
+                   limites=(round(float(oeste) - margem, 2), round(float(leste) + margem, 2),
+                            round(float(sul) - margem, 2), round(float(norte) + margem, 2)),
                    fuso=ZoneInfo(fuso))
 
 # Atalhos para o recorte padrão, nos lugares em que só ele faz sentido: o nome do estado nos

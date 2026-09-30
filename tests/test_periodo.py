@@ -160,5 +160,29 @@ def test_o_recorte_derivado_enquadra_o_estado_com_folga(monkeypatch, tmp_path):
                                 round(-26.7 - margem, 2), round(-22.5 + margem, 2))
     assert derivado.nome == "Paraná"
     assert str(derivado.fuso) == "America/Sao_Paulo"
+    # total_bounds devolve np.float64, e o enquadramento entra na chave de cache do painel
+    assert all(type(limite) is float for limite in derivado.limites)
     config.recorte_de.cache_clear()
+
+
+def test_todo_estado_disponivel_cabe_no_proprio_enquadramento():
+    """Vale para cada UF acrescentada: o que a ferramenta gerou abre, e o estado inteiro aparece.
+
+    Um contorno que passa da borda sai cortado no mapa sem ninguém avisar — o desenho continua,
+    só que faltando pedaço de estado.
+    """
+    import geopandas as gpd
+
+    for uf in config.ufs_disponiveis():
+        recorte = config.recorte_de(uf)
+        assert recorte.uf == uf and recorte.nome == config.ESTADOS[uf][0]
+
+        contorno = gpd.read_file(recorte.shape_uf).to_crs("EPSG:4326")
+        municipios = gpd.read_file(recorte.shape_mun).to_crs("EPSG:4326")
+        assert not contorno.empty and not municipios.empty, uf
+
+        oeste, leste, sul, norte = recorte.limites
+        oeste_real, sul_real, leste_real, norte_real = contorno.total_bounds
+        assert oeste <= oeste_real and leste_real <= leste, uf
+        assert sul <= sul_real and norte_real <= norte, uf
 
