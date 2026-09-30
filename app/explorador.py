@@ -967,13 +967,13 @@ with aba_series:
     with st.expander("Ver e baixar os dados"):
         # Tudo o que a API devolveu, e não só as grandezas marcadas na barra lateral: quem baixa
         # quer o dado bruto, e os códigos são os do próprio INMET.
-        visivel = coleta.planilha(tabela)
+        visivel = coleta.planilha(tabela, uf)
         st.caption("Todas as colunas que a API do INMET devolve para as estações e o período "
                    "escolhidos, com os códigos dela — inclusive as que nenhum gráfico usa, como a "
                    "sensação térmica (`TEM_SEN`) e a tensão da bateria (`TEN_BAT`). "
                    "**Vento em km/h**: a API manda em m/s e o painel converte ao carregar, como "
-                   "fazem os produtos. `Data/Hora (MS)` é o horário local; `DT_MEDICAO` e "
-                   "`HR_MEDICAO` são os da API, em UTC.")
+                   f"fazem os produtos. `{coleta.DATA_LOCAL} ({uf})` é o horário do estado; "
+                   "`DT_MEDICAO` e `HR_MEDICAO` são os da API, em UTC.")
         st.dataframe(visivel, width="stretch", height=300)
         st.download_button("Baixar CSV", visivel.to_csv(index=False).encode("utf-8-sig"),
                            file_name=f"leituras_{intervalo[0]:%Y%m%d}_a_{intervalo[1]:%Y%m%d}.csv", mime="text/csv")
@@ -1380,8 +1380,8 @@ with aba_risco:
 
             # --- período inteiro ------------------------------------------------------------
             else:
-                tabela_risco = risco.resumo(do_produto,
-                                            config.Periodo.de_datas(*intervalo, fuso=recorte.fuso))
+                tabela_risco = risco.resumo(
+                    do_produto, config.Periodo.de_datas(*intervalo, fuso=recorte.fuso), uf)
                 esquerda, direita = st.columns(2)
                 with esquerda:
                     st.markdown("**Pior nível do período**")

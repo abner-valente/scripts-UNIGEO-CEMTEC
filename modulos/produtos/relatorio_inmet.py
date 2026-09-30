@@ -43,10 +43,12 @@ def coluna_chuva_principal(periodo: Periodo) -> str:
 # =====================================================
 # CÁLCULOS POR ESTAÇÃO
 # =====================================================
-def resumir_estacao(dados: pd.DataFrame, estacao: pd.Series, periodo: Periodo) -> dict[str, dict]:
+def resumir_estacao(dados: pd.DataFrame, estacao: pd.Series, periodo: Periodo,
+                    uf: str = config.UF) -> dict[str, dict]:
     """Extremos e acumulados de uma estação no período.
 
     Retorna {aba do Excel: linha da tabela}. Variáveis sem nenhum dado válido ficam de fora.
+    A sigla vai junto porque nomeia a coluna de horário local da planilha.
     """
     nome = estacao["Estação"]
     coordenadas = {"Latitude": estacao["VL_LATITUDE"], "Longitude": estacao["VL_LONGITUDE"]}
@@ -58,7 +60,7 @@ def resumir_estacao(dados: pd.DataFrame, estacao: pd.Series, periodo: Periodo) -
         linhas["Temp_Min"] = {
             "Estação": nome,
             "Temperatura Mínima (°C)": dados_periodo.at[indice, "TEM_MIN"],
-            **calculos.data_hora(dados_periodo, indice),
+            **calculos.data_hora(dados_periodo, indice, uf),
             **coordenadas,
         }
 
@@ -67,7 +69,7 @@ def resumir_estacao(dados: pd.DataFrame, estacao: pd.Series, periodo: Periodo) -
         linhas["Temp_Max"] = {
             "Estação": nome,
             "Temperatura Máxima (°C)": dados_periodo.at[indice, "TEM_MAX"],
-            **calculos.data_hora(dados_periodo, indice),
+            **calculos.data_hora(dados_periodo, indice, uf),
             **coordenadas,
         }
 
@@ -182,7 +184,8 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
         print("❌ Nenhuma estação retornou dados. Confira o token e a conexão e tente de novo.")
         return 1
 
-    tabelas = montar_tabelas([resumir_estacao(dados, estacao, periodo) for estacao, dados in coletados], periodo)
+    tabelas = montar_tabelas([resumir_estacao(dados, estacao, periodo, recorte.uf)
+                              for estacao, dados in coletados], periodo)
     for aba, tabela in tabelas.items():
         print(f"   - {aba}: {len(tabela)} estações")
 

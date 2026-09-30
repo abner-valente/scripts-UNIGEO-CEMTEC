@@ -112,6 +112,16 @@ def test_resumo_conta_as_horas_de_cada_nivel(serie):
     assert linha["Primeiro Horário em Risco Alto (MS)"] == "16/09/2026 14:00"  # 18 UTC = 14 h em MS
 
 
+def test_as_colunas_de_horario_do_risco_levam_a_sigla_do_estado(serie):
+    """São duas colunas de horário local na planilha do risco; as duas diziam (MS) em toda UF."""
+    dados = serie("2026-09-16", "2026-09-17 05:00", TEM_MAX=QUENTE, UMD_MIN=SECO, VEN_RAJ=VENTOSO)
+    linha = risco_fogo.resumir_estacao(risco_fogo.leituras_validas(dados, DIA), ESTACAO, DIA, "SC")
+
+    assert "Primeiro Horário em Risco Médio (SC)" in linha
+    assert "Primeiro Horário em Risco Alto (SC)" in linha
+    assert not [coluna for coluna in linha if "(MS)" in coluna]
+
+
 def test_estacao_sem_risco_alto_fica_sem_horario(serie):
     dados = serie("2026-09-16", "2026-09-17 05:00", TEM_MAX=FRIO, UMD_MIN=UMIDO, VEN_RAJ=CALMO)
     linha = risco_fogo.resumir_estacao(risco_fogo.leituras_validas(dados, DIA), ESTACAO, DIA)

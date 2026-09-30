@@ -167,6 +167,22 @@ def test_a_planilha_traz_tudo_o_que_a_api_devolveu():
     assert planilha.columns[-1] == "COLUNA_NOVA_DA_API"               # o que não conhecemos sai no fim
 
 
+def test_o_csv_leva_a_sigla_do_estado_na_coluna_de_horario():
+    """O CSV do painel tem o mesmo problema da planilha do produto, e a mesma correção."""
+    leituras = pd.DataFrame({
+        "dt_utc": pd.to_datetime(["2026-09-15 12:00"], utc=True),
+        "dt_local": pd.to_datetime(["2026-09-15 09:00"]),
+        "Estação": ["Itajai"], "TEM_INS": [21.0],
+    })
+
+    planilha = coleta.planilha(leituras, "SC")
+
+    assert list(planilha.columns[:2]) == ["Estação", "Data/Hora (SC)"]
+    assert "Data/Hora (MS)" not in planilha
+    # e a coluna renomeada continua no lugar certo da ordem, não jogada no fim
+    assert planilha.columns[-1] != "Data/Hora (SC)"
+
+
 def test_planilha_de_tabela_vazia_nao_quebra():
     assert coleta.planilha(pd.DataFrame()).empty
 
