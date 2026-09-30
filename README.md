@@ -1,6 +1,6 @@
 # Scripts UNIGEO / CEMTEC — Monitoramento meteorológico de Mato Grosso do Sul
 
-Produtos meteorológicos gerados a partir dos dados horários das **estações automáticas do INMET** em Mato Grosso do Sul, com **planilhas Excel** e **mapas** (pontuais e interpolados).
+Produtos meteorológicos gerados a partir dos dados horários das **estações automáticas do INMET**, com **planilhas Excel** e **mapas** (pontuais e interpolados). Nasceu para Mato Grosso do Sul e continua com MS como padrão em tudo, mas **o estado é um parâmetro**: `--uf` nos produtos, seletor no painel, hoje com os 25 estados que têm estação automática operante.
 
 | Produto | O que gera |
 |---|---|
@@ -52,8 +52,8 @@ python main.py --produto relatorio_inmet --dataini 15/09/2026
 | `--produto` | Escolhe o produto | `--produto risco_fogo` |
 | `--dataini` | Data inicial (DD/MM/AAAA) | `--dataini 15/09/2026` |
 | `--datafim` | Data final; se omitida, igual à inicial | `--datafim 20/09/2026` |
-| `--hrini` | Hora de início, no horário de MS (0 a 24) | `--hrini 8` |
-| `--hrfim` | Hora de fim, no horário de MS (0 a 24) | `--hrfim 18` |
+| `--hrini` | Hora de início, no horário do estado (0 a 24) | `--hrini 8` |
+| `--hrfim` | Hora de fim, no horário do estado (0 a 24) | `--hrfim 18` |
 | `--tempo-real` | Últimas 24 horas até o momento em que roda | `--tempo-real` |
 | `--hrtodas` | Só para o `risco_fogo`: gera o mapa de todas as horas | `--hrtodas` |
 
@@ -75,10 +75,10 @@ O que a linha de comando não informar é lido dessas variáveis.
 
 O modo é definido pelas datas:
 
-| Modo | Como pedir | Janela de tempo (horário de MS) |
+| Modo | Como pedir | Janela de tempo (horário do estado) |
 |---|---|---|
 | **Data específica** | `--dataini 15/09/2026` (ou `DATA_INICIAL` igual a `DATA_FINAL`) | O dia, da 00 h às 24 h |
-| **Estado** | `--uf MS` | Só as UFs com shapefile em `shp/` (padrão: MS). Troca junto o fuso, as estações e o enquadramento dos mapas |
+| **Estado** | `--uf MS` | Os 25 com shapefile em `shp/` — todos os que têm estação operante (padrão: MS). Troca junto o **fuso**, que decide onde o dia começa, as estações, os shapefiles e o enquadramento dos mapas |
 | **Período** | `--dataini 01/08/2026 --datafim 31/08/2026` (ou datas diferentes) | Da 00 h da data inicial às 24 h da data final |
 | **Tempo real** | `--tempo-real` (ou as duas datas `None`) | As últimas 24 horas, até o momento em que roda |
 
@@ -93,7 +93,7 @@ Com `--hrini` e `--hrfim`, a janela passa a começar e terminar nessas horas —
 
 #### Onde ficam os resultados
 
-Cada execução cria uma pasta própria dentro de `saida/`, separada por produto e por modo: `saida/<produto>/<modo>/<datas>/`. O nome da última pasta indica a janela consultada, no horário de MS:
+Cada execução cria uma pasta própria dentro de `saida/`, separada por produto e por modo: `saida/<produto>/<modo>/<datas>/`. O nome da última pasta indica a janela consultada, no horário do estado:
 
 | Consulta | Pasta |
 |---|---|
@@ -108,11 +108,11 @@ O conteúdo de `saida/` fica fora do controle de versão. O que cada produto gra
 
 ### Produto `relatorio_inmet`
 
-Relatório de extremos e chuva das estações automáticas do INMET em MS.
+Relatório de extremos e chuva das estações automáticas do INMET no estado escolhido.
 
 #### O que calcula
 
-Para cada estação automática de MS, na janela consultada:
+Para cada estação automática do estado, na janela consultada:
 
 | Variável | O que é calculado | Aba da planilha |
 |---|---|---|
@@ -124,7 +124,7 @@ Para cada estação automática de MS, na janela consultada:
 
 Passo a passo de uma execução:
 
-1. Consulta a lista de estações automáticas do INMET e filtra as de MS.
+1. Consulta a lista de estações automáticas do INMET e filtra as do estado, descartando as que estão em pane.
 2. Baixa a série horária de cada estação pela API do INMET.
 3. Calcula os extremos e os acumulados de cada variável.
 4. Gera a planilha Excel com uma aba por variável, ordenada pelo valor.
@@ -143,8 +143,8 @@ python main.py --produto relatorio_inmet --tempo-real                           
 
 | | Tempo real | Data específica | Período |
 |---|---|---|---|
-| **Extremos** (temperaturas, umidade e rajada) | Últimas 24 h | O dia (00 h às 24 h de MS) | Da 00 h da data inicial às 24 h da data final |
-| **Chuva na planilha** | Hoje (desde a 00 h de MS), 12 h, 24 h, 48 h e 72 h | Total do dia (`Acumulado Dia`) | Total do período (`Acumulado Período`) |
+| **Extremos** (temperaturas, umidade e rajada) | Últimas 24 h | O dia (00 h às 24 h do estado) | Da 00 h da data inicial às 24 h da data final |
+| **Chuva na planilha** | Hoje (desde a 00 h do estado), 12 h, 24 h, 48 h e 72 h | Total do dia (`Acumulado Dia`) | Total do período (`Acumulado Período`) |
 | **Mapas de chuva** | 24 h, 48 h e 72 h | 24 h | Período |
 | **Total de mapas** | 15 | 11 | 11 |
 
@@ -199,10 +199,10 @@ Mapas gerados com dados reais do INMET. O **pontual** mostra só o que foi medid
 
 #### Notas metodológicas
 
-- **Horários:** a API do INMET retorna os dados em UTC. Os dias, as janelas, os títulos e os nomes das pastas seguem o horário de MS (`America/Campo_Grande`, UTC−4); a planilha traz a data/hora das temperaturas em UTC e em MS.
-- **Leituras horárias:** cada leitura do INMET se refere à hora que termina no horário indicado (a das 05 UTC cobre das 04 às 05 UTC). Assim, o dia D — da 00 h às 24 h de MS — reúne as leituras das 05 UTC do dia D às 04 UTC do dia seguinte.
+- **Horários:** a API do INMET retorna os dados em UTC. Os dias, as janelas, os títulos e os nomes das pastas seguem o **horário do estado escolhido** — o fuso vem do recorte, e em MS é `America/Campo_Grande` (UTC−4). A planilha traz a data/hora das temperaturas em UTC e no horário local. ⚠️ O **rótulo** dessa coluna ainda diz `(MS)` em qualquer estado; o valor está certo, o nome é que não acompanhou.
+- **Leituras horárias:** cada leitura do INMET se refere à hora que termina no horário indicado (a das 05 UTC cobre das 04 às 05 UTC). Assim, em MS (UTC−4) o dia D — da 00 h às 24 h — reúne as leituras das 05 UTC do dia D às 04 UTC do dia seguinte; num estado UTC−3, uma hora antes.
 - **Rajada:** `VEN_RAJ` é convertida de m/s para km/h (× 3,6). A direção registrada é a do horário da rajada máxima.
-- **Interpolação:** IDW (inverso do quadrado da distância) com os 8 vizinhos mais próximos, em uma grade de 100 × 100 pontos sobre longitude −58,5 a −50,5 e latitude −24,5 a −17,0. A distância é medida em quilômetros, numa projeção equidistante centrada em MS. São necessárias ao menos 3 estações. A superfície é calculada até um pouco além da divisa e recortada exatamente pelo contorno de MS.
+- **Interpolação:** IDW (inverso do quadrado da distância) com os 8 vizinhos mais próximos, em uma grade de 100 × 100 pontos sobre o **enquadramento do estado** — em MS, longitude −58,5 a −50,5 e latitude −24,5 a −17,0. Para as demais UFs o enquadramento sai do contorno mais 0,35° de folga, ignorando ilha oceânica distante (ver [Shapefiles](#shapefiles)). A distância é medida em quilômetros, numa projeção equidistante centrada na grade. São necessárias ao menos 3 estações. A superfície é calculada até um pouco além da divisa e recortada exatamente pelo contorno do estado. **Os produtos não usam as estações vizinhas** — essa capacidade existe e está ligada só no painel; ver a aba Mapas Boletim.
 - **Mapas de chuva:** incluem as estações com 0 mm, que aparecem no mapa pontual e entram na interpolação. Num dia sem chuva em nenhuma estação, os mapas mostram 0 mm em todo o estado.
 
 #### Mudanças em relação aos scripts legados
@@ -265,7 +265,7 @@ Cada condição atendida soma um nível:
 
 Passo a passo de uma execução:
 
-1. Consulta as estações automáticas de MS e baixa a série horária da janela.
+1. Consulta as estações automáticas do estado e baixa a série horária da janela.
 2. Em cada estação e em cada hora, conta quantas condições foram atendidas.
 3. Gera a planilha com o resumo de cada estação: nível máximo, quantas horas em cada nível e os valores que dispararam as condições.
 4. Em cada hora, interpola **separadamente** as três variáveis sobre o estado e aplica a regra em cada ponto do mapa.
@@ -284,7 +284,7 @@ python main.py --produto risco_fogo --dataini 03/09/2026 --hrtodas         # um 
 
 | | Tempo real | Data específica |
 |---|---|---|
-| **Janela** | As últimas 24 horas cheias até o momento em que roda | O dia, da 00 h às 24 h de MS — ou o trecho entre `--hrini` e `--hrfim` |
+| **Janela** | As últimas 24 horas cheias até o momento em que roda | O dia, da 00 h às 24 h do estado — ou o trecho entre `--hrini` e `--hrfim` |
 | **Exemplo** | Rodando às 16h10 de 16/09: das 16 h de 15/09 às 16 h de 16/09 | `--dataini 03/09/2026`: da 00 h às 24 h de 03/09 |
 | **Pasta** | `tempo_real/20260916_1610/` | `dia/20260903/` |
 
@@ -372,7 +372,7 @@ A evolução ao longo do dia, nos mapas horários. Em 03/09 o risco alto aparece
 
 #### Notas metodológicas
 
-- **Horários e leituras:** como no `relatorio_inmet`, os dados chegam em UTC e são exibidos no horário de MS, e cada leitura se refere à hora que termina no horário indicado.
+- **Horários e leituras:** como no `relatorio_inmet`, os dados chegam em UTC e são exibidos no horário do estado, e cada leitura se refere à hora que termina no horário indicado.
 - **Limiares inclusivos:** exatamente 30 °C, 30 % ou 30 km/h já contam como condição atendida.
 - **Rajada:** `VEN_RAJ` vem em m/s e é convertida para km/h (× 3,6) antes da comparação — 30 km/h equivalem a 8,33 m/s.
 - **Simultaneidade:** a regra é testada dentro de cada leitura horária, que traz a temperatura máxima, a umidade mínima e a rajada daquela hora. Dentro de uma mesma hora, os três valores podem estar separados por alguns minutos: é a resolução mais fina que a API oferece.
