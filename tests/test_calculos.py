@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from modulos import calculos
+from modulos import calculos, config
 
 
 def utc(texto):
@@ -67,3 +67,91 @@ def test_idw_de_campo_constante_e_constante():
     lon_grade, lat_grade = calculos.criar_grade((-58.5, -50.5, -24.5, -17.0), 20)
     resultado = calculos.interpolar_idw([-55, -53, -57, -54], [-20, -22, -19, -23], [7.0] * 4, lon_grade, lat_grade)
     assert resultado == pytest.approx(np.full((20, 20), 7.0))
+
+
+# =====================================================
+# PODA DAS ESTAÇÕES DE APOIO
+# =====================================================
+def estado_denso():
+    """Um estado com 36 estações e a grade que vira desenho.
+
+    Denso de propósito: com poucas estações, `k` mais próximas passa a ser "todas", e aí não há o
+    que podar — o cenário precisa ter mais estações do que vizinhos para a poda significar algo.
+    """
+    lon, lat = calculos.criar_grade((-55.0, -54.0, -21.0, -20.0), 30)
+    colunas, linhas = np.meshgrid(np.linspace(-54.95, -54.05, 6), np.linspace(-20.95, -20.05, 6))
+    return lon, lat, colunas.ravel(), linhas.ravel()
+
+
+def test_a_poda_guarda_quem_encosta_no_estado_e_larga_quem_esta_longe():
+    """Estar dentro da margem não basta: é preciso chegar às mais próximas de alguma célula."""
+    lon, lat, proprias_lon, proprias_lat = estado_denso()
+    #                      logo além da divisa | 210 km a leste | 100 km a leste
+    apoio_lon = np.array([-53.95, -52.00, -53.00])
+    apoio_lat = np.array([-20.50, -20.50, -20.50])
+
+    entram = calculos.apoio_que_entra(apoio_lon, apoio_lat, proprias_lon, proprias_lat,
+                                      lon, lat, vizinhos=config.IDW_VIZINHOS)
+
+    assert entram.tolist() == [True, False, False]
+
+
+def test_a_poda_nao_muda_a_superficie_interpolada():
+    """É a promessa da poda: corta requisição e deixa o desenho igual, bit a bit."""
+    lon, lat, proprias_lon, proprias_lat = estado_denso()
+    apoio_lon = np.array([-53.95, -53.90, -53.00, -52.00, -50.00, -56.50])
+    apoio_lat = np.array([-20.50, -20.90, -20.50, -20.50, -20.50, -20.50])
+    valores_proprias = np.linspace(20.0, 28.0, len(proprias_lon))
+    valores_apoio = np.linspace(30.0, 35.0, len(apoio_lon))
+
+    entram = calculos.apoio_que_entra(apoio_lon, apoio_lat, proprias_lon, proprias_lat,
+                                      lon, lat, vizinhos=config.VIZINHOS_NA_PODA)
+
+    def superficie(mascara):
+        return calculos.interpolar_idw(
+            np.concatenate([proprias_lon, apoio_lon[mascara]]),
+            np.concatenate([proprias_lat, apoio_lat[mascara]]),
+            np.concatenate([valores_proprias, valores_apoio[mascara]]),
+            lon, lat, vizinhos=config.IDW_VIZINHOS)
+
+    completa = superficie(np.ones(len(apoio_lon), dtype=bool))
+    podada = superficie(entram)
+
+    assert entram.sum() < len(apoio_lon)                 # a poda cortou alguma coisa
+    assert np.array_equal(completa, podada)              # e mesmo assim o desenho é o mesmo
+
+
+def test_a_folga_da_poda_so_acrescenta_estacao():
+    """A folga existe para guardar quem só vira vizinha quando outra falta naquela hora."""
+    lon, lat, proprias_lon, proprias_lat = estado_denso()
+    apoio_lon = np.array([-53.95, -53.90, -53.85, -53.80, -53.70, -53.60])
+    apoio_lat = np.full(len(apoio_lon), -20.50)
+
+    justo = calculos.apoio_que_entra(apoio_lon, apoio_lat, proprias_lon, proprias_lat,
+                                     lon, lat, vizinhos=config.IDW_VIZINHOS)
+    folgado = calculos.apoio_que_entra(apoio_lon, apoio_lat, proprias_lon, proprias_lat,
+                                       lon, lat, vizinhos=config.VIZINHOS_NA_PODA)
+
+    assert config.VIZINHOS_NA_PODA > config.IDW_VIZINHOS
+    assert (folgado | justo).tolist() == folgado.tolist()   # a folga nunca tira ninguém
+    assert folgado.sum() > justo.sum()                      # e aqui ela acrescenta
+
+
+def test_a_poda_sem_apoio_nenhum_nao_quebra():
+    lon, lat, proprias_lon, proprias_lat = estado_denso()
+
+    entram = calculos.apoio_que_entra([], [], proprias_lon, proprias_lat, lon, lat, vizinhos=8)
+
+    assert entram.shape == (0,) and entram.dtype == bool
+
+
+def test_a_poda_devolve_a_mascara_na_ordem_que_recebeu():
+    """A máscara é posicional: quem chama filtra a tabela dele com ela."""
+    lon, lat, proprias_lon, proprias_lat = estado_denso()
+    apoio_lon = np.array([-50.00, -53.95, -50.50])
+    apoio_lat = np.array([-20.50, -20.50, -20.50])
+
+    entram = calculos.apoio_que_entra(apoio_lon, apoio_lat, proprias_lon, proprias_lat,
+                                      lon, lat, vizinhos=config.IDW_VIZINHOS)
+
+    assert entram.tolist() == [False, True, False]   # só a do meio encosta no estado

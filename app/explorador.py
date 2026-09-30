@@ -32,7 +32,7 @@ from app import qualidade
 from app import risco
 from app import superficie
 from app import variaveis
-from modulos import config, inmet, mapas
+from modulos import calculos, config, inmet, mapas
 from modulos.produtos import risco_fogo
 
 # A API manda o vento em m/s; os produtos trabalham em km/h, e aqui seguimos a mesma unidade
@@ -124,10 +124,23 @@ def carregar_apoio(uf: str) -> pd.DataFrame:
     Elas não são do produto: não entram em lista, tabela nem ranking, e não aparecem desenhadas.
     Servem para o IDW ter dado dos dois lados da divisa — sem elas, os 8 vizinhos que ele enxerga
     numa célula da fronteira estão todos para dentro, e a superfície extrapola tendo medição do
-    outro lado. Em MS são 54, de PR, MT, GO, SP e MG.
+    outro lado.
+
+    Da vizinhança inteira sobram só as que podem entrar na conta de alguma célula: estar dentro
+    da margem não basta, é preciso chegar às mais próximas de algum lugar que vira desenho. Isso
+    corta 54 para 39 em MS e 89 para 60 em SC — requisição a menos em toda consulta, sem mudar
+    mapa, porque a poda tem folga (ver config.VIZINHOS_NA_PODA).
     """
     vizinhanca = inmet.estacoes_do_recorte(config.recorte_de(uf))
-    return vizinhanca[vizinhanca["SG_ESTADO"] != uf].sort_values("Estação").reset_index(drop=True)
+    fora = vizinhanca[vizinhanca["SG_ESTADO"] != uf]
+    dele = vizinhanca[vizinhanca["SG_ESTADO"] == uf]
+    base = base_cartografica(uf)
+    entram = calculos.apoio_que_entra(
+        fora["VL_LONGITUDE"].values, fora["VL_LATITUDE"].values,
+        dele["VL_LONGITUDE"].values, dele["VL_LATITUDE"].values,
+        base.lon_grade[base.dentro_uf], base.lat_grade[base.dentro_uf],
+        config.VIZINHOS_NA_PODA)
+    return fora[entram].sort_values("Estação").reset_index(drop=True)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)

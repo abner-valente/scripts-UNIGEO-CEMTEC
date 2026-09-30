@@ -118,6 +118,39 @@ Os quatro itens saíram. Sobre o item 4, o que se aprendeu fazendo:
   boletim só passam a usar vizinhos quando a equipe olhar o efeito no painel e decidir — a
   capacidade entra agora, o uso nos produtos é uma decisão à parte.
 
+## O custo de carregar, e o caminho que não tomamos
+
+Ligar as vizinhas dobra o número de estações consultadas, e em 30/09/2026 foram medidas três
+saídas. Escolhida: a **poda** (a terceira). As outras ficam registradas porque continuam valendo.
+
+**1. Endpoint em massa do INMET.** Existe `/token/estacao/dados/{data}/{hora}/{token}`, que
+devolve **as 740 estações do país numa requisição só** — 139 KB, ~0,9 s. Um dia inteiro sai em
+24 requisições, 4,1 s com 8 paralelas, e traz **todas as colunas que o projeto usa**. Com ele as
+vizinhas passam a custar **zero**, e o cache deixa de ser por estado: a hora baixada serve para
+qualquer UF.
+
+O custo vira `24 × dias` requisições em vez de `N` estações, e os dois se cruzam perto de **4
+dias**. Ou seja: ganha muito para um dia, tempo real e o boletim; perde feio para a aba de chuva,
+que vai até o dia 1º do mês (720 requisições, uns 2 minutos). Seria preciso escolher o caminho
+por consulta, e manter **dois formatos de cache**.
+
+Duas ressalvas antes de apoiar o boletim nele: o endpoint foi achado sondando, não em
+documentação, e não se sabe como ele responde na hora corrente — justamente a que chega com a
+linha publicada e a medida vazia.
+
+**2. Aumentar o paralelismo.** Já está em 8, e 16 faz o INMET derrubar conexões.
+
+**3. Poda das vizinhas — implementada.** O IDW olha 8 por célula; estação que não chega às mais
+próximas de célula nenhuma é requisição jogada fora, e isso se decide só com coordenadas, antes
+de baixar. Corta 54→39 em MS, 54→49 em MT, 89→60 em SC. A poda olha o dobro de vizinhas que o IDW
+usa, porque numa hora com estações faltando as 8 mais próximas são outras. Conferido nos três
+estados e nas duas grades: nenhuma estação usada foi perdida e a superfície sai idêntica bit a
+bit.
+
+Descartadas por render pouco ou contornar regra: baixar em segundo plano (esconde a espera, não
+reduz), reduzir a margem de 1,5° (versão cega da poda), versionar cache no git (envelhece e
+incha) e manter o app da nuvem acordado à força.
+
 ## Fora do escopo
 
 Mapa nacional único, escalas por região, regra de fogo de outros estados, e qualquer coisa que
