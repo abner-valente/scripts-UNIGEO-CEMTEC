@@ -77,25 +77,49 @@ def fonte_municipal(uf: str) -> Path:
     return da_casa if da_casa.exists() else fonte_ibge(uf, "Municipios")
 
 
+def _simplificada(camada: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """A mesma camada com a geometria simplificada na tolerância do projeto."""
+    saida = camada.copy()
+    saida["geometry"] = camada.geometry.simplify(TOLERANCIA, preserve_topology=True)
+    return saida
+
+
+def _vertices(camada: gpd.GeoDataFrame) -> int:
+    return int(shapely.get_num_coordinates(camada.geometry.values).sum())
+
+
 def gravar_contorno(uf: str, destino: Path) -> None:
-    """Grava o contorno do estado com o nome que os mapas esperam."""
+    """Grava o contorno do estado, simplificado, com o nome que os mapas esperam.
+
+    Simplificar importa mais aqui do que parece. O IBGE mapeia o litoral em detalhe fino: o
+    contorno de SC tem 193 mil vértices contra 25 mil do de MT, que não tem costa. Isso são 3,1 MB
+    de repositório — clonados pela nuvem do Streamlit a cada publicação — para uma diferença de
+    **1 célula em 10.000** na máscara do recorte, e ainda deixa cada mapa 1,4× mais lento de
+    desenhar, porque o contorno vira o caminho de corte de toda figura.
+
+    Os contornos de MS e de MT já estão no repositório sem passar por aqui, e continuam como
+    estão: são pequenos e já valeram por mapas publicados. Regerar o de MS com `--refazer` mudaria
+    o corte dele em menos de 100 m — invisível, mas sem motivo.
+    """
     contorno = gpd.read_file(fonte_ibge(uf, "UF"), encoding="utf-8")
-    contorno.to_file(destino, encoding="utf-8")
-    oeste, sul, leste, norte = contorno.to_crs("EPSG:4326").total_bounds
+    simplificado = _simplificada(contorno)
+    simplificado.to_file(destino, encoding="utf-8")
+
+    oeste, sul, leste, norte = simplificado.to_crs("EPSG:4326").total_bounds
+    antes, depois = _vertices(contorno), _vertices(simplificado)
     print(f"{destino.name}: contorno de {oeste:.2f} a {leste:.2f} de longitude, "
-          f"{sul:.2f} a {norte:.2f} de latitude")
+          f"{sul:.2f} a {norte:.2f} de latitude — "
+          f"{antes:,} vértices -> {depois:,} ({depois / antes:.1%})")
 
 
 def simplificar(uf: str, destino: Path) -> None:
     """Grava a versão simplificada das divisas municipais e diz quanto sobrou."""
     origem = fonte_municipal(uf)
     municipios = gpd.read_file(origem, encoding="utf-8")
-    simplificado = municipios.copy()
-    simplificado["geometry"] = municipios.geometry.simplify(TOLERANCIA, preserve_topology=True)
+    simplificado = _simplificada(municipios)
     simplificado.to_file(destino, encoding="utf-8")
 
-    antes = int(shapely.get_num_coordinates(municipios.geometry.values).sum())
-    depois = int(shapely.get_num_coordinates(simplificado.geometry.values).sum())
+    antes, depois = _vertices(municipios), _vertices(simplificado)
     print(f"{origem.name}: {len(municipios)} municípios, {antes:,} vértices -> "
           f"{destino.name}: {depois:,} vértices ({depois / antes:.1%})")
 
