@@ -309,11 +309,14 @@ def barras_do_acumulado(valores: pd.Series, unidade: str, quantas: int | None) -
     return (barras + numeros).properties(height=34 * len(tabela) + 60)
 
 
-def cascata_da_chuva(barras: pd.DataFrame, por_dia: bool) -> alt.Chart:
+def cascata_da_chuva(barras: pd.DataFrame, por_dia: bool, facetar: bool = True) -> alt.Chart:
     """Quanto choveu em cada passo, empilhado no que já tinha caído, e a barra do total.
 
     Cada barra começa onde a anterior terminou, então a altura da última diz o acumulado sem
     ninguém somar de cabeça. A do total sai do chão, para comparar de relance.
+
+    Com `facetar`, um painel por estação; sem, um gráfico só — que é como sai a do estado, já
+    somada numa linha única.
     """
     ordem = list(barras.sort_values("ordem")["Passo"].unique())
     base = alt.Chart(barras).encode(
@@ -332,9 +335,10 @@ def cascata_da_chuva(barras: pd.DataFrame, por_dia: bool) -> alt.Chart:
     numeros = (base.transform_filter(alt.datum.valor > 0)
                .mark_text(baseline="bottom", dy=-3, fontSize=9, color="#d0d0d0")
                .encode(y=alt.Y("topo:Q"), text=alt.Text("valor:Q", format=".1f")))
-    return ((desenho + numeros)
-            .properties(height=220)
-            .facet(facet=alt.Facet("Estação:N", title=None), columns=2))
+    empilhado = (desenho + numeros).properties(height=220 if facetar else 300)
+    if not facetar:
+        return empilhado
+    return empilhado.facet(facet=alt.Facet("Estação:N", title=None), columns=2)
 
 
 def rosa_dos_ventos(tabela: pd.DataFrame, nome_estacao: str):
@@ -1082,7 +1086,7 @@ with aba_chuva:
                     else "As últimas 24 horas do período — uma semana daria 168 barras."))
 
     st.divider()
-    st.subheader("Acumulados de todo o estado")
+    st.subheader("Todo o estado")
     # O deslizante vem das horas do período, e não do dado: é ele que decide até quando somar, e
     # portanto o que precisa ser baixado.
     horas_do_periodo = pd.date_range(inicio.astimezone(recorte.fuso) + pd.Timedelta(hours=1),
@@ -1114,6 +1118,27 @@ with aba_chuva:
         if leituras_chuva.empty or chuva_calc.COLUNA not in leituras_chuva:
             st.warning("A API não devolveu chuva no período.")
         else:
+            # Sai do mesmo dado dos acumulados, então não custa consulta nenhuma: só reagrupa o
+            # que já veio. Vem antes dos mapas porque responde outra pergunta — quando choveu no
+            # período, e não onde —, e porque não depende de escolha nenhuma na barra lateral.
+            st.markdown("**Cascata do estado**")
+            por_dia_estado = MODOS_GRAFICO[st.radio("Agregação", list(MODOS_GRAFICO), horizontal=True,
+                                                    key="modo_cascata_estado")] == variaveis.DIA
+            barras_estado = chuva_calc.cascata_do_estado(leituras_chuva, por_dia=por_dia_estado)
+            if barras_estado["valor"].sum() == 0:
+                st.info(f"Nenhuma estação do estado registrou chuva até {ate:%d/%m %H:%M}.")
+            else:
+                st.altair_chart(cascata_da_chuva(barras_estado, por_dia_estado, facetar=False),
+                                width="stretch")
+                st.caption(f"**Soma das {len(estacoes)} estações** em cada passo, empilhada no que já "
+                           "tinha caído. É o ritmo da chuva no período, e **não** quanto choveu num "
+                           "lugar: milímetros de estações diferentes somados não descrevem ponto "
+                           "nenhum do mapa. Para quanto caiu onde, os acumulados e o mapa abaixo. " +
+                           (f"Um dia por barra, de {inicio_chuva:%d/%m} até {ate:%d/%m %H:%M}."
+                            if por_dia_estado else
+                            f"As últimas 24 horas até {ate:%d/%m %H:%M}."))
+            st.divider()
+
             modo_chuva = st.radio("Mapas", ["Acumulados", "Hora a hora", "Por dia"], horizontal=True,
                                   key="modo_chuva")
 

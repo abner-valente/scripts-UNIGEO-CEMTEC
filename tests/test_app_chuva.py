@@ -145,3 +145,58 @@ def test_cascata_separa_as_estacoes():
 
 def test_sem_leituras_a_cascata_sai_vazia_e_nao_quebra():
     assert chuva.cascata(pd.DataFrame(), por_dia=True).empty
+
+
+def test_a_cascata_do_estado_soma_as_estacoes_num_passo_so():
+    """Uma linha por passo, e não uma por estação: o gráfico do estado é um só."""
+    tabela = pd.concat([leituras("Bonito", "2026-09-24 01:00", 3, [1.0, 2.0, 0.0]),
+                        leituras("Corumba", "2026-09-24 01:00", 3, [10.0, 0.0, 5.0])],
+                       ignore_index=True)
+
+    barras = chuva.cascata_do_estado(tabela, por_dia=False)
+
+    assert set(barras["Estação"]) == {chuva.TODO_O_ESTADO}
+    passos = barras[barras["tipo"] == "passo"].set_index("Passo")["valor"]
+    assert list(passos) == [11.0, 2.0, 5.0]        # cada hora, somadas as duas estações
+    assert passos.index.tolist() == ["01:00", "02:00", "03:00"]
+
+
+def test_a_cascata_do_estado_fecha_no_total_de_tudo_que_foi_medido():
+    """O topo da última barra e a barra de total têm de bater com a soma bruta das leituras."""
+    tabela = pd.concat([leituras("Bonito", "2026-09-24 01:00", 24, 1.0),
+                        leituras("Corumba", "2026-09-24 01:00", 24, 2.0)], ignore_index=True)
+
+    barras = chuva.cascata_do_estado(tabela, por_dia=False)
+    passos = barras[barras["tipo"] == "passo"]
+    total = barras[barras["tipo"] == "total"]
+
+    assert len(total) == 1
+    assert total["valor"].iloc[0] == pytest.approx(72.0)          # 24 h × (1 + 2) mm
+    assert passos["topo"].iloc[-1] == pytest.approx(72.0)         # a última barra fecha no total
+    assert total["valor"].iloc[0] == pytest.approx(tabela["CHUVA"].sum())
+
+
+def test_a_cascata_do_estado_nao_e_a_media_nem_a_maxima():
+    """Somar milímetro de estações diferentes dá um número maior que o de qualquer uma delas.
+
+    Está aqui para o dia em que alguém trocar a conta sem querer: a equipe escolheu a soma, e a
+    legenda da tela avisa que não é a chuva de um lugar.
+    """
+    tabela = pd.concat([leituras("Bonito", "2026-09-24 01:00", 2, 1.0),
+                        leituras("Corumba", "2026-09-24 01:00", 2, 9.0)], ignore_index=True)
+
+    total = chuva.cascata_do_estado(tabela, por_dia=False)
+    total = total[total["tipo"] == "total"]["valor"].iloc[0]
+
+    assert total == pytest.approx(20.0)     # soma
+    assert total != pytest.approx(10.0)     # não é a média das duas (5 mm × 2 h)
+    assert total != pytest.approx(18.0)     # nem a mais molhada sozinha (9 mm × 2 h)
+
+
+def test_sem_leituras_a_cascata_do_estado_sai_vazia_e_nao_quebra():
+    vazia = chuva.cascata_do_estado(pd.DataFrame(), por_dia=True)
+
+    assert vazia.empty
+    # A tela decide o que mostrar por `vazia["valor"].sum()`: sem a coluna, seria KeyError em vez
+    # do aviso de "não choveu".
+    assert "valor" in vazia.columns and vazia["valor"].sum() == 0

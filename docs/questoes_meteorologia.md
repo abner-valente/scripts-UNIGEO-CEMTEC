@@ -144,3 +144,28 @@ As decisões foram tomadas com o programador em 16/09/2026. Os pontos marcados c
 ✅ **Confirmado pela equipe (28/09/2026):** os limiares são ≥ 30 °C, ≤ 30 % e ≥ 30 km/h.
 
 Sobre o critério de gerar mapa horário só a partir do risco alto: no **painel** ele deixou de decidir quais mapas existem e passou a ser uma caixa que faz o deslizante **parar só nessas horas** — na tela, quem escolhe a hora é quem olha, e o mapa de qualquer hora está a um passo de distância. No produto (`main.py`), onde cada mapa vira um arquivo em disco, o critério continua valendo como filtro, com `--hrtodas` para gerar todas.
+
+---
+
+# Painel
+
+## 9. A conta da cascata de chuva do estado
+
+O painel ganhou uma cascata que não depende das estações escolhidas na barra lateral: uma barra por passo para **o estado inteiro**. "Quanto choveu no estado" tem mais de uma conta, e elas não dão o mesmo número. Medido no MT, 23–29/09/2026, 51 estações:
+
+| conta | 25/09 | 29/09 | semana |
+|---|---|---|---|
+| soma das estações | 103,0 | 532,6 | **742,8** |
+| média das estações | 2,02 | 10,44 | 14,56 |
+| média da área (IDW sobre a grade, recortada no contorno) | 3,09 | 8,30 | 14,12 |
+| estação que mais choveu | 33,6 | 74,8 | 74,8 (numa estação só) |
+
+**Decisão do programador (30/09/2026): a soma das estações.**
+
+O que ficou registrado junto com ela, porque não é óbvio:
+
+- **A soma não descreve lugar nenhum.** São 742,8 mm numa semana em que a estação mais molhada recebeu 74,8. É leitura de **ritmo** — quando choveu, e quanto do total veio de cada dia —, não de quantidade caída. A legenda na tela diz isso, e há teste guardando a conta (`test_a_cascata_do_estado_nao_e_a_media_nem_a_maxima`).
+- **As duas médias divergem no dia, não no total:** 3% de diferença na semana, mas 53% em 25/09 e 20% em 29/09. A média simples pesa demais onde há mais estações — no MT, o centro-sul agrícola.
+- **A máxima não pode ser empilhada.** Somar o recorde de cada dia daria 170,6 mm na semana, um valor que não aconteceu em lugar nenhum, porque a estação campeã muda de um dia para o outro.
+
+⚠️ **Para a equipe de meteorologia:** se o número que vai ao boletim tiver de ser uma chuva média do estado, a conta certa é a **média da área**, que é a mesma superfície do mapa de chuva já publicado — cascata e mapa contariam a mesma história. Trocar é mudar uma função.

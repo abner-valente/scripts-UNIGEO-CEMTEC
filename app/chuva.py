@@ -18,6 +18,8 @@ import pandas as pd
 JANELAS_HORAS = (3, 6, 12, 24, 48, 72, 96)
 MENSAL = "Mensal"
 COLUNA = "CHUVA"
+# Nome que a cascata do estado usa no lugar da estação, por ela juntar todas numa linha só.
+TODO_O_ESTADO = "Todo o estado"
 
 
 def rotulos() -> list[str]:
@@ -111,3 +113,19 @@ def cascata(leituras: pd.DataFrame, por_dia: bool, ultimas_horas: int = 24) -> p
 
     colunas = ["Estação", "Passo", "ordem", "valor", "base", "topo", "tipo"]
     return pd.concat([somas[colunas], totais[colunas]], ignore_index=True)
+
+
+def cascata_do_estado(leituras: pd.DataFrame, por_dia: bool, ultimas_horas: int = 24) -> pd.DataFrame:
+    """A mesma cascata, numa linha só: o que todas as estações mediram em cada passo, somado.
+
+    **É soma de milímetro de estações diferentes, e não a chuva de um lugar.** No MT, numa
+    semana em que a estação mais molhada recebeu 74,8 mm, a soma das 51 dá 742,8. O número
+    serve para ler o ritmo do período — quando choveu, e quanto do total veio de cada dia;
+    para saber quanto caiu onde, o mapa é que responde.
+
+    Trocar o nome da estação por um só faz o agrupamento de `cascata` somar tudo junto: o
+    empilhamento, a barra de total e a ordem saem de lá sem repetição de código.
+    """
+    if leituras.empty or COLUNA not in leituras:
+        return cascata(leituras, por_dia, ultimas_horas)
+    return cascata(leituras.assign(**{"Estação": TODO_O_ESTADO}), por_dia, ultimas_horas)
