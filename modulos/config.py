@@ -196,6 +196,12 @@ RESOLUCAO_GRADE = 100          # pontos por eixo
 IDW_VIZINHOS = 8
 IDW_POTENCIA = 2
 MIN_ESTACOES_INTERPOLACAO = 3
+# Folga da poda das estações de apoio: quantas mais próximas olhar ao decidir se uma
+# estação de fora pode entrar na conta de alguma célula. O IDW usa 8; olhar o dobro
+# guarda a que só vira vizinha quando outra falta naquela hora — e falta: num dia comum
+# até um quinto das estações fica sem alguma das variáveis. Sem essa folga a poda
+# mudaria mapa; com ela, só corta requisição.
+VIZINHOS_NA_PODA = 2 * IDW_VIZINHOS
 
 # =====================================================
 # RISCO DE FOGO (regra 30-30-30)
