@@ -168,4 +168,4 @@ O que ficou registrado junto com ela, porque não é óbvio:
 - **As duas médias divergem no dia, não no total:** 3% de diferença na semana, mas 53% em 25/09 e 20% em 29/09. A média simples pesa demais onde há mais estações — no MT, o centro-sul agrícola.
 - **A máxima não pode ser empilhada.** Somar o recorde de cada dia daria 170,6 mm na semana, um valor que não aconteceu em lugar nenhum, porque a estação campeã muda de um dia para o outro.
 
-⚠️ **Para a equipe de meteorologia:** se o número que vai ao boletim tiver de ser uma chuva média do estado, a conta certa é a **média da área**, que é a mesma superfície do mapa de chuva já publicado — cascata e mapa contariam a mesma história. Trocar é mudar uma função.
+✅ **Confirmado (01/10/2026): a cascata do estado é a soma das estações.** Fica registrado o que pesou na escolha: o número é leitura de ritmo, não de quantidade caída num lugar. Se um dia o boletim precisar de uma chuva média do estado, a conta é a **média da área** — a mesma superfície do mapa de chuva — e trocar é mudar uma função (`app/chuva.py`, `cascata_do_estado`).

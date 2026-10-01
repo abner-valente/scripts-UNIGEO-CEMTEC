@@ -93,15 +93,16 @@ Os quatro itens saíram. Sobre o item 4, o que se aprendeu fazendo:
   recíproca do item 1). Os 11 mapas do boletim saem em 23 s.
 - **Os logos são de MS.** Todo mapa leva o brasão do Estado de Mato Grosso do Sul e o texto
   "CEMTEC — Centro de Monitoramento do Tempo e do Clima de Mato Grosso do Sul", inclusive o de
-  MT. É decisão de identidade visual, não de código, e está em aberto.
+  MT. **Decidido em 01/10/2026: os logos de MS ficam em todos os estados** — quem produz o mapa
+  é o CEMTEC. O que continua conhecido, e não decidido, é a sobreposição física (abaixo).
 - **SC entrou como terceiro estado** (30/09/2026) e trouxe duas coisas que MS e MT não tinham:
   - **Contorno com costa.** O litoral do IBGE tem 193 mil vértices em SC. A ferramenta passou a
     simplificar o contorno também, na mesma tolerância da malha municipal: 3,1 MB viram 67 KB e a
     máscara do recorte muda 1 célula em 10.000.
   - **Proporção 1,51** (6,21° × 4,10°), contra 1,07 de MS e 1,06 de MT. Nos produtos, o bloco de
     logos fica no alto à direita — que em MS e MT é vazio e em SC é estado: **os logos cobrem o
-    nordeste do mapa**. O painel não tem esse problema, porque não desenha logo nenhum. Fica junto
-    da questão de identidade visual acima, porque mexer no enquadramento dos produtos mexe nos
+    nordeste do mapa**. O painel não tem esse problema, porque não desenha logo nenhum. Quais
+    logos vão ficou decidido; onde eles ficam, não — e mexer no lugar deles nos produtos mexe nos
     mapas de MS.
   - **11 estações próprias e 88 de apoio** (RS 69, PR 16, SP 3). É o caso extremo do item 1: no
     painel a superfície de SC é praticamente desenhada pelos vizinhos. Nos produtos, que seguem
@@ -134,7 +135,7 @@ comando cada.
 - **As formas ficam muito mais variadas do que MS.** A proporção largura/altura vai de 0,61 (TO)
   a 2,96 (PE), contra 1,05 de MS. A figura aguenta — PE e TO foram conferidos —, mas sobra espaço
   vazio nas duas pontas, e o bloco de logos continua no alto à direita, onde em alguns estados há
-  estado embaixo. Junto da questão de identidade visual, que segue aberta.
+  estado embaixo. É estética e segue conhecida; a identidade visual em si foi decidida.
 
 ## O custo de carregar, e o caminho que não tomamos
 
