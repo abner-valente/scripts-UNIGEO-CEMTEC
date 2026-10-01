@@ -145,8 +145,13 @@ def baixar_dados_estacao(codigo: str, inicio: datetime, fim: datetime,
     return dados.dropna(subset=["dt_utc"])
 
 
-def baixar_estacoes(inicio: datetime, fim: datetime, uf: str = config.UF) -> list[tuple[pd.Series, pd.DataFrame]]:
+def baixar_estacoes(inicio: datetime, fim: datetime, uf: str = config.UF,
+                    fuso: ZoneInfo = config.FUSO_MS) -> list[tuple[pd.Series, pd.DataFrame]]:
     """Lista as estações da UF e baixa os dados horários de cada uma para a janela (início, fim].
+
+    O fuso vai junto para cada estação porque é dele que sai a hora local da planilha. Até
+    01/10/2026 ele não ia: a hora local saía no horário de MS em qualquer estado, e numa UF
+    UTC−3 a máxima aparecia uma hora antes da que de fato aconteceu.
 
     Retorna (estação, dados) das estações que têm dados e, no fim, mostra quais ficaram de fora
     e por quê. Levanta ErroINMET se a lista de estações falhar.
@@ -159,7 +164,7 @@ def baixar_estacoes(inicio: datetime, fim: datetime, uf: str = config.UF) -> lis
         nome = estacao["Estação"]
         print(f"🛰️ Lendo: {nome}...")
         try:
-            dados = baixar_dados_estacao(estacao["CD_ESTACAO"], inicio, fim)
+            dados = baixar_dados_estacao(estacao["CD_ESTACAO"], inicio, fim, fuso=fuso)
             time.sleep(config.PAUSA_ENTRE_REQUISICOES)
         except ErroINMET as erro:
             print(f"    ❌ Não foi possível ler: {erro}")

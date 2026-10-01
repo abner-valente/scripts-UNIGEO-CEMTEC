@@ -142,7 +142,7 @@ def montar_tabela(resumos: list[dict]) -> pd.DataFrame:
 
 
 def _primeiro_horario(niveis: pd.Series, nivel: int, fuso=None) -> str:
-    """Primeira hora em que a estação alcançou esse nível, no horário de MS (vazio se nunca alcançou).
+    """Primeira hora em que a estação alcançou esse nível, no horário do estado (vazio se nunca alcançou).
 
     Serve para acompanhar quando o risco começou a subir, mesmo nos dias que não chegam ao nível alto.
     """
@@ -380,7 +380,7 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
     print("=" * 60)
 
     try:
-        coletados = inmet.baixar_estacoes(*periodo.janela, uf=recorte.uf)
+        coletados = inmet.baixar_estacoes(*periodo.janela, uf=recorte.uf, fuso=periodo.fuso)
     except inmet.ErroINMET as erro:
         print(f"❌ Erro ao listar estações: {erro}")
         return 1

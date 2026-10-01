@@ -53,7 +53,7 @@ def api_simulada(monkeypatch, tmp_path):
     estacoes["SG_ESTADO"] = config.UF
     estacoes["Estação"] = estacoes["DC_NOME"].map(inmet.formatar_nome_estacao)
 
-    def baixar(codigo, inicio, fim):
+    def baixar(codigo, inicio, fim, fuso=config.FUSO_MS):
         if codigo == CODIGO_SEM_DADOS:
             return None
         n = int(codigo[1:]) - 700
@@ -72,7 +72,7 @@ def api_simulada(monkeypatch, tmp_path):
             "VEN_DIR": (hora * 15 + 20 * n) % 360.0,
             "CHUVA": np.where(hora % 6 == 0, 0.2 * n, 0.0),  # chove em todas as estações a cada 6 h
         })
-        dados["dt_local"] = dados["dt_utc"].dt.tz_convert(config.FUSO_MS)
+        dados["dt_local"] = dados["dt_utc"].dt.tz_convert(fuso)
         return dados
 
     monkeypatch.setattr(inmet, "listar_estacoes", lambda uf=config.UF: estacoes.copy())
