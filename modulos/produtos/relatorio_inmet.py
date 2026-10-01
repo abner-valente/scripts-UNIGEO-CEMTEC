@@ -175,7 +175,7 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
     print("=" * 60)
 
     try:
-        coletados = inmet.baixar_estacoes(*periodo.janela_busca, uf=recorte.uf)
+        coletados = inmet.baixar_estacoes(*periodo.janela_busca, uf=recorte.uf, fuso=periodo.fuso)
     except inmet.ErroINMET as erro:
         print(f"❌ Erro ao listar estações: {erro}")
         return 1

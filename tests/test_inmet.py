@@ -204,7 +204,7 @@ def test_erro_de_token_nao_e_repetido(monkeypatch):
 def test_resumo_da_coleta_separa_sem_dados_de_falha(monkeypatch, capsys):
     estacoes = pd.DataFrame({"CD_ESTACAO": ["A1", "A2", "A3"], "Estação": ["Um", "Dois", "Tres"]})
 
-    def baixar(codigo, inicio, fim):
+    def baixar(codigo, inicio, fim, fuso=None):
         if codigo == "A2":
             return None
         if codigo == "A3":
@@ -221,3 +221,23 @@ def test_resumo_da_coleta_separa_sem_dados_de_falha(monkeypatch, capsys):
     assert "Estações com dados: 1 de 3" in saida
     assert "Sem leituras no período (1): Dois" in saida
     assert "Falha na consulta (1): Tres" in saida
+
+
+def test_a_coleta_passa_o_fuso_do_estado_para_cada_estacao(monkeypatch):
+    """É dele que sai a hora local da planilha: sem repassá-lo, toda UF ficava no horário de MS.
+
+    O defeito passou despercebido porque em MS e em MT o fuso é o mesmo (UTC−4). Em SC, que é
+    UTC−3, a "Data/Hora (SC)" da máxima saía uma hora antes da hora em que ela aconteceu.
+    """
+    from zoneinfo import ZoneInfo
+
+    recebidos = []
+    estacoes = pd.DataFrame({"CD_ESTACAO": ["A1"], "Estação": ["Um"]})
+    monkeypatch.setattr(inmet, "listar_estacoes", lambda uf=config.UF: estacoes)
+    monkeypatch.setattr(inmet, "baixar_dados_estacao",
+                        lambda codigo, inicio, fim, fuso=None: recebidos.append(fuso))
+
+    sao_paulo = ZoneInfo("America/Sao_Paulo")
+    inmet.baixar_estacoes(*DIA.janela_busca, uf="SC", fuso=sao_paulo)
+
+    assert recebidos == [sao_paulo]
