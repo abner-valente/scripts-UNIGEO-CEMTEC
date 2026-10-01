@@ -23,7 +23,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.10", "3.14"]  # versão mínima do README e versão usada pela equipe
+        # Só a versão que a equipe usa. O 3.10 saiu em 01/10/2026: ninguém roda nele, e era
+        # o único em que o teste de requisitos acusava um falso positivo. A matriz fica para
+        # que pôr uma versão de volta seja acrescentar um item.
+        python: ["3.14"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

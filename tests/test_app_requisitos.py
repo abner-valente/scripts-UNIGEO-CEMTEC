@@ -5,7 +5,11 @@ produto carrega `modulos/excel.py` junto, e o `openpyxl` não estava declarado. 
 quem programa nada disso aparece — lá o venv tem as dependências dos dois lados.
 
 A verificação roda num processo à parte porque o pytest já importou meio mundo antes: é preciso
-ver o que os módulos do painel puxam **sozinhos**.
+ver o que os módulos do painel puxam **sozinhos**. E mesmo no processo novo conta só o que entrou
+depois do import do painel: o Python carrega coisas ao iniciar, antes de qualquer linha nossa.
+No 3.10 o setuptools vem instalado e tem um `.pth` que se importa a cada inicialização — o teste
+acusava `setuptools` como dependência do painel, e passou de 30/09 a 01/10/2026 vermelho na CI
+por isso, sem nenhuma dependência faltando de verdade.
 """
 import ast
 import re
@@ -25,10 +29,12 @@ MODULOS = ["animacao", "chuva", "dados", "qualidade", "risco", "superficie", "va
 ESPIAO = f"""
 import sys
 sys.path.insert(0, {str(RAIZ)!r})
+antes = set(sys.modules)
 from app import {", ".join(MODULOS)}
+novos = set(sys.modules) - antes
 import importlib.metadata as meta
 mapa = meta.packages_distributions()
-carregados = {{nome.split(".")[0] for nome in sys.modules}}
+carregados = {{nome.split(".")[0] for nome in novos}}
 pacotes = {{dist for nome in carregados if nome not in sys.stdlib_module_names
            for dist in mapa.get(nome, [])}}
 print("\\n".join(sorted(pacotes)))
