@@ -60,6 +60,13 @@ DPI_MAPA = 150       # serve para a tela e para o PNG baixado: um desenho só, c
 # passaria de 20 MB. Em 72 dpi o quadro tem 854 px — legível na tela e ~68 KB no GIF.
 DPI_GIF = 72
 MAPAS_POR_LINHA = 3  # acima disso cada mapa fica estreito demais para se lerem os valores
+# Quantos estados ficam com os shapefiles na memória ao mesmo tempo. Cada um prende ~25 MB de
+# GeoDataFrame e grade, e esses caches são **do processo, não da sessão**: na nuvem um
+# contêiner serve a equipe inteira, então quem passeia pelo seletor enche a memória de todos.
+# Sem teto, 25 estados visitados prendiam ~740 MB — e o Streamlit Community Cloud corta perto
+# de 1 GB. Com 3, quem compara um estado com os vizinhos não sente; quem volta a um antigo
+# espera 1 a 3 s para reler os shapefiles, e as leituras continuam no cache de disco.
+ESTADOS_NA_MEMORIA = 3
 # Altura dos gráficos de série. Em 320 px, quatro estações com duas séries cada davam oito
 # linhas quase coladas: não dava para dizer qual era qual.
 ALTURA_GRAFICO = 420
@@ -454,9 +461,14 @@ def barra_de_escala(paleta: str, niveis: tuple, unidade: str) -> bytes:
     return arquivo.getvalue()
 
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner=False, max_entries=ESTADOS_NA_MEMORIA)
 def base_cartografica(uf: str) -> mapas.BaseCartografica:
-    """Shapefiles, grade e máscara do estado: pesados de ler e iguais para todo mundo."""
+    """Shapefiles, grade e máscara do estado: pesados de ler e iguais para todo mundo.
+
+    `cache_resource` devolve **a mesma instância**, sem copiar — é o certo aqui, porque
+    serializar 24 MB de GeoDataFrame a cada chamada custaria mais que a leitura que o cache
+    poupa. O preço é que a instância vive enquanto a entrada viver, daí o teto.
+    """
     return mapas.carregar_base(config.recorte_de(uf))
 
 
@@ -496,7 +508,7 @@ def mapa_do_instante(valores: pd.Series, titulo: str, unidade: str, paleta: str,
     return arquivo.getvalue()
 
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner=False, max_entries=ESTADOS_NA_MEMORIA)
 def malha_fina(uf: str) -> superficie.Malha:
     """Grade e máscara do estado do mapa navegável: dependem só da resolução, não do dado."""
     recorte = config.recorte_de(uf)
