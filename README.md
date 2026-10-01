@@ -458,8 +458,12 @@ Pronto — os arquivos passam a ser os da versão nova. A pasta `saida/`, com os
 Para ver em que versão você está:
 
 ```bash
-git log --oneline -1
+git describe --tags
 ```
+
+A resposta `0.2.2` quer dizer exatamente a versão 0.2.2. Algo como `0.2.2-3-g1a2b3c4` quer dizer três commits depois dela, ainda sem versão nova fechada. O que mudou em cada uma está no [CHANGELOG.md](CHANGELOG.md).
+
+A versão fechada é uma tag **sem** o `v` (`0.2.2`). O nome com `v` (`v0.2.3`) é a branch onde a versão está sendo feita: se os dois tivessem o mesmo nome, o git não saberia qual dos dois você quer dizer.
 
 ### Se o `git pull` reclamar de alterações locais
 
@@ -487,7 +491,7 @@ Se a atualização mexeu no `requirements.txt`, instale o que faltar, com o ambi
 pip install -r requirements.txt
 ```
 
-Vale também conferir a seção [Como usar](#como-usar): uma versão nova pode trazer produtos novos ou mudar o nome de alguma opção.
+O que mudou em cada versão está no [CHANGELOG.md](CHANGELOG.md). Comece pelo grupo **Atenção ao atualizar** da versão nova: é ali que fica o que pode quebrar um comando anotado ou mudar um resultado já conhecido. Vale também conferir a seção [Como usar](#como-usar), que descreve as opções como elas estão hoje.
 
 ## Configuração
 
@@ -708,6 +712,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 ├── requirements.txt
 ├── requirements-dev.txt  # Dependências de desenvolvimento (testes)
 ├── pytest.ini            # Configuração dos testes
+├── CHANGELOG.md          # O que mudou em cada versão, para quem usa
 ├── .env                  # Token do INMET (local, fora do controle de versão)
 ├── .env.example          # Modelo do arquivo .env
 └── README.md
