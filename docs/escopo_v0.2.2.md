@@ -105,9 +105,8 @@ Os quatro itens saíram. Sobre o item 4, o que se aprendeu fazendo:
     logos vão ficou decidido; onde eles ficam, não — e mexer no lugar deles nos produtos mexe nos
     mapas de MS.
   - **11 estações próprias e 88 de apoio** (RS 69, PR 16, SP 3). É o caso extremo do item 1: no
-    painel a superfície de SC é praticamente desenhada pelos vizinhos. Nos produtos, que seguem
-    sem vizinhos por decisão, o mapa sai de 11 pontos — a decisão de ligá-los lá foi tomada quando
-    o único estado era MS, com 59, e em SC ela pesa muito mais.
+    painel a superfície de SC é praticamente desenhada pelos vizinhos — e, desde 01/10/2026, nos
+    produtos também (abaixo).
 
 ## Custo e risco
 
@@ -116,8 +115,15 @@ Os quatro itens saíram. Sobre o item 4, o que se aprendeu fazendo:
 - A interpolação não fica mais cara: a grade é a mesma, muda o número de pontos de entrada, e o
   cKDTree resolve isso sem sentir.
 - **Risco principal:** mexer em `carregar_base` e no enquadramento toca os produtos. Os mapas do
-  boletim só passam a usar vizinhos quando a equipe olhar o efeito no painel e decidir — a
-  capacidade entra agora, o uso nos produtos é uma decisão à parte.
+  boletim só passariam a usar vizinhos depois de a equipe olhar o efeito no painel e decidir.
+  **Decidido em 01/10/2026: ligadas nos dois produtos, em todos os estados.** Medido em MS, no
+  dia 29/09: planilhas idênticas, mapas pontuais idênticos, interpolados mudando de 1,5% a 4%
+  dos pixels, todos na borda, e o nível máximo do risco 0,3%. Na mesma mudança a escala de cores
+  passou a ficar presa na faixa do estado — sem isso, a mínima de MS mudava um terço dos pixels
+  porque uma vizinha mais fria esticava a régua. Em SC, com 11 estações próprias, a borda nordeste
+  passa a mostrar o ar quente do Paraná; nos dias de frente esse é o preço conhecido de
+  interpolar sobre um vazio de dados. A linha de comando fica mais lenta: em MS, 98 consultas
+  em vez de 59, uma de cada vez.
 
 ## Os 25 estados
 

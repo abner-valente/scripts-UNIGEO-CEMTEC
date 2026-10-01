@@ -41,6 +41,25 @@ def coluna_chuva_principal(periodo: Periodo) -> str:
 
 
 # =====================================================
+# ESTAÇÕES VIZINHAS
+# =====================================================
+def _tabelas_de_apoio(recorte: config.Recorte, base, periodo: Periodo) -> dict | None:
+    """As mesmas tabelas do relatório, para as vizinhas que seguram a borda da interpolação.
+
+    Não vão para a planilha nem para o ranking: só para a superfície. Numa célula da divisa, os
+    8 vizinhos que o IDW enxerga estariam todos do lado de cá, e a superfície extrapolaria
+    tendo medição do outro lado.
+    """
+    coletadas = inmet.baixar_apoio(recorte, base.lon_grade[base.dentro_uf],
+                                   base.lat_grade[base.dentro_uf], *periodo.janela_busca,
+                                   fuso=periodo.fuso)
+    if not coletadas:
+        return None
+    return montar_tabelas([resumir_estacao(dados, estacao, periodo, recorte.uf)
+                           for estacao, dados in coletadas], periodo)
+
+
+# =====================================================
 # CÁLCULOS POR ESTAÇÃO
 # =====================================================
 def resumir_estacao(dados: pd.DataFrame, estacao: pd.Series, periodo: Periodo,
@@ -193,8 +212,15 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
     excel.salvar_relatorio(tabelas, pasta / f"Relatorio_{recorte.uf}_{periodo.identificador}.xlsx")
 
     print("\n🗺️ Gerando mapas...")
+    base, apoio = None, None
+    try:
+        base = mapas.carregar_base(recorte)
+    except Exception:
+        pass  # gerar_mapas tenta de novo e diz o que houve com os shapefiles
+    else:
+        apoio = _tabelas_de_apoio(recorte, base, periodo)
     mapas.gerar_mapas(tabelas, especificacoes_mapas(periodo, recorte), pasta / "mapas",
-                      periodo.identificador, recorte)
+                      periodo.identificador, recorte, base=base, apoio=apoio)
 
     print("=" * 60)
     print(f"✅ Concluído. Arquivos em: {pasta}")

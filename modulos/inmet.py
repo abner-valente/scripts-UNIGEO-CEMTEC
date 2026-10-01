@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 
-from . import config
+from . import calculos, config
 
 # Uma conexão por thread, reaproveitada entre as consultas. Abrir conexão nova a cada estação
 # custava 0,34 s das 0,83 s de cada uma — quase metade da espera era aperto de mão.
@@ -158,26 +158,81 @@ def baixar_estacoes(inicio: datetime, fim: datetime, uf: str = config.UF,
     """
     estacoes = listar_estacoes(uf)
     print(f"✅ Encontradas {len(estacoes)} estações em {uf}")
+    coletados, sem_dados, com_falha = baixar_lista(estacoes, inicio, fim, fuso)
+    _resumir_coleta(len(estacoes), len(coletados), sem_dados, com_falha)
+    return coletados
 
+
+def baixar_lista(estacoes: pd.DataFrame, inicio: datetime, fim: datetime,
+                 fuso: ZoneInfo = config.FUSO_MS, detalhar: bool = True) -> tuple[list, list, list]:
+    """Baixa as estações dadas, uma por vez: (coletadas, sem dados, com falha).
+
+    `detalhar` escreve uma linha por estação. As do estado escrevem, que é o que quem roda o
+    produto acompanha; as vizinhas não, porque são insumo — 39 linhas a mais em MS só
+    esconderiam as que importam.
+    """
     coletados, sem_dados, com_falha = [], [], []
     for _, estacao in estacoes.iterrows():
         nome = estacao["Estação"]
-        print(f"🛰️ Lendo: {nome}...")
+        if detalhar:
+            print(f"🛰️ Lendo: {nome}...")
         try:
             dados = baixar_dados_estacao(estacao["CD_ESTACAO"], inicio, fim, fuso=fuso)
             time.sleep(config.PAUSA_ENTRE_REQUISICOES)
         except ErroINMET as erro:
-            print(f"    ❌ Não foi possível ler: {erro}")
+            if detalhar:
+                print(f"    ❌ Não foi possível ler: {erro}")
             com_falha.append(nome)
             continue
         if dados is None:
-            print("    ⚠️ Sem leituras no período")
+            if detalhar:
+                print("    ⚠️ Sem leituras no período")
             sem_dados.append(nome)
             continue
-        print(f"    📊 {len(dados)} registros")
+        if detalhar:
+            print(f"    📊 {len(dados)} registros")
         coletados.append((estacao, dados))
+    return coletados, sem_dados, com_falha
 
-    _resumir_coleta(len(estacoes), len(coletados), sem_dados, com_falha)
+
+def estacoes_de_apoio(recorte: config.Recorte, lon_celulas, lat_celulas) -> pd.DataFrame:
+    """As estações de fora do estado que podem entrar na conta de alguma célula.
+
+    Estar dentro da margem do recorte não basta: é preciso chegar às mais próximas de algum
+    lugar que vira desenho (ver calculos.apoio_que_entra). As células entram como coordenadas,
+    e não como a base cartográfica, para este módulo não depender dos mapas.
+
+    É a mesma lista para o painel e para os dois produtos — a superfície que a tela mostra e a
+    que o boletim publica saem das mesmas estações.
+    """
+    vizinhanca = estacoes_do_recorte(recorte)
+    fora = vizinhanca[vizinhanca["SG_ESTADO"] != recorte.uf]
+    dele = vizinhanca[vizinhanca["SG_ESTADO"] == recorte.uf]
+    entram = calculos.apoio_que_entra(fora["VL_LONGITUDE"].values, fora["VL_LATITUDE"].values,
+                                      dele["VL_LONGITUDE"].values, dele["VL_LATITUDE"].values,
+                                      lon_celulas, lat_celulas, config.VIZINHOS_NA_PODA)
+    return fora[entram].sort_values("Estação").reset_index(drop=True)
+
+
+def baixar_apoio(recorte: config.Recorte, lon_celulas, lat_celulas, inicio: datetime, fim: datetime,
+                 fuso: ZoneInfo = config.FUSO_MS) -> list[tuple[pd.Series, pd.DataFrame]]:
+    """Baixa as vizinhas que seguram a borda da interpolação, numa linha só de relato.
+
+    Elas são melhoria, não requisito: se a lista falhar, o produto segue com as estações do
+    estado, como sempre fez, e avisa. Um INMET instável não pode custar o boletim inteiro.
+    """
+    try:
+        estacoes = estacoes_de_apoio(recorte, lon_celulas, lat_celulas)
+    except ErroINMET as erro:
+        print(f"⚠️ Sem as estações vizinhas ({erro}); a borda sai só com as do estado.")
+        return []
+    if estacoes.empty:
+        return []
+    estados = ", ".join(estacoes["SG_ESTADO"].value_counts().index)
+    print(f"🧭 Lendo {len(estacoes)} estações vizinhas para a borda ({estados})...")
+    coletados, sem_dados, com_falha = baixar_lista(estacoes, inicio, fim, fuso, detalhar=False)
+    print(f"   {len(coletados)} com dados"
+          + (f", {len(sem_dados) + len(com_falha)} sem" if sem_dados or com_falha else ""))
     return coletados
 
 

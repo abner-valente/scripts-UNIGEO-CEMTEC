@@ -268,3 +268,34 @@ def test_execucao_completa(api_simulada, tmp_path):
     ]
     assert len(list((pasta / "mapas" / "horas").glob("*.png"))) == 3  # uma por hora, com --hrtodas
     assert not list(pasta.glob("Grafico_*.png"))  # gráficos são só do período
+
+
+
+# ---------- Estações vizinhas ----------
+
+def test_as_vizinhas_entram_na_grade_e_nao_decidem_a_hora(monkeypatch):
+    """Uma vizinha em risco alto mexe na borda, mas não gera mapa horário para o estado.
+
+    O mapa horário sai quando uma estação **do estado** chega ao risco alto. Se a do Paraná
+    contasse, MS ganharia o mapa de uma hora em que nenhuma estação dele chegou lá.
+    """
+    pontos_na_grade = []
+    monkeypatch.setattr(risco_fogo, "grade_da_hora",
+                        lambda pontos, base: pontos_na_grade.append(len(pontos)) or np.zeros((2, 2)))
+    hora = utc("2026-09-16 18:00")
+
+    def coletada(nome, longitude, temperatura, umidade, rajada_kmh):
+        estacao = pd.Series({"Estação": nome, "VL_LONGITUDE": longitude, "VL_LATITUDE": -20.0})
+        leituras = pd.DataFrame({"dt_utc": [hora], "TEM_MAX": [temperatura], "UMD_MIN": [umidade],
+                                 "rajada_kmh": [rajada_kmh]})
+        return estacao, leituras
+
+    do_estado = [coletada(nome, -55.0 + i, FRIO, 80.0, 5.0) for i, nome in enumerate("ABC")]
+    vizinha = [coletada("Do Parana", -50.0, QUENTE, 20.0, 40.0)]   # as três condições: nível 3
+
+    horas = risco_fogo.analisar_horas(do_estado, DIA, base=None, apoio=vizinha)
+
+    assert pontos_na_grade == [4]                                          # a grade viu a vizinha
+    assert horas[hora].estacoes["Estação"].tolist() == ["A", "B", "C"]   # a hora guarda só as do estado
+    assert horas[hora].nivel_estacoes == 0
+    assert risco_fogo.horas_para_mapear(horas) == {}                     # e não ganha mapa horário

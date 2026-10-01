@@ -194,7 +194,9 @@ def test_o_apoio_entra_na_interpolacao(base, monkeypatch):
     mapas.mapa_interpolado(gdf, CHUVA, base)
     mapas.mapa_interpolado(gdf, CHUVA, base, apoio=vizinha)
 
-    assert quantos == [len(gdf), len(gdf) + 1]
+    # Com apoio são duas contas: a superfície, com a vizinha, e a do estado sozinho, que dá a faixa
+    # em que a escala de cores fica presa (ver test_a_vizinha_nao_estica_a_escala_de_cores).
+    assert quantos == [len(gdf), len(gdf) + 1, len(gdf)]
 
 
 def test_o_apoio_muda_a_superficie_e_nao_o_desenho(base):
@@ -222,3 +224,44 @@ def test_poucas_estacoes_nao_viram_superficie(base):
     tabela = ESTACOES.head(2).assign(**{"Chuva (mm)": [1.0, 2.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
     assert mapas.mapa_interpolado(gdf, CHUVA, base, tela=mapas.Tela()) is None
+
+
+
+def test_as_vizinhas_entram_so_no_mapa_interpolado(monkeypatch, tmp_path, base):
+    """O mapa pontual é o do estado; as vizinhas só seguram a borda da superfície."""
+    recebidos = {}
+    monkeypatch.setattr(mapas, "mapa_pontual",
+                        lambda dados, espec, base, caminho: recebidos.setdefault("pontual", len(dados)))
+    monkeypatch.setattr(mapas, "mapa_interpolado",
+                        lambda dados, espec, base, caminho, apoio=None:
+                        recebidos.setdefault("interpolado", (len(dados), 0 if apoio is None else len(apoio))))
+    tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
+    vizinhas = pd.DataFrame({"Estação": ["V1", "V2"], "Latitude": [-24.2, -21.8],
+                             "Longitude": [-54.2, -52.1], "Chuva (mm)": [4.0, 7.0]})
+
+    mapas.gerar_mapas({"Chuva": tabela}, [CHUVA], tmp_path, "teste", base=base,
+                      apoio={"Chuva": vizinhas})
+
+    assert recebidos["pontual"] == len(tabela)                 # o pontual não vê as vizinhas
+    assert recebidos["interpolado"] == (len(tabela), 2)        # a superfície vê as duas
+
+
+def test_a_vizinha_nao_estica_a_escala_de_cores(monkeypatch, base):
+    """Uma vizinha fora da faixa do estado não pode mudar a cor do miolo.
+
+    Sem níveis dados, a escala se estica à superfície. Sem a trava, a borda puxada pela vizinha
+    levava a régua junto: em MS, em 29/09/2026, a mínima foi de 18,3 para 16,4 °C por causa de uma
+    estação do lado de lá, e um terço dos pixels do mapa mudou de cor sem o miolo ter mudado.
+    """
+    vistas = []
+    monkeypatch.setattr(mapas, "mapa_de_grade", lambda grade, *args, **kwargs: vistas.append(grade))
+    gdf = mapas._preparar_dados(ESTACOES.assign(**{"Chuva (mm)": [10.0, 12.0, 14.0, 16.0, 18.0]}), CHUVA)
+    seca = mapas._preparar_dados(pd.DataFrame({"Estação": ["V"], "Latitude": [-24.3], "Longitude": [-54.5],
+                                               "Chuva (mm)": [1.0]}), CHUVA)
+
+    mapas.mapa_interpolado(gdf, CHUVA, base)
+    mapas.mapa_interpolado(gdf, CHUVA, base, apoio=seca)
+
+    sem, com = (grade[base.dentro_uf] for grade in vistas)
+    assert not np.array_equal(sem, com)                     # a vizinha mexeu na superfície
+    assert com.min() >= sem.min() and com.max() <= sem.max()   # mas dentro da faixa do estado
