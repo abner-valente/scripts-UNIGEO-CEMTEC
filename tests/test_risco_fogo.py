@@ -299,3 +299,17 @@ def test_as_vizinhas_entram_na_grade_e_nao_decidem_a_hora(monkeypatch):
     assert horas[hora].estacoes["Estação"].tolist() == ["A", "B", "C"]   # a hora guarda só as do estado
     assert horas[hora].nivel_estacoes == 0
     assert risco_fogo.horas_para_mapear(horas) == {}                     # e não ganha mapa horário
+
+
+def test_os_titulos_dos_mapas_sao_os_que_a_equipe_publica():
+    """O painel baixa estes mesmos mapas: um título mudado aqui muda nos dois lugares."""
+    local = datetime(2026, 9, 3, 11, tzinfo=config.recorte_de("SC").fuso)
+
+    nivel = risco_fogo.espec_nivel_maximo("SC", "03/09/2026")
+    horas = risco_fogo.espec_horas_em_risco_alto("SC", "03/09/2026")
+    da_hora = risco_fogo.espec_da_hora(local, "SC")
+
+    assert (nivel.titulo, nivel.arquivo) == ("Risco de Fogo — Nível Máx. em SC", "Mapa_Risco_Fogo_Nivel_SC")
+    assert (horas.titulo, horas.ranking, horas.decimais) == (
+        "Horas Agregadas de risco alto de fogo em SC", "5 MAIORES EXPOSIÇÕES", 0)
+    assert (da_hora.titulo, da_hora.subtitulo) == ("Risco de Fogo em SC", "03/09/2026 11:00 GMT-03")

@@ -26,6 +26,7 @@ from matplotlib.colors import BoundaryNorm, Normalize
 from matplotlib.figure import Figure
 
 from app import animacao
+from app import boletim
 from app import chuva as chuva_calc
 from app import dados as coleta
 from app import qualidade
@@ -433,7 +434,7 @@ def barra_de_escala(paleta: str, niveis: tuple, unidade: str) -> bytes:
     da barra vertical que tiramos.
     """
     so_acima = float(min(niveis)) > 0
-    continua = len(niveis) > 12  # faixa fixa vira 21 níveis; classes são poucas
+    continua = len(niveis) > mapas.MAX_CLASSES  # faixa fixa vira 21 níveis; classes são poucas
     norma = (Normalize(vmin=min(niveis), vmax=max(niveis)) if continua
              else BoundaryNorm(niveis, ncolors=256, extend="max" if so_acima else "both"))
 
@@ -476,23 +477,15 @@ def mapa_do_instante(valores: pd.Series, titulo: str, unidade: str, paleta: str,
     porque cada passo do deslizante redesenha uma variável por vez: voltar a uma hora já vista não
     paga o desenho de novo.
     """
-    pontos = _com_coordenadas(valores, titulo, uf)
-    if direcoes is not None:
-        # A direção não vira superfície: vai como seta sobre a estação, e o valor do mapa dá o
-        # comprimento dela.
-        pontos["Direção (°)"] = pontos["Estação"].map(direcoes)
-    gdf = mapas.preparar_pontos(pontos, titulo, quando)
+    gdf = _pontos_do_mapa(valores, titulo, uf, quando, direcoes)
     if gdf is None or len(gdf) < config.MIN_ESTACOES_INTERPOLACAO:
         return None
 
     espec = mapas.EspecMapa(tabela="", coluna=titulo, titulo=titulo, subtitulo=quando, arquivo="",
                             cmap=paleta, ranking="", decimais=decimais, unidade=f"{titulo} ({unidade})",
                             direcao_vento=direcoes is not None)
-    # As de apoio entram na conta e só: nada do que sai delas é desenhado, rotulado ou ranqueado
-    vizinhas = (mapas.preparar_pontos(_com_coordenadas(apoio, titulo, uf), titulo, quando)
-                if apoio is not None and not apoio.dropna().empty else None)
     figura = mapas.mapa_interpolado(gdf, espec, base_cartografica(uf), tela=mapas.Tela(rotulos=rotulos),
-                                    niveis=niveis, apoio=vizinhas)
+                                    niveis=niveis, apoio=_vizinhas_do_mapa(apoio, titulo, uf, quando))
     if figura is None:
         return None
     # Codifica uma vez só: os mesmos bytes vão para a tela e para o botão de baixar
@@ -533,9 +526,81 @@ def _com_coordenadas(valores: pd.Series, nome_variavel: str, uf: str) -> pd.Data
     return coordenadas.join(valores.rename(nome_variavel), how="inner").reset_index().dropna()
 
 
-def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, carimbo: str,
-                   rotulos: bool, uf: str, niveis=None, direcoes=None, apoio=None) -> None:
-    """Uma coluna da linha de mapas: nome do produto, desenho, a regra e o botão de baixar."""
+def _pontos_do_mapa(valores: pd.Series, nome: str, uf: str, quando: str, direcoes=None):
+    """As estações do estado que vão para o mapa, com a direção do vento quando houver."""
+    pontos = _com_coordenadas(valores, nome, uf)
+    if direcoes is not None:
+        # A direção não vira superfície: vai como seta sobre a estação, e o valor do mapa dá o
+        # comprimento dela.
+        pontos["Direção (°)"] = pontos["Estação"].map(direcoes)
+    return mapas.preparar_pontos(pontos, nome, quando)
+
+
+def _vizinhas_do_mapa(apoio: pd.Series | None, nome: str, uf: str, quando: str):
+    """As de apoio entram na conta e só: nada do que sai delas é desenhado, rotulado ou ranqueado."""
+    if apoio is None or apoio.dropna().empty:
+        return None
+    return mapas.preparar_pontos(_com_coordenadas(apoio, nome, uf), nome, quando)
+
+
+def botao_do_boletim(medida: str, chave: str, arquivo: str, desenhar) -> None:
+    """O botão que baixa o mapa na moldura do relatório, com os logos do CEMTEC e da SEMADESC.
+
+    `desenhar` só roda no clique: o Streamlit chama a função quando o arquivo é pedido. Em 300
+    dpi, como o main.py grava, cada mapa custa ~0,7 s e 1,5 MB (medido com as 59 de MS), e pagar
+    isso a cada passo do deslizante — três mapas por linha —, por um arquivo que se baixa de vez
+    em quando, deixaria a aba lenta para todo mundo. A função
+    roda numa thread à parte, fora do script, então chega com tudo pronto — pontos, base e
+    níveis —, sem nada de cache do Streamlit lá dentro. E o clique não reexecuta a página
+    (`on_click="ignore"`): os mapas da tela já estão desenhados.
+    """
+    st.download_button(f"Baixar PNG do boletim — {medida}", lambda: boletim.png(desenhar()),
+                       mime="image/png", key=f"boletim_{chave}", file_name=arquivo, on_click="ignore",
+                       help="Como o main.py grava: título, logos do CEMTEC e da SEMADESC, ranking e "
+                            "barra de cores, em 300 dpi. As cores e a escala são as da tela.")
+
+
+def desenho_do_boletim(valores: pd.Series, nome: str, grandeza: str, unidade: str, paleta: str,
+                       decimais: int, subtitulo: str, uf: str, niveis=None, direcoes=None, apoio=None):
+    """O mapa interpolado da tela na moldura do relatório, pronto para desenhar quando pedirem.
+
+    Mesma superfície, mesmas vizinhas e mesmos níveis de cor do que está na tela; muda só a
+    moldura, que é a que o main.py desenha.
+    """
+    gdf = _pontos_do_mapa(valores, nome, uf, subtitulo, direcoes)
+    vizinhas = _vizinhas_do_mapa(apoio, nome, uf, subtitulo)
+    espec = boletim.espec(nome, grandeza, unidade, paleta, decimais, uf, subtitulo, direcoes is not None)
+    base = base_cartografica(uf)
+    return lambda: mapas.mapa_interpolado(gdf, espec, base, niveis=niveis, apoio=vizinhas)
+
+
+def desenho_de_classes(grade, pontos: pd.DataFrame, coluna: str, espec: mapas.EspecClasses, uf: str,
+                       indicadores: mapas.Indicadores | None = None):
+    """Um mapa de risco na moldura do relatório, pronto para desenhar quando pedirem."""
+    gdf = mapas.preparar_pontos(pontos, coluna, espec.subtitulo)
+    base = base_cartografica(uf)
+    return lambda: mapas.mapa_classes_interpolado(grade, gdf, coluna, espec, base, indicadores=indicadores)
+
+
+def desenho_das_horas(grade, pontos: pd.DataFrame, espec: mapas.EspecMapa, uf: str):
+    """O mapa de horas em risco alto na moldura do relatório, com as faixas da tela."""
+    gdf = mapas.preparar_pontos(pontos, espec.coluna, espec.subtitulo)
+    base = base_cartografica(uf)
+    return lambda: mapas.mapa_de_grade(grade, gdf, espec, base, niveis=niveis_das_horas(grade))
+
+
+def niveis_das_horas(grade):
+    """As faixas do mapa de horas em risco alto: uma por hora até 12, e 12 faixas acima disso."""
+    maximo = int(grade.max())
+    return np.arange(0, max(maximo, 1) + 1) if maximo < 12 else 12
+
+
+def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, subtitulo: str,
+                   carimbo: str, rotulos: bool, uf: str, niveis=None, direcoes=None, apoio=None) -> None:
+    """Uma coluna da linha de mapas: nome do produto, desenho, a regra e os botões de baixar.
+
+    `rotulo` é o instante como a tela o escreve; `subtitulo`, como o relatório escreve.
+    """
     st.markdown(f"**{produto.nome}**")
     medida = produto.nome.lower()
     if valores.dropna().empty:
@@ -559,6 +624,10 @@ def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, 
     arquivo = produto.nome.lower().replace(" ", "_")
     st.download_button(f"Baixar PNG — {medida}", png, mime="image/png", key=f"baixar_{produto.nome}",
                        file_name=f"Mapa_{arquivo}_{carimbo}.png")
+    botao_do_boletim(medida, produto.nome, boletim.nome_do_arquivo(produto.nome, uf, carimbo),
+                     desenho_do_boletim(valores, produto.nome, produto.grandeza, produto.unidade,
+                                        produto.paleta, produto.decimais, subtitulo, uf, niveis,
+                                        direcoes, apoio))
 
 
 def escala_do_periodo(produto: variaveis.Produto, leituras: pd.DataFrame, horas_janela):
@@ -637,9 +706,12 @@ def painel_do_gif(produto: variaveis.Produto, leituras: pd.DataFrame, modo: str,
                                  f"{momentos[0]:%Y%m%d}_a_{momentos[-1]:%Y%m%d}.gif")
 
 
-def painel_da_chuva(rotulo: str, valores: pd.Series, janela: str, rotulos: bool, uf: str,
-                    niveis=None, apoio=None) -> None:
-    """Uma coluna da linha de acumulados: quanto choveu na janela que termina no fim do período."""
+def painel_da_chuva(rotulo: str, valores: pd.Series, janela: str, subtitulo: str, carimbo: str,
+                    rotulos: bool, uf: str, niveis=None, apoio=None) -> None:
+    """Uma coluna da linha de acumulados: quanto choveu na janela que termina no fim do período.
+
+    `janela` é o intervalo como a tela o escreve; `subtitulo`, como o relatório escreve.
+    """
     st.markdown(f"**Chuva {rotulo}**")
     if valores.dropna().empty:
         st.info(f"Nenhuma estação mediu chuva em {janela}.")
@@ -659,6 +731,11 @@ def painel_da_chuva(rotulo: str, valores: pd.Series, janela: str, rotulos: bool,
     st.download_button(f"Baixar PNG — chuva {rotulo}", png, mime="image/png",
                        key=f"baixar_chuva_{rotulo}",
                        file_name=f"Mapa_chuva_{rotulo.replace(' ', '')}.png")
+    nome = boletim.nome_da_chuva(rotulo)
+    botao_do_boletim(f"chuva {rotulo}", f"chuva_{rotulo}",
+                     boletim.nome_do_arquivo(nome, uf, carimbo),
+                     desenho_do_boletim(valores, nome, "Chuva", "mm", "Blues", 1, subtitulo, uf, niveis,
+                                        apoio=apoio))
 
 
 @st.cache_data(show_spinner=False, max_entries=2)
@@ -718,9 +795,7 @@ def mapa_de_horas_altas(grade, pontos: pd.DataFrame, quando: str, detalhes: bool
                             titulo=f"Horas em risco alto em {uf}", subtitulo=quando,
                             arquivo="", cmap="YlOrRd", ranking="",
                             unidade="Horas em risco alto", decimais=0)
-    maximo = int(grade.max())
-    figura = mapas.mapa_de_grade(grade, gdf, espec, base_cartografica(uf),
-                                 niveis=np.arange(0, max(maximo, 1) + 1) if maximo < 12 else 12,
+    figura = mapas.mapa_de_grade(grade, gdf, espec, base_cartografica(uf), niveis=niveis_das_horas(grade),
                                  tela=mapas.Tela(rotulos=detalhes))
     arquivo = io.BytesIO()
     figura.savefig(arquivo, format="png", dpi=DPI_MAPA, bbox_inches="tight", facecolor="white")
@@ -905,6 +980,9 @@ if falharam:
 horas_esperadas = int((fim - inicio).total_seconds() // 3600)
 periodo_escolhido = (f"{intervalo[0]:%d/%m/%Y}" if intervalo[0] == intervalo[1]
                      else f"{intervalo[0]:%d/%m/%Y} a {intervalo[1]:%d/%m/%Y}")
+# O mesmo Periodo que o main.py montaria para essas datas: é dele o texto das janelas nos mapas
+# baixados para o boletim, e a tabela do risco sai com as colunas da planilha do produto.
+periodo_painel = config.Periodo.de_datas(*intervalo, fuso=recorte.fuso)
 aba_series, aba_mapa, aba_chuva, aba_risco, aba_navegavel, aba_qualidade = st.tabs(
     ["Estações: Séries Temporais", "Mapas Boletim", "Chuva", "Risco de Fogo", "Mapa Navegação",
      "Qualidade dos dados"])
@@ -1062,7 +1140,8 @@ with aba_mapa:
                                 produto = variaveis.por_nome(nome)
                                 setas = variaveis.direcoes(produto, fatia)
                                 painel_do_mapa(produto, variaveis.por_estacao(produto, fatia),
-                                               rotulo, carimbo, rotulos, uf,
+                                               rotulo, boletim.subtitulo(modo, momento, periodo_painel),
+                                               carimbo, rotulos, uf,
                                                niveis_da_escala(produto, horas_janela, ajustar),
                                                None if setas.empty else setas,
                                                variaveis.por_estacao(produto, fatia_apoio))
@@ -1227,8 +1306,9 @@ with aba_chuva:
                                         comeco, _ = chuva_calc.janela(ate, rotulo)
                                         painel_da_chuva(
                                             rotulo, chovidas[rotulo],
-                                            f"{comeco:%d/%m %H:%M} a {ate:%d/%m %H:%M}", rotulos_chuva,
-                                            uf,
+                                            f"{comeco:%d/%m %H:%M} a {ate:%d/%m %H:%M}",
+                                            periodo_painel.descrever_janela(comeco, ate),
+                                            f"{ate:%Y%m%d_%H}h", rotulos_chuva, uf,
                                             niveis_da_escala(acumulada,
                                                              chuva_calc.horas_da_janela(ate, rotulo),
                                                              ajustar_chuva),
@@ -1256,7 +1336,8 @@ with aba_chuva:
                     _, meio, _ = st.columns([1, 2, 1])
                     with meio:
                         painel_do_mapa(produto, variaveis.por_estacao(produto, fatia),
-                                       formatar(momento), carimbo, rotulos_chuva, uf, niveis_chuva,
+                                       formatar(momento), boletim.subtitulo(modo, momento, periodo_painel),
+                                       carimbo, rotulos_chuva, uf, niveis_chuva,
                                        apoio=variaveis.por_estacao(produto, fatia_apoio))
 
             if ausentes_chuva:
@@ -1348,6 +1429,14 @@ with aba_risco:
                             st.download_button("Baixar PNG — risco de fogo", png, mime="image/png",
                                                key="baixar_risco",
                                                file_name=f"Mapa_risco_fogo_{local:%Y%m%d_%H}h.png")
+                            # Com o nível e as condições de cada estação, como o mapa horário do
+                            # main.py, mesmo com a caixa de detalhes desligada na tela
+                            espec_hora = risco_fogo.espec_da_hora(local, uf)
+                            botao_do_boletim("risco de fogo", "risco",
+                                             f"{espec_hora.arquivo}_{local:%Y%m%d_%H}h.png",
+                                             desenho_de_classes(avaliada.grade, do_estado_na_hora,
+                                                                risco_fogo.COLUNA_NIVEL_HORA, espec_hora, uf,
+                                                                risco_fogo.indicadores_condicoes()))
                             if st.button("Gerar GIF — risco de fogo", key="botao_gif_risco",
                                          help=f"{len(animacao.passos(quando))} quadros."):
                                 st.session_state["gif_risco"] = True
@@ -1382,19 +1471,31 @@ with aba_risco:
                         st.download_button("Baixar PNG — risco do dia", png, mime="image/png",
                                            key="baixar_risco_dia",
                                            file_name=f"Mapa_risco_fogo_{dia:%Y%m%d}.png")
+                        espec_dia = risco_fogo.espec_nivel_maximo(uf, f"{dia:%d/%m/%Y}")
+                        botao_do_boletim("risco do dia", "risco_dia",
+                                         f"{espec_dia.arquivo}_{dia:%Y%m%d}_interpolado.png",
+                                         desenho_de_classes(dias[dia], do_dia[do_dia["Estação"].isin(nomes_do_estado)],
+                                                            risco_fogo.COLUNA_NIVEL_HORA, espec_dia, uf))
 
             # --- período inteiro ------------------------------------------------------------
             else:
-                tabela_risco = risco.resumo(
-                    do_produto, config.Periodo.de_datas(*intervalo, fuso=recorte.fuso), uf)
+                tabela_risco = risco.resumo(do_produto, periodo_painel, uf)
+                # Os nomes de arquivo que o main.py daria a esses dois mapas, para o mesmo período
+                sufixo = f"{periodo_painel.identificador}_interpolado.png"
+                janela_risco = periodo_painel.descrever_janela(*periodo_painel.janela)
                 esquerda, direita = st.columns(2)
                 with esquerda:
                     st.markdown("**Pior nível do período**")
-                    png = mapa_de_risco(risco.pior_nivel(avaliadas), tabela_risco,
-                                        risco_fogo.COLUNA_NIVEL, periodo_escolhido, detalhes, uf)
+                    pior = risco.pior_nivel(avaliadas)
+                    png = mapa_de_risco(pior, tabela_risco, risco_fogo.COLUNA_NIVEL, periodo_escolhido,
+                                        detalhes, uf)
                     if png is not None:
                         st.image(png, width="stretch")
                         st.caption("O maior nível que cada lugar alcançou em alguma hora da janela.")
+                        espec_pior = risco_fogo.espec_nivel_maximo(uf, janela_risco)
+                        botao_do_boletim("pior nível", "risco_periodo", f"{espec_pior.arquivo}_{sufixo}",
+                                         desenho_de_classes(pior, tabela_risco, risco_fogo.COLUNA_NIVEL,
+                                                            espec_pior, uf))
                 with direita:
                     st.markdown("**Horas em risco alto**")
                     exposicao = risco.horas_em_risco_alto(avaliadas)
@@ -1404,6 +1505,10 @@ with aba_risco:
                         st.image(png_horas, width="stretch")
                         st.caption(f"Em quantas horas cada lugar esteve no risco alto — no máximo "
                                    f"{int(exposicao.max())} h em alguma célula do estado.")
+                        espec_horas = risco_fogo.espec_horas_em_risco_alto(uf, janela_risco)
+                        botao_do_boletim("horas em risco alto", "risco_horas",
+                                         f"{espec_horas.arquivo}_{sufixo}",
+                                         desenho_das_horas(exposicao, tabela_risco, espec_horas, uf))
 
                 st.subheader("Por estação")
                 st.caption("Da estação de maior risco para a de menor. As colunas são as mesmas da "

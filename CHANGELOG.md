@@ -9,6 +9,22 @@ Cada versão separa as mudanças em até quatro grupos:
 
 Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
+## [0.2.3] — em andamento
+
+Ainda não está na `main`: o que entra aqui chega com o próximo `git pull` depois do merge.
+
+### Atenção ao atualizar
+
+- **O painel pede o Streamlit 1.52 ou mais novo.** Quem roda o painel na própria máquina atualiza com `pip install -r app/requirements.txt`. A linha de comando não muda.
+
+### Novo
+
+- **Painel: botão "Baixar PNG do boletim"** em cada mapa das abas Mapas Boletim, Chuva e Risco de Fogo, a pedido da equipe. O mapa sai na moldura do relatório, como o `main.py` grava: título, subtítulo com a janela e o fuso, crédito INMET/SEMADESC, logos do CEMTEC e da SEMADESC, ranking das cinco estações e barra de cores, em 300 dpi.
+  - **As cores e a escala são as da tela**, e não as do `main.py`: o que se baixa é o que se vê.
+  - Os mapas de risco saem com os títulos e os nomes de arquivo do `risco_fogo`. O mapa horário traz o nível e as condições de cada estação, como o do produto, mesmo com a caixa de detalhes desligada na tela.
+  - O botão "Baixar PNG" de antes continua, com o desenho da tela.
+- `CHANGELOG.md`, e as versões viram tags (`0.1.1` a `0.2.2`): `git describe --tags` diz em que versão a cópia está.
+
 ## [0.2.2] — 01/10/2026
 
 De "só MS" para "qualquer estado com estação". Entrou na `main` junto com a 0.2.1.
