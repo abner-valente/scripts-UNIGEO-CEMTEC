@@ -408,7 +408,7 @@ Em **17/09/2026** a equipe confirmou duas aproximações do método: avaliar a s
 
 ## Requisitos
 
-- Python **3.10 ou superior**
+- Python **3.14 ou superior** — a versão que a equipe usa e a única que a CI testa
 - Token de acesso à API do INMET
 - Conexão com a internet
 
@@ -543,7 +543,7 @@ pytest
 
 Rode os testes antes de cada commit: eles conferem as janelas de tempo, os cálculos, o acesso à API e a execução completa (Excel e mapas) de cada produto.
 
-Os testes também rodam automaticamente no GitHub (GitHub Actions, em Linux, com Python 3.10 e 3.14) a cada push e a cada pull request para a `main`. O resultado aparece como ✓ ou ✗ ao lado de cada commit e na aba **Actions** do repositório, onde também é possível rodá-los manualmente.
+Os testes também rodam automaticamente no GitHub (GitHub Actions, em Linux, com Python 3.14) a cada push e a cada pull request para a `main`. O resultado aparece como ✓ ou ✗ ao lado de cada commit e na aba **Actions** do repositório, onde também é possível rodá-los manualmente.
 
 ## Explorador (Streamlit)
 
