@@ -32,7 +32,7 @@ from app import qualidade
 from app import risco
 from app import superficie
 from app import variaveis
-from modulos import calculos, config, inmet, mapas
+from modulos import config, inmet, mapas
 from modulos.produtos import risco_fogo
 
 # A API manda o vento em m/s; os produtos trabalham em km/h, e aqui seguimos a mesma unidade
@@ -138,16 +138,9 @@ def carregar_apoio(uf: str) -> pd.DataFrame:
     corta 54 para 39 em MS e 89 para 60 em SC — requisição a menos em toda consulta, sem mudar
     mapa, porque a poda tem folga (ver config.VIZINHOS_NA_PODA).
     """
-    vizinhanca = inmet.estacoes_do_recorte(config.recorte_de(uf))
-    fora = vizinhanca[vizinhanca["SG_ESTADO"] != uf]
-    dele = vizinhanca[vizinhanca["SG_ESTADO"] == uf]
     base = base_cartografica(uf)
-    entram = calculos.apoio_que_entra(
-        fora["VL_LONGITUDE"].values, fora["VL_LATITUDE"].values,
-        dele["VL_LONGITUDE"].values, dele["VL_LATITUDE"].values,
-        base.lon_grade[base.dentro_uf], base.lat_grade[base.dentro_uf],
-        config.VIZINHOS_NA_PODA)
-    return fora[entram].sort_values("Estação").reset_index(drop=True)
+    return inmet.estacoes_de_apoio(config.recorte_de(uf), base.lon_grade[base.dentro_uf],
+                                   base.lat_grade[base.dentro_uf])
 
 
 @st.cache_data(ttl=3600, show_spinner=False)

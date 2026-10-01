@@ -203,13 +203,21 @@ class HoraAvaliada:
         return int(self.estacoes[COLUNA_NIVEL_HORA].max())
 
 
-def analisar_horas(coletados: list, periodo: Periodo, base: BaseCartografica) -> dict:
-    """Avalia cada hora da janela. Horas com poucas estações para interpolar ficam de fora."""
+def analisar_horas(coletados: list, periodo: Periodo, base: BaseCartografica,
+                   apoio: list = ()) -> dict:
+    """Avalia cada hora da janela. Horas com poucas estações para interpolar ficam de fora.
+
+    As vizinhas (`apoio`) entram na **grade** e em nada mais. As estações guardadas na hora são
+    só as do estado — e é por elas que se decide que hora ganha mapa: uma estação do Paraná em
+    risco alto não pode gerar o mapa horário de uma hora em que nenhuma de MS chegou lá.
+    """
     horas = {}
     for hora in horas_da_janela(periodo):
         estacoes = estacoes_na_hora(coletados, hora)
         if len(estacoes) >= config.MIN_ESTACOES_INTERPOLACAO:
-            horas[hora] = HoraAvaliada(grade_da_hora(estacoes, base), estacoes)
+            vizinhas = estacoes_na_hora(apoio, hora) if apoio else estacoes.iloc[0:0]
+            conta = estacoes if vizinhas.empty else pd.concat([estacoes, vizinhas], ignore_index=True)
+            horas[hora] = HoraAvaliada(grade_da_hora(conta, base), estacoes)
     return horas
 
 
@@ -412,7 +420,14 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
     except Exception as erro:
         print(f"⚠️ Não foi possível carregar os shapefiles: {erro}")
         return 1
-    horas = analisar_horas(completas, periodo, base)
+    apoio = []
+    for estacao, dados in inmet.baixar_apoio(recorte, base.lon_grade[base.dentro_uf],
+                                             base.lat_grade[base.dentro_uf], *periodo.janela,
+                                             fuso=periodo.fuso):
+        leituras = leituras_validas(dados, periodo)
+        if not leituras.empty:
+            apoio.append((estacao, leituras))
+    horas = analisar_horas(completas, periodo, base, apoio)
     gerar_mapas(tabela, horas, periodo, base, pasta / "mapas", opcoes.get("hrtodas", False))
 
     if periodo.modo == "periodo":

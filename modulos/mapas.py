@@ -123,16 +123,24 @@ def carregar_base(recorte: config.Recorte = config.RECORTE) -> BaseCartografica:
 
 
 def gerar_mapas(tabelas: dict[str, pd.DataFrame], especificacoes: list[EspecMapa], pasta: Path,
-                identificador: str, recorte: config.Recorte = config.RECORTE) -> None:
-    """Gera, na pasta indicada, os mapas descritos pelas especificações (identificador vai no nome dos arquivos)."""
+                identificador: str, recorte: config.Recorte = config.RECORTE,
+                base: BaseCartografica | None = None,
+                apoio: dict[str, pd.DataFrame] | None = None) -> None:
+    """Gera, na pasta indicada, os mapas descritos pelas especificações (identificador vai no nome dos arquivos).
+
+    `apoio` tem as mesmas tabelas, para as estações vizinhas. Elas entram **só** na superfície
+    interpolada: o mapa pontual, o ranking e a escala de cores continuam sendo do estado.
+    """
     if not tabelas:
         print("⚠️ Nenhum dado foi coletado. Os mapas não serão gerados.")
         return
-    try:
-        base = carregar_base(recorte)
-    except Exception as erro:
-        print(f"⚠️ Não foi possível carregar os shapefiles: {erro}")
-        return
+    if base is None:
+        try:
+            base = carregar_base(recorte)
+        except Exception as erro:
+            print(f"⚠️ Não foi possível carregar os shapefiles: {erro}")
+            return
+    apoio = apoio or {}
 
     pasta.mkdir(parents=True, exist_ok=True)
     for espec in especificacoes:
@@ -140,11 +148,12 @@ def gerar_mapas(tabelas: dict[str, pd.DataFrame], especificacoes: list[EspecMapa
         if dados is None:
             continue
         nome = f"{espec.arquivo}_{identificador}"
+        vizinhas = _preparar_dados(apoio.get(espec.tabela), espec)
         if espec.direcao_vento:
-            mapa_interpolado(dados, espec, base, pasta / f"{nome}.png")
+            mapa_interpolado(dados, espec, base, pasta / f"{nome}.png", apoio=vizinhas)
         else:
             mapa_pontual(dados, espec, base, pasta / f"{nome}.png")
-            mapa_interpolado(dados, espec, base, pasta / f"{nome}_interpolado.png")
+            mapa_interpolado(dados, espec, base, pasta / f"{nome}_interpolado.png", apoio=vizinhas)
 
 
 def mapa_pontual(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartografica,
@@ -194,6 +203,16 @@ def mapa_interpolado(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartogra
                                     base.lon_grade, base.lat_grade, config.IDW_VIZINHOS, config.IDW_POTENCIA)
     valores = gdf[espec.coluna]
     if niveis is None:
+        if entrada is not gdf:
+            # A escala é a da superfície que o estado faria sozinho. Uma vizinha pode levar a borda
+            # além da faixa das estações de cá, e esticar a escala até lá muda a cor do mapa
+            # inteiro sem o miolo ter mudado: em MS, em 29/09/2026, uma estação do lado de lá
+            # levou a mínima de 18,3 para 16,4 °C, e um terço dos pixels mudou de cor. Presa na
+            # faixa do estado, a borda que passar dela fica com a cor da ponta.
+            so_estado = calculos.interpolar_idw(gdf["Longitude"], gdf["Latitude"], valores,
+                                                base.lon_grade, base.lat_grade,
+                                                config.IDW_VIZINHOS, config.IDW_POTENCIA)[base.dentro_uf]
+            grade = np.clip(grade, so_estado.min(), so_estado.max())
         # Sem níveis dados, a escala se estica ao dado — como os relatórios sempre fizeram
         niveis = 20 if valores.max() > valores.min() else np.linspace(*_faixa_de_cores(valores), 11)
     return mapa_de_grade(grade, gdf, espec, base, caminho, niveis, tela)

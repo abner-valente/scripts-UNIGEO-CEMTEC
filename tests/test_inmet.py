@@ -241,3 +241,33 @@ def test_a_coleta_passa_o_fuso_do_estado_para_cada_estacao(monkeypatch):
     inmet.baixar_estacoes(*DIA.janela_busca, uf="SC", fuso=sao_paulo)
 
     assert recebidos == [sao_paulo]
+
+
+# ---------- Estações vizinhas ----------
+
+def test_as_estacoes_de_apoio_sao_so_as_de_fora_do_estado(monkeypatch):
+    """A lista vem da vizinhança inteira, mas as do próprio estado já estão no produto."""
+    import numpy as np
+
+    vizinhanca = pd.DataFrame({
+        "CD_ESTACAO": ["A1", "A2", "P1"], "Estação": ["Um", "Dois", "Vizinha"],
+        "SG_ESTADO": ["MS", "MS", "PR"],
+        "VL_LONGITUDE": [-55.0, -54.0, -54.2], "VL_LATITUDE": [-20.0, -21.0, -24.1],
+    })
+    monkeypatch.setattr(inmet, "estacoes_do_recorte", lambda recorte, margem=None: vizinhanca)
+    lon, lat = np.meshgrid(np.linspace(-56, -53, 10), np.linspace(-24, -19, 10))
+
+    apoio = inmet.estacoes_de_apoio(config.RECORTE, lon.ravel(), lat.ravel())
+
+    assert apoio["Estação"].tolist() == ["Vizinha"]
+
+
+def test_sem_a_lista_das_vizinhas_o_produto_segue_so_com_o_estado(monkeypatch, capsys):
+    """As vizinhas melhoram a borda; um INMET instável não pode custar o boletim inteiro."""
+    def falhar(*args, **kwargs):
+        raise inmet.ErroINMET("conexão encerrada")
+
+    monkeypatch.setattr(inmet, "estacoes_de_apoio", falhar)
+
+    assert inmet.baixar_apoio(config.RECORTE, [], [], *DIA.janela_busca) == []
+    assert "a borda sai só com as do estado" in capsys.readouterr().out
