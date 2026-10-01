@@ -1,4 +1,4 @@
-# Requer Python >= 3.10
+# Requer Python >= 3.14 (a versão que a equipe usa e a que a CI testa)
 
 # Dados e cálculo
 pandas>=2.0

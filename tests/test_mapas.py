@@ -1,4 +1,5 @@
 """Mapas: base cartográfica (máscara da grade e recorte pelo estado), estações e indicadores."""
+from dataclasses import replace
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -81,3 +82,186 @@ def test_dia_sem_chuva_em_nenhuma_estacao_ainda_gera_os_mapas(monkeypatch, tmp_p
     tabela = ESTACOES.assign(**{"Chuva (mm)": 0.0})
     mapas.gerar_mapas({"Chuva": tabela}, [CHUVA], tmp_path, "teste")
     assert sorted(p.name for p in tmp_path.glob("*.png")) == ["Mapa_Teste_teste.png", "Mapa_Teste_teste_interpolado.png"]
+
+
+def test_mapa_devolve_a_figura_sem_gravar_nada(base):
+    """O explorador desenha na tela: pede a figura e não passa caminho nenhum."""
+    tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
+    gdf = mapas._preparar_dados(tabela, CHUVA)
+
+    figura = mapas.mapa_interpolado(gdf, CHUVA, base)
+
+    assert figura is not None
+    assert len(figura.axes) >= 2  # o mapa e a barra de cores
+
+
+def test_na_tela_o_mapa_sai_sem_titulo_nem_logos(base, monkeypatch, tmp_path):
+    """Numa miniatura, título e logos institucionais só tomariam o lugar do mapa."""
+    monkeypatch.setattr(config, "DPI", 40)
+    tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
+    gdf = mapas._preparar_dados(tabela, CHUVA)
+
+    relatorio = mapas.mapa_interpolado(gdf, CHUVA, base, tmp_path / "relatorio.png")
+    na_tela = mapas.mapa_interpolado(gdf, CHUVA, base, tela=mapas.Tela())
+
+    assert relatorio.axes[0].get_title().startswith(CHUVA.titulo)
+    assert na_tela.axes[0].get_title() == ""
+    assert len(relatorio.axes[0].child_axes) == len(config.LOGOS)  # cada logo é um eixo filho
+    assert na_tela.axes[0].child_axes == []
+    assert (tmp_path / "relatorio.png").exists()  # o relatório continua saindo com tudo
+
+
+def test_na_tela_o_mapa_sai_sem_barra_de_cores_e_sem_valores(base):
+    """A barra vertical e os valores de 62 estações não sobrevivem ao tamanho de uma coluna."""
+    tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
+    gdf = mapas._preparar_dados(tabela, CHUVA)
+
+    relatorio = mapas.mapa_interpolado(gdf, CHUVA, base)
+    na_tela = mapas.mapa_interpolado(gdf, CHUVA, base, tela=mapas.Tela())
+    com_valores = mapas.mapa_interpolado(gdf, CHUVA, base, tela=mapas.Tela(rotulos=True))
+
+    assert len(relatorio.axes) == 2 and len(na_tela.axes) == 1  # o eixo a mais é a barra de cores
+    assert len(na_tela.axes[0].texts) == 0
+    assert len(com_valores.axes[0].texts) == len(ESTACOES)
+    assert len(relatorio.axes[0].texts) > len(ESTACOES)  # os valores mais o quadro do ranking
+
+
+def test_na_tela_nao_sai_a_grade_de_latitude_e_longitude(base):
+    """Numa miniatura a moldura de coordenadas toma a borda inteira do desenho e não se lê."""
+    tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
+    gdf = mapas._preparar_dados(tabela, CHUVA)
+
+    relatorio = mapas.mapa_interpolado(gdf, CHUVA, base)
+    na_tela = mapas.mapa_interpolado(gdf, CHUVA, base, tela=mapas.Tela())
+
+    assert relatorio.axes[0].axison and not na_tela.axes[0].axison
+    assert relatorio.axes[0].get_xlabel() == "Longitude"
+    # o recorte continua o mesmo: some a moldura, não o enquadramento
+    assert na_tela.axes[0].get_xlim() == relatorio.axes[0].get_xlim()
+
+
+def test_na_tela_os_valores_saem_maiores(base):
+    """Encolhido para uma coluna, o corpo do relatório vira borrão."""
+    tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
+    gdf = mapas._preparar_dados(tabela, CHUVA)
+    escala = 1.5
+
+    relatorio = mapas.mapa_interpolado(gdf, CHUVA, base)
+    na_tela = mapas.mapa_interpolado(gdf, CHUVA, base, tela=mapas.Tela(rotulos=True, escala_rotulos=escala))
+
+    assert na_tela.axes[0].texts[0].get_fontsize() == pytest.approx(
+        relatorio.axes[0].texts[0].get_fontsize() * escala)
+
+
+def test_na_tela_o_valor_vai_contornado_e_sem_caixa(base):
+    """Num mapa do tamanho de uma coluna, o que cobre a estação vizinha é a caixa, não a letra."""
+    tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
+    gdf = mapas._preparar_dados(tabela, CHUVA)
+
+    relatorio = mapas.mapa_interpolado(gdf, CHUVA, base)
+    na_tela = mapas.mapa_interpolado(gdf, CHUVA, base, tela=mapas.Tela(rotulos=True))
+
+    assert na_tela.axes[0].texts[0].get_bbox_patch() is None
+    assert na_tela.axes[0].texts[0].get_path_effects()  # o contorno é o que segura a leitura
+    assert relatorio.axes[0].texts[0].get_bbox_patch() is not None  # na folha inteira, cabe
+
+
+def test_a_base_segue_o_enquadramento_do_recorte(base):
+    """O recorte anda junto com a chamada: quem pedir outro enquadramento recebe outra grade."""
+    apertado = replace(config.RECORTE, limites=(-56.0, -53.0, -22.0, -19.0))
+
+    outra = mapas.carregar_base(apertado)
+
+    assert outra.recorte is apertado
+    assert base.recorte is config.RECORTE
+    assert (outra.lon_grade.min(), outra.lon_grade.max()) == (-56.0, -53.0)
+    oeste, leste, _, _ = config.RECORTE.limites
+    assert (base.lon_grade.min(), base.lon_grade.max()) == (oeste, leste)
+
+
+def test_o_apoio_entra_na_interpolacao(base, monkeypatch):
+    """Se alguém tirar o apoio da conta, o desenho continua igual e ninguém percebe — daí o espião."""
+    tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
+    gdf = mapas._preparar_dados(tabela, CHUVA)
+    vizinha = mapas._preparar_dados(
+        pd.DataFrame({"Estação": ["Fora"], "Latitude": [-19.0], "Longitude": [-51.0],
+                      "Chuva (mm)": [200.0]}), CHUVA)
+    quantos = []
+    original = mapas.calculos.interpolar_idw
+    monkeypatch.setattr(mapas.calculos, "interpolar_idw",
+                        lambda lons, *resto: quantos.append(len(lons)) or original(lons, *resto))
+
+    mapas.mapa_interpolado(gdf, CHUVA, base)
+    mapas.mapa_interpolado(gdf, CHUVA, base, apoio=vizinha)
+
+    # Com apoio são duas contas: a superfície, com a vizinha, e a do estado sozinho, que dá a faixa
+    # em que a escala de cores fica presa (ver test_a_vizinha_nao_estica_a_escala_de_cores).
+    assert quantos == [len(gdf), len(gdf) + 1, len(gdf)]
+
+
+def test_o_apoio_muda_a_superficie_e_nao_o_desenho(base):
+    """As vizinhas seguram a borda: entram no IDW, mas não viram ponto, rótulo nem ranking."""
+    tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
+    gdf = mapas._preparar_dados(tabela, CHUVA)
+    vizinha = mapas._preparar_dados(
+        pd.DataFrame({"Estação": ["Fora"], "Latitude": [-19.0], "Longitude": [-51.0],
+                      "Chuva (mm)": [200.0]}), CHUVA)
+
+    sozinho = mapas.mapa_interpolado(gdf, CHUVA, base)
+    com_apoio = mapas.mapa_interpolado(gdf, CHUVA, base, apoio=vizinha)
+
+    desenhados = [colecao.get_offsets().shape[0] for colecao in com_apoio.axes[0].collections
+                  if colecao.get_offsets() is not None and len(colecao.get_offsets())]
+    assert max(desenhados) == len(gdf)          # nenhum ponto a mais no mapa
+    superficie_antes = sozinho.axes[0].collections[0].get_array()
+    superficie_depois = com_apoio.axes[0].collections[0].get_array()
+    assert (superficie_antes is None) == (superficie_depois is None)
+    assert len(com_apoio.axes[0].texts) == len(sozinho.axes[0].texts)   # nem rótulo, nem ranking
+
+
+def test_poucas_estacoes_nao_viram_superficie(base):
+    """Com dois pontos a interpolação inventaria o estado inteiro: melhor não desenhar."""
+    tabela = ESTACOES.head(2).assign(**{"Chuva (mm)": [1.0, 2.0]})
+    gdf = mapas._preparar_dados(tabela, CHUVA)
+    assert mapas.mapa_interpolado(gdf, CHUVA, base, tela=mapas.Tela()) is None
+
+
+
+def test_as_vizinhas_entram_so_no_mapa_interpolado(monkeypatch, tmp_path, base):
+    """O mapa pontual é o do estado; as vizinhas só seguram a borda da superfície."""
+    recebidos = {}
+    monkeypatch.setattr(mapas, "mapa_pontual",
+                        lambda dados, espec, base, caminho: recebidos.setdefault("pontual", len(dados)))
+    monkeypatch.setattr(mapas, "mapa_interpolado",
+                        lambda dados, espec, base, caminho, apoio=None:
+                        recebidos.setdefault("interpolado", (len(dados), 0 if apoio is None else len(apoio))))
+    tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
+    vizinhas = pd.DataFrame({"Estação": ["V1", "V2"], "Latitude": [-24.2, -21.8],
+                             "Longitude": [-54.2, -52.1], "Chuva (mm)": [4.0, 7.0]})
+
+    mapas.gerar_mapas({"Chuva": tabela}, [CHUVA], tmp_path, "teste", base=base,
+                      apoio={"Chuva": vizinhas})
+
+    assert recebidos["pontual"] == len(tabela)                 # o pontual não vê as vizinhas
+    assert recebidos["interpolado"] == (len(tabela), 2)        # a superfície vê as duas
+
+
+def test_a_vizinha_nao_estica_a_escala_de_cores(monkeypatch, base):
+    """Uma vizinha fora da faixa do estado não pode mudar a cor do miolo.
+
+    Sem níveis dados, a escala se estica à superfície. Sem a trava, a borda puxada pela vizinha
+    levava a régua junto: em MS, em 29/09/2026, a mínima foi de 18,3 para 16,4 °C por causa de uma
+    estação do lado de lá, e um terço dos pixels do mapa mudou de cor sem o miolo ter mudado.
+    """
+    vistas = []
+    monkeypatch.setattr(mapas, "mapa_de_grade", lambda grade, *args, **kwargs: vistas.append(grade))
+    gdf = mapas._preparar_dados(ESTACOES.assign(**{"Chuva (mm)": [10.0, 12.0, 14.0, 16.0, 18.0]}), CHUVA)
+    seca = mapas._preparar_dados(pd.DataFrame({"Estação": ["V"], "Latitude": [-24.3], "Longitude": [-54.5],
+                                               "Chuva (mm)": [1.0]}), CHUVA)
+
+    mapas.mapa_interpolado(gdf, CHUVA, base)
+    mapas.mapa_interpolado(gdf, CHUVA, base, apoio=seca)
+
+    sem, com = (grade[base.dentro_uf] for grade in vistas)
+    assert not np.array_equal(sem, com)                     # a vizinha mexeu na superfície
+    assert com.min() >= sem.min() and com.max() <= sem.max()   # mas dentro da faixa do estado

@@ -154,5 +154,18 @@ def test_falha_ao_listar_as_estacoes(api_simulada, monkeypatch):
 
 def test_nenhuma_estacao_com_dados_interrompe_o_relatorio(api_simulada, monkeypatch):
     """Sem nenhuma estação (token errado, INMET instável) não faz sentido gerar planilha e mapas vazios."""
-    monkeypatch.setattr(inmet, "baixar_estacoes", lambda inicio, fim, uf=config.UF: [])
+    monkeypatch.setattr(inmet, "baixar_estacoes", lambda inicio, fim, uf=config.UF, fuso=None: [])
     assert relatorio_inmet.executar(DIA) == 1
+
+
+
+def test_as_vizinhas_sao_baixadas_mas_nao_entram_na_planilha(api_simulada, capsys):
+    """Elas seguram a borda do mapa e não aparecem em aba nenhuma, nem no ranking."""
+    assert relatorio_inmet.executar(DIA) == 0
+
+    saida = capsys.readouterr().out
+    assert "Lendo 2 estações vizinhas para a borda" in saida
+    pasta = DIA.pasta_saida(relatorio_inmet.NOME)
+    abas = pd.read_excel(pasta / f"Relatorio_{config.UF}_{DIA.identificador}.xlsx", sheet_name=None)
+    nas_abas = {nome for aba in abas.values() for nome in aba["Estação"]}
+    assert not nas_abas & api_simulada.vizinhas

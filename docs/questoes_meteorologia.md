@@ -2,7 +2,7 @@
 
 Durante a reestruturação dos scripts (versão 0.1.1), alguns pontos ficaram em aberto porque **mudam os resultados** e dependem de uma decisão meteorológica. Para cada um estão a situação atual, o problema e as opções. As respostas podem ser anotadas no campo **Decisão**.
 
-> **Situação em 17/09/2026:** as questões 1 a 5 (versão 0.1.1) foram respondidas e já estão aplicadas no código. Nas questões 6 a 8, do produto `risco_fogo`, a equipe confirmou as aproximações de método (questões 6 e 7); continuam marcados com ⚠️ apenas os limiares e o critério de gerar mapa horário, na questão 8.
+> **Situação em 28/09/2026:** todas as questões foram respondidas. As de 1 a 5 (versão 0.1.1) já estavam aplicadas; as de 6 a 8, do produto `risco_fogo`, tiveram o método confirmado em 17/09/2026 e os **limiares 30-30-30 confirmados em 28/09/2026**, junto com a entrada do risco de fogo no painel.
 
 Nas descrições abaixo, os horários estão em UTC (horário de MS = UTC−4).
 
@@ -141,4 +141,31 @@ As decisões foram tomadas com o programador em 16/09/2026. Os pontos marcados c
 
 **Decisão (21/09/2026):** o período ganha três gráficos, que o dia e o tempo real não têm, porque só faz sentido comparar dias entre si: as **horas de cada estação em cada nível**, um **calendário de estação × dia** (o pior nível de cada dia) e, para **cada dia**, as horas em que cada estação atendeu cada condição. Na mesma revisão foi corrigida a contagem de dias: a leitura que fecha as 24 h leva o carimbo 00:00 do dia seguinte, e por isso uma consulta de sete dias produzia oito dias, o último com uma hora só.
 
-⚠️ **A confirmar:** os limiares (≥ 30 °C, ≤ 30 %, ≥ 30 km/h) e o critério de gerar mapa horário só a partir do risco alto.
+✅ **Confirmado pela equipe (28/09/2026):** os limiares são ≥ 30 °C, ≤ 30 % e ≥ 30 km/h.
+
+Sobre o critério de gerar mapa horário só a partir do risco alto: no **painel** ele deixou de decidir quais mapas existem e passou a ser uma caixa que faz o deslizante **parar só nessas horas** — na tela, quem escolhe a hora é quem olha, e o mapa de qualquer hora está a um passo de distância. No produto (`main.py`), onde cada mapa vira um arquivo em disco, o critério continua valendo como filtro, com `--hrtodas` para gerar todas.
+
+---
+
+# Painel
+
+## 9. A conta da cascata de chuva do estado
+
+O painel ganhou uma cascata que não depende das estações escolhidas na barra lateral: uma barra por passo para **o estado inteiro**. "Quanto choveu no estado" tem mais de uma conta, e elas não dão o mesmo número. Medido no MT, 23–29/09/2026, 51 estações:
+
+| conta | 25/09 | 29/09 | semana |
+|---|---|---|---|
+| soma das estações | 103,0 | 532,6 | **742,8** |
+| média das estações | 2,02 | 10,44 | 14,56 |
+| média da área (IDW sobre a grade, recortada no contorno) | 3,09 | 8,30 | 14,12 |
+| estação que mais choveu | 33,6 | 74,8 | 74,8 (numa estação só) |
+
+**Decisão do programador (30/09/2026): a soma das estações.**
+
+O que ficou registrado junto com ela, porque não é óbvio:
+
+- **A soma não descreve lugar nenhum.** São 742,8 mm numa semana em que a estação mais molhada recebeu 74,8. É leitura de **ritmo** — quando choveu, e quanto do total veio de cada dia —, não de quantidade caída. A legenda na tela diz isso, e há teste guardando a conta (`test_a_cascata_do_estado_nao_e_a_media_nem_a_maxima`).
+- **As duas médias divergem no dia, não no total:** 3% de diferença na semana, mas 53% em 25/09 e 20% em 29/09. A média simples pesa demais onde há mais estações — no MT, o centro-sul agrícola.
+- **A máxima não pode ser empilhada.** Somar o recorde de cada dia daria 170,6 mm na semana, um valor que não aconteceu em lugar nenhum, porque a estação campeã muda de um dia para o outro.
+
+✅ **Confirmado (01/10/2026): a cascata do estado é a soma das estações.** Fica registrado o que pesou na escolha: o número é leitura de ritmo, não de quantidade caída num lugar. Se um dia o boletim precisar de uma chuva média do estado, a conta é a **média da área** — a mesma superfície do mapa de chuva — e trocar é mudar uma função (`app/chuva.py`, `cascata_do_estado`).

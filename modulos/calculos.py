@@ -6,6 +6,8 @@ import pandas as pd
 from pyproj import Transformer
 from scipy.spatial import cKDTree
 
+from . import config
+
 
 def recortar(dados: pd.DataFrame, inicio: datetime, fim: datetime) -> pd.DataFrame:
     """Leituras da janela (início, fim].
@@ -28,11 +30,17 @@ def indice_extremo(dados: pd.DataFrame, coluna: str, minimo: bool):
     return dados[coluna].idxmin() if minimo else dados[coluna].idxmax()
 
 
-def data_hora(dados: pd.DataFrame, indice) -> dict:
-    """Data e hora de um registro, em UTC e no horário de MS, prontas para a planilha."""
+def data_hora(dados: pd.DataFrame, indice, uf: str = config.UF) -> dict:
+    """Data e hora de um registro, em UTC e no horário do estado, prontas para a planilha.
+
+    A sigla entra no nome da coluna porque é ela que diz de que horário se fala. Uma planilha
+    de SC com a coluna "Data/Hora (MS)" faria quem lê entender horário de Campo Grande onde
+    está o de Florianópolis — o valor sempre esteve certo, o rótulo é que não acompanhava.
+    Em MS o nome não muda, e as planilhas já publicadas continuam iguais.
+    """
     return {
         "Data/Hora (UTC)": dados.at[indice, "dt_utc"].strftime("%d/%m/%Y %H:%M"),
-        "Data/Hora (MS)": dados.at[indice, "dt_local"].strftime("%d/%m/%Y %H:%M"),
+        f"Data/Hora ({uf})": dados.at[indice, "dt_local"].strftime("%d/%m/%Y %H:%M"),
     }
 
 
@@ -57,6 +65,40 @@ def interpolar_idw(lons, lats, valores, lon_grade, lat_grade, vizinhos: int = 8,
     pesos = 1.0 / np.maximum(distancias, 1e-10) ** potencia
     interpolados = np.sum(np.asarray(valores)[indices] * pesos, axis=1) / np.sum(pesos, axis=1)
     return interpolados.reshape(np.shape(lon_grade))
+
+
+def apoio_que_entra(lons_apoio, lats_apoio, lons_proprias, lats_proprias,
+                    lon_grade, lat_grade, vizinhos: int) -> np.ndarray:
+    """Quais estações de apoio chegam às `vizinhos` mais próximas de alguma célula da grade.
+
+    O IDW olha só as 8 mais próximas de cada célula: uma estação de fora do estado pode estar
+    dentro da margem do recorte e ainda assim não ser vizinha de célula nenhuma. Baixar os dados
+    dela é requisição jogada fora, e isso se decide **antes de baixar qualquer coisa** — só
+    depende de coordenadas, e a lista de estações é uma consulta só.
+
+    `vizinhos` é maior que os 8 que o IDW usa, de propósito. Numa hora em que faltam estações, as
+    8 mais próximas de uma célula passam a ser outras, e uma que nunca entrava passa a entrar. A
+    folga é o que faz esta poda cortar requisição sem mudar mapa nenhum.
+
+    A grade deve trazer só as células que viram desenho: as de fora do contorno são calculadas e
+    descartadas, e deixá-las aqui manteria estações que ninguém vê.
+
+    Devolve uma máscara booleana sobre as estações de apoio, na ordem em que vieram.
+    """
+    apoio = np.column_stack([np.ravel(lons_apoio), np.ravel(lats_apoio)])
+    if len(apoio) == 0:
+        return np.zeros(0, dtype=bool)
+
+    centro = float(np.mean(lon_grade)), float(np.mean(lat_grade))
+    proprias = _em_km(lons_proprias, lats_proprias, *centro)
+    todas = np.vstack([proprias, _em_km(apoio[:, 0], apoio[:, 1], *centro)])
+    _, indices = cKDTree(todas).query(_em_km(lon_grade, lat_grade, *centro),
+                                      k=min(vizinhos, len(todas)))
+
+    alcancadas = np.unique(indices)
+    mascara = np.zeros(len(apoio), dtype=bool)
+    mascara[alcancadas[alcancadas >= len(proprias)] - len(proprias)] = True
+    return mascara
 
 
 def _em_km(lons, lats, lon_centro: float, lat_centro: float) -> np.ndarray:

@@ -1,4 +1,5 @@
 """Acesso à API do INMET, com as respostas HTTP simuladas."""
+from dataclasses import replace
 from datetime import date, datetime
 
 import pandas as pd
@@ -25,6 +26,15 @@ class RespostaFalsa:
             raise requests.HTTPError(f"HTTP {self.status_code}")
 
 
+def trocar_get(monkeypatch, resposta) -> None:
+    """Troca a consulta HTTP pelos dados do teste.
+
+    O inmet passou a falar por uma sessão reaproveitada (uma conexão por thread, em vez de uma
+    por estação), então é o `get` dela que os testes precisam interceptar.
+    """
+    monkeypatch.setattr(requests.Session, "get", lambda self, url, timeout: resposta(url, timeout))
+
+
 @pytest.mark.parametrize("original, formatado", [
     ("CAMPO GRANDE", "Campo Grande"),
     ("  SAO GABRIEL DO OESTE ", "Sao Gabriel do Oeste"),
@@ -34,12 +44,63 @@ def test_formatar_nome_estacao(original, formatado):
     assert inmet.formatar_nome_estacao(original) == formatado
 
 
+def estacao(codigo, nome, uf, lat, lon, situacao="Operante") -> dict:
+    return {"CD_ESTACAO": codigo, "DC_NOME": nome, "SG_ESTADO": uf, "CD_SITUACAO": situacao,
+            "VL_LATITUDE": str(lat), "VL_LONGITUDE": str(lon)}
+
+
+def test_estacoes_em_pane_ficam_de_fora(monkeypatch):
+    """Pedir dados de uma estação em pane é consulta que sempre volta vazia. Em MS são 3 das 62."""
+    trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa([
+        estacao("A702", "CAMPO GRANDE", "MS", -20.4, -54.7),
+        estacao("A999", "ESTACAO MORTA", "MS", -21.0, -55.0, situacao="Pane"),
+    ]))
+
+    assert inmet.listar_estacoes("MS")["CD_ESTACAO"].tolist() == ["A702"]
+
+
+def test_o_recorte_traz_as_vizinhas_de_outros_estados(monkeypatch):
+    """A estação do outro lado da divisa descreve a borda tão bem quanto a de cá."""
+    trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa([
+        estacao("A702", "CAMPO GRANDE", "MS", -20.4, -54.7),
+        estacao("A001", "VIZINHA DE GOIAS", "GO", -18.0, -52.0),      # logo acima do enquadramento
+        estacao("A002", "LONGE DEMAIS", "AM", -3.0, -60.0),
+    ]))
+
+    recorte = inmet.estacoes_do_recorte()
+
+    assert sorted(recorte["CD_ESTACAO"]) == ["A001", "A702"]
+    assert set(recorte["SG_ESTADO"]) == {"MS", "GO"}      # a coluna separa produto de apoio
+
+
+def test_o_recorte_respeita_a_margem(monkeypatch):
+    """Sem margem, os 8 vizinhos de uma célula da divisa ficam todos para dentro."""
+    logo_fora = {"CD_ESTACAO": "A003", "DC_NOME": "PERTO", "SG_ESTADO": "PR", "CD_SITUACAO": "Operante",
+                 "VL_LATITUDE": "-25.5", "VL_LONGITUDE": "-53.0"}   # 1° abaixo do enquadramento
+    trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa([logo_fora]))
+
+    assert len(inmet.estacoes_do_recorte()) == 1                     # com a margem de 1,5°, entra
+    assert inmet.estacoes_do_recorte(margem=0.0).empty               # sem margem, fica de fora
+
+
+def test_o_recorte_recebido_escolhe_quem_entra(monkeypatch):
+    """O enquadramento vem do recorte da chamada, não de uma constante do módulo."""
+    trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa([
+        estacao("A702", "CAMPO GRANDE", "MS", -20.4, -54.7),
+        estacao("A800", "SINOP", "MT", -11.9, -55.5),     # 5° acima do enquadramento de MS
+    ]))
+    norte_adentro = replace(config.RECORTE, limites=(-58.5, -50.5, -24.5, -11.0))
+
+    assert len(inmet.estacoes_do_recorte()) == 1                       # só MS entra no de MS
+    assert len(inmet.estacoes_do_recorte(norte_adentro)) == 2
+
+
 def test_listar_estacoes_filtra_a_uf_e_converte_coordenadas(monkeypatch):
     lista = [
         {"CD_ESTACAO": "A702", "DC_NOME": "CAMPO GRANDE", "SG_ESTADO": "MS", "VL_LATITUDE": "-20.44", "VL_LONGITUDE": "-54.72"},
         {"CD_ESTACAO": "A901", "DC_NOME": "CUIABA", "SG_ESTADO": "MT", "VL_LATITUDE": "-15.6", "VL_LONGITUDE": "-56.1"},
     ]
-    monkeypatch.setattr(inmet.requests, "get", lambda url, timeout: RespostaFalsa(lista))
+    trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa(lista))
     estacoes = inmet.listar_estacoes("MS")
     assert estacoes["CD_ESTACAO"].tolist() == ["A702"]
     assert estacoes["Estação"].tolist() == ["Campo Grande"]
@@ -47,17 +108,17 @@ def test_listar_estacoes_filtra_a_uf_e_converte_coordenadas(monkeypatch):
 
 
 def test_listar_estacoes_com_falha_levanta_erro(monkeypatch):
-    monkeypatch.setattr(inmet.requests, "get", lambda url, timeout: RespostaFalsa(status_code=503))
+    trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa(status_code=503))
     with pytest.raises(inmet.ErroINMET):
         inmet.listar_estacoes()
 
 
 def test_baixar_dados_converte_valores_e_horarios(monkeypatch):
     registros = [
-        {"DT_MEDICAO": "2026-07-30", "HR_MEDICAO": "0000", "TEM_MIN": "18,5", "CHUVA": "0.2"},
-        {"DT_MEDICAO": "2026-07-30", "HR_MEDICAO": "1300", "TEM_MIN": None, "CHUVA": "0"},
+        {"DT_MEDICAO": "2026-07-30", "HR_MEDICAO": "0000", "TEM_MIN": "18,5", "CHUVA": "0.2", "RAD_GLO": "-3,5"},
+        {"DT_MEDICAO": "2026-07-30", "HR_MEDICAO": "1300", "TEM_MIN": None, "CHUVA": "0", "RAD_GLO": "1520"},
     ]
-    monkeypatch.setattr(inmet.requests, "get", lambda url, timeout: RespostaFalsa(registros))
+    trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa(registros))
     dados = inmet.baixar_dados_estacao("A702", *DIA.janela_busca)
 
     assert dados["dt_utc"].tolist() == [pd.Timestamp("2026-07-30 00:00", tz="UTC"), pd.Timestamp("2026-07-30 13:00", tz="UTC")]
@@ -65,6 +126,7 @@ def test_baixar_dados_converte_valores_e_horarios(monkeypatch):
     assert dados["TEM_MIN"].iloc[0] == 18.5
     assert pd.isna(dados["TEM_MIN"].iloc[1])
     assert dados["CHUVA"].tolist() == [0.2, 0.0]
+    assert dados["RAD_GLO"].tolist() == [-3.5, 1520.0]  # toda coluna que não é texto vira número
 
 
 @pytest.mark.parametrize("periodo, trecho_da_url", [
@@ -80,7 +142,7 @@ def test_baixar_dados_pede_apenas_os_dias_necessarios(monkeypatch, periodo, trec
         urls.append(url)
         return RespostaFalsa([])
 
-    monkeypatch.setattr(inmet.requests, "get", get_falso)
+    trocar_get(monkeypatch, get_falso)
     inmet.baixar_dados_estacao("A702", *periodo.janela_busca)
     assert trecho_da_url in urls[0]
 
@@ -96,7 +158,7 @@ def test_falhas_da_api_viram_erro_sem_expor_o_token(monkeypatch, capsys, falha):
             return RespostaFalsa(status_code=500, text=f"erro interno em {url}")
         return RespostaFalsa(ValueError(f"resposta não é JSON: {url}"))
 
-    monkeypatch.setattr(inmet.requests, "get", get_falso)
+    trocar_get(monkeypatch, get_falso)
     with pytest.raises(inmet.ErroINMET) as erro:
         inmet.baixar_dados_estacao("A702", *DIA.janela_busca)
     assert "TOKEN-SECRETO" not in str(erro.value)
@@ -104,7 +166,7 @@ def test_falhas_da_api_viram_erro_sem_expor_o_token(monkeypatch, capsys, falha):
 
 
 def test_estacao_sem_leituras_no_periodo_retorna_none(monkeypatch):
-    monkeypatch.setattr(inmet.requests, "get", lambda url, timeout: RespostaFalsa([]))
+    trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa([]))
     assert inmet.baixar_dados_estacao("A702", *DIA.janela_busca) is None
 
 
@@ -118,7 +180,7 @@ def test_falha_passageira_e_repetida(monkeypatch):
             raise requests.ConnectionError("Remote end closed connection without response")
         return RespostaFalsa([{"DT_MEDICAO": "2026-07-30", "HR_MEDICAO": "1300", "CHUVA": "1,0"}])
 
-    monkeypatch.setattr(inmet.requests, "get", get_falso)
+    trocar_get(monkeypatch, get_falso)
     dados = inmet.baixar_dados_estacao("A702", *DIA.janela_busca)
 
     assert len(tentativas) == config.TENTATIVAS
@@ -133,7 +195,7 @@ def test_erro_de_token_nao_e_repetido(monkeypatch):
         tentativas.append(url)
         return RespostaFalsa(status_code=401, text="token inválido")
 
-    monkeypatch.setattr(inmet.requests, "get", get_falso)
+    trocar_get(monkeypatch, get_falso)
     with pytest.raises(inmet.ErroINMET):
         inmet.baixar_dados_estacao("A702", *DIA.janela_busca)
     assert len(tentativas) == 1
@@ -142,7 +204,7 @@ def test_erro_de_token_nao_e_repetido(monkeypatch):
 def test_resumo_da_coleta_separa_sem_dados_de_falha(monkeypatch, capsys):
     estacoes = pd.DataFrame({"CD_ESTACAO": ["A1", "A2", "A3"], "Estação": ["Um", "Dois", "Tres"]})
 
-    def baixar(codigo, inicio, fim):
+    def baixar(codigo, inicio, fim, fuso=None):
         if codigo == "A2":
             return None
         if codigo == "A3":
@@ -159,3 +221,53 @@ def test_resumo_da_coleta_separa_sem_dados_de_falha(monkeypatch, capsys):
     assert "Estações com dados: 1 de 3" in saida
     assert "Sem leituras no período (1): Dois" in saida
     assert "Falha na consulta (1): Tres" in saida
+
+
+def test_a_coleta_passa_o_fuso_do_estado_para_cada_estacao(monkeypatch):
+    """É dele que sai a hora local da planilha: sem repassá-lo, toda UF ficava no horário de MS.
+
+    O defeito passou despercebido porque em MS e em MT o fuso é o mesmo (UTC−4). Em SC, que é
+    UTC−3, a "Data/Hora (SC)" da máxima saía uma hora antes da hora em que ela aconteceu.
+    """
+    from zoneinfo import ZoneInfo
+
+    recebidos = []
+    estacoes = pd.DataFrame({"CD_ESTACAO": ["A1"], "Estação": ["Um"]})
+    monkeypatch.setattr(inmet, "listar_estacoes", lambda uf=config.UF: estacoes)
+    monkeypatch.setattr(inmet, "baixar_dados_estacao",
+                        lambda codigo, inicio, fim, fuso=None: recebidos.append(fuso))
+
+    sao_paulo = ZoneInfo("America/Sao_Paulo")
+    inmet.baixar_estacoes(*DIA.janela_busca, uf="SC", fuso=sao_paulo)
+
+    assert recebidos == [sao_paulo]
+
+
+# ---------- Estações vizinhas ----------
+
+def test_as_estacoes_de_apoio_sao_so_as_de_fora_do_estado(monkeypatch):
+    """A lista vem da vizinhança inteira, mas as do próprio estado já estão no produto."""
+    import numpy as np
+
+    vizinhanca = pd.DataFrame({
+        "CD_ESTACAO": ["A1", "A2", "P1"], "Estação": ["Um", "Dois", "Vizinha"],
+        "SG_ESTADO": ["MS", "MS", "PR"],
+        "VL_LONGITUDE": [-55.0, -54.0, -54.2], "VL_LATITUDE": [-20.0, -21.0, -24.1],
+    })
+    monkeypatch.setattr(inmet, "estacoes_do_recorte", lambda recorte, margem=None: vizinhanca)
+    lon, lat = np.meshgrid(np.linspace(-56, -53, 10), np.linspace(-24, -19, 10))
+
+    apoio = inmet.estacoes_de_apoio(config.RECORTE, lon.ravel(), lat.ravel())
+
+    assert apoio["Estação"].tolist() == ["Vizinha"]
+
+
+def test_sem_a_lista_das_vizinhas_o_produto_segue_so_com_o_estado(monkeypatch, capsys):
+    """As vizinhas melhoram a borda; um INMET instável não pode custar o boletim inteiro."""
+    def falhar(*args, **kwargs):
+        raise inmet.ErroINMET("conexão encerrada")
+
+    monkeypatch.setattr(inmet, "estacoes_de_apoio", falhar)
+
+    assert inmet.baixar_apoio(config.RECORTE, [], [], *DIA.janela_busca) == []
+    assert "a borda sai só com as do estado" in capsys.readouterr().out

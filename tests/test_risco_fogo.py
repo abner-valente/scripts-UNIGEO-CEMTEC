@@ -1,4 +1,5 @@
 """Produto risco_fogo: a regra 30-30-30 hora a hora, as grades horárias e a execução completa."""
+from types import SimpleNamespace
 from datetime import date, datetime
 
 import numpy as np
@@ -111,6 +112,16 @@ def test_resumo_conta_as_horas_de_cada_nivel(serie):
     assert linha["Primeiro Horário em Risco Alto (MS)"] == "16/09/2026 14:00"  # 18 UTC = 14 h em MS
 
 
+def test_as_colunas_de_horario_do_risco_levam_a_sigla_do_estado(serie):
+    """São duas colunas de horário local na planilha do risco; as duas diziam (MS) em toda UF."""
+    dados = serie("2026-09-16", "2026-09-17 05:00", TEM_MAX=QUENTE, UMD_MIN=SECO, VEN_RAJ=VENTOSO)
+    linha = risco_fogo.resumir_estacao(risco_fogo.leituras_validas(dados, DIA), ESTACAO, DIA, "SC")
+
+    assert "Primeiro Horário em Risco Médio (SC)" in linha
+    assert "Primeiro Horário em Risco Alto (SC)" in linha
+    assert not [coluna for coluna in linha if "(MS)" in coluna]
+
+
 def test_estacao_sem_risco_alto_fica_sem_horario(serie):
     dados = serie("2026-09-16", "2026-09-17 05:00", TEM_MAX=FRIO, UMD_MIN=UMIDO, VEN_RAJ=CALMO)
     linha = risco_fogo.resumir_estacao(risco_fogo.leituras_validas(dados, DIA), ESTACAO, DIA)
@@ -178,8 +189,10 @@ def test_mapa_horario_recebe_as_estacoes_da_hora(monkeypatch, tmp_path):
     estacoes = pd.DataFrame({"Estação": ["A", "B"], "Latitude": [-20.0, -21.0], "Longitude": [-55.0, -54.0],
                              "Nível na Hora": [0, 2]})
     horas = {utc("2026-09-16 15:00"): risco_fogo.HoraAvaliada(np.zeros((2, 2)), estacoes)}
+    # A base entra só pelo recorte: é dela que saem a sigla do título e o fuso do subtítulo
+    base = SimpleNamespace(recorte=config.RECORTE)
 
-    risco_fogo._mapas_horarios(horas, base=None, pasta=tmp_path, todas_as_horas=True)
+    risco_fogo._mapas_horarios(horas, base=base, pasta=tmp_path, todas_as_horas=True)
 
     assert desenhados == [[0, 2]]
 
@@ -255,3 +268,34 @@ def test_execucao_completa(api_simulada, tmp_path):
     ]
     assert len(list((pasta / "mapas" / "horas").glob("*.png"))) == 3  # uma por hora, com --hrtodas
     assert not list(pasta.glob("Grafico_*.png"))  # gráficos são só do período
+
+
+
+# ---------- Estações vizinhas ----------
+
+def test_as_vizinhas_entram_na_grade_e_nao_decidem_a_hora(monkeypatch):
+    """Uma vizinha em risco alto mexe na borda, mas não gera mapa horário para o estado.
+
+    O mapa horário sai quando uma estação **do estado** chega ao risco alto. Se a do Paraná
+    contasse, MS ganharia o mapa de uma hora em que nenhuma estação dele chegou lá.
+    """
+    pontos_na_grade = []
+    monkeypatch.setattr(risco_fogo, "grade_da_hora",
+                        lambda pontos, base: pontos_na_grade.append(len(pontos)) or np.zeros((2, 2)))
+    hora = utc("2026-09-16 18:00")
+
+    def coletada(nome, longitude, temperatura, umidade, rajada_kmh):
+        estacao = pd.Series({"Estação": nome, "VL_LONGITUDE": longitude, "VL_LATITUDE": -20.0})
+        leituras = pd.DataFrame({"dt_utc": [hora], "TEM_MAX": [temperatura], "UMD_MIN": [umidade],
+                                 "rajada_kmh": [rajada_kmh]})
+        return estacao, leituras
+
+    do_estado = [coletada(nome, -55.0 + i, FRIO, 80.0, 5.0) for i, nome in enumerate("ABC")]
+    vizinha = [coletada("Do Parana", -50.0, QUENTE, 20.0, 40.0)]   # as três condições: nível 3
+
+    horas = risco_fogo.analisar_horas(do_estado, DIA, base=None, apoio=vizinha)
+
+    assert pontos_na_grade == [4]                                          # a grade viu a vizinha
+    assert horas[hora].estacoes["Estação"].tolist() == ["A", "B", "C"]   # a hora guarda só as do estado
+    assert horas[hora].nivel_estacoes == 0
+    assert risco_fogo.horas_para_mapear(horas) == {}                     # e não ganha mapa horário

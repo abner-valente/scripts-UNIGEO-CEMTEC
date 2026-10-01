@@ -32,3 +32,13 @@ env/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Cache local do explorador (regenerável: é só baixar de novo)
+cache/
+
+# Malhas brutas do IBGE, entrada da ferramenta de shapefiles (regeneráveis: é só baixar
+# de novo). Versionados ficam só os dois arquivos por UF que os mapas leem.
+shp/fonte/
+
+# Configuração local do Claude Code (não faz parte do projeto)
+.claude/

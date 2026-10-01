@@ -41,12 +41,33 @@ def coluna_chuva_principal(periodo: Periodo) -> str:
 
 
 # =====================================================
+# ESTAÇÕES VIZINHAS
+# =====================================================
+def _tabelas_de_apoio(recorte: config.Recorte, base, periodo: Periodo) -> dict | None:
+    """As mesmas tabelas do relatório, para as vizinhas que seguram a borda da interpolação.
+
+    Não vão para a planilha nem para o ranking: só para a superfície. Numa célula da divisa, os
+    8 vizinhos que o IDW enxerga estariam todos do lado de cá, e a superfície extrapolaria
+    tendo medição do outro lado.
+    """
+    coletadas = inmet.baixar_apoio(recorte, base.lon_grade[base.dentro_uf],
+                                   base.lat_grade[base.dentro_uf], *periodo.janela_busca,
+                                   fuso=periodo.fuso)
+    if not coletadas:
+        return None
+    return montar_tabelas([resumir_estacao(dados, estacao, periodo, recorte.uf)
+                           for estacao, dados in coletadas], periodo)
+
+
+# =====================================================
 # CÁLCULOS POR ESTAÇÃO
 # =====================================================
-def resumir_estacao(dados: pd.DataFrame, estacao: pd.Series, periodo: Periodo) -> dict[str, dict]:
+def resumir_estacao(dados: pd.DataFrame, estacao: pd.Series, periodo: Periodo,
+                    uf: str = config.UF) -> dict[str, dict]:
     """Extremos e acumulados de uma estação no período.
 
     Retorna {aba do Excel: linha da tabela}. Variáveis sem nenhum dado válido ficam de fora.
+    A sigla vai junto porque nomeia a coluna de horário local da planilha.
     """
     nome = estacao["Estação"]
     coordenadas = {"Latitude": estacao["VL_LATITUDE"], "Longitude": estacao["VL_LONGITUDE"]}
@@ -58,7 +79,7 @@ def resumir_estacao(dados: pd.DataFrame, estacao: pd.Series, periodo: Periodo) -
         linhas["Temp_Min"] = {
             "Estação": nome,
             "Temperatura Mínima (°C)": dados_periodo.at[indice, "TEM_MIN"],
-            **calculos.data_hora(dados_periodo, indice),
+            **calculos.data_hora(dados_periodo, indice, uf),
             **coordenadas,
         }
 
@@ -67,7 +88,7 @@ def resumir_estacao(dados: pd.DataFrame, estacao: pd.Series, periodo: Periodo) -
         linhas["Temp_Max"] = {
             "Estação": nome,
             "Temperatura Máxima (°C)": dados_periodo.at[indice, "TEM_MAX"],
-            **calculos.data_hora(dados_periodo, indice),
+            **calculos.data_hora(dados_periodo, indice, uf),
             **coordenadas,
         }
 
@@ -118,9 +139,9 @@ def montar_tabelas(resumos: list[dict[str, dict]], periodo: Periodo) -> dict[str
 # =====================================================
 # MAPAS
 # =====================================================
-def especificacoes_mapas(periodo: Periodo) -> list[EspecMapa]:
+def especificacoes_mapas(periodo: Periodo, recorte: config.Recorte = config.RECORTE) -> list[EspecMapa]:
     """Mapas gerados pelo relatório, conforme o modo da consulta."""
-    sigla = config.UF
+    sigla = recorte.uf
     subtitulo = periodo.descrever_janela(*periodo.janela)
 
     especificacoes = [
@@ -165,14 +186,15 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
     Este produto não tem opções próprias de linha de comando; `opcoes` existe para manter a mesma
     assinatura em todos os produtos.
     """
+    recorte = (opcoes or {}).get("recorte", config.RECORTE)
     print("=" * 60)
-    print(f"📊 {TITULO} — {config.NOME_UF}")
+    print(f"📊 {TITULO} — {recorte.nome}")
     print(f"📅 Modo: {periodo.nome_modo}")
     print(f"📅 {periodo.descricao}")
     print("=" * 60)
 
     try:
-        coletados = inmet.baixar_estacoes(*periodo.janela_busca)
+        coletados = inmet.baixar_estacoes(*periodo.janela_busca, uf=recorte.uf, fuso=periodo.fuso)
     except inmet.ErroINMET as erro:
         print(f"❌ Erro ao listar estações: {erro}")
         return 1
@@ -181,15 +203,24 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
         print("❌ Nenhuma estação retornou dados. Confira o token e a conexão e tente de novo.")
         return 1
 
-    tabelas = montar_tabelas([resumir_estacao(dados, estacao, periodo) for estacao, dados in coletados], periodo)
+    tabelas = montar_tabelas([resumir_estacao(dados, estacao, periodo, recorte.uf)
+                              for estacao, dados in coletados], periodo)
     for aba, tabela in tabelas.items():
         print(f"   - {aba}: {len(tabela)} estações")
 
     pasta = periodo.pasta_saida(NOME)
-    excel.salvar_relatorio(tabelas, pasta / f"Relatorio_{config.UF}_{periodo.identificador}.xlsx")
+    excel.salvar_relatorio(tabelas, pasta / f"Relatorio_{recorte.uf}_{periodo.identificador}.xlsx")
 
     print("\n🗺️ Gerando mapas...")
-    mapas.gerar_mapas(tabelas, especificacoes_mapas(periodo), pasta / "mapas", periodo.identificador)
+    base, apoio = None, None
+    try:
+        base = mapas.carregar_base(recorte)
+    except Exception:
+        pass  # gerar_mapas tenta de novo e diz o que houve com os shapefiles
+    else:
+        apoio = _tabelas_de_apoio(recorte, base, periodo)
+    mapas.gerar_mapas(tabelas, especificacoes_mapas(periodo, recorte), pasta / "mapas",
+                      periodo.identificador, recorte, base=base, apoio=apoio)
 
     print("=" * 60)
     print(f"✅ Concluído. Arquivos em: {pasta}")

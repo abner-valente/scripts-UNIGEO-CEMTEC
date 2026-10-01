@@ -1,14 +1,30 @@
 """Acesso à API do INMET (apitempo.inmet.gov.br)."""
+import threading
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
 
-from . import config
+from . import calculos, config
 
-COLUNAS_NUMERICAS = ["TEM_MAX", "TEM_MIN", "UMD_MIN", "UMD_MAX", "VEN_RAJ", "VEN_DIR", "CHUVA"]
+# Uma conexão por thread, reaproveitada entre as consultas. Abrir conexão nova a cada estação
+# custava 0,34 s das 0,83 s de cada uma — quase metade da espera era aperto de mão.
+_CONEXAO = threading.local()
+# Teto de consultas simultâneas do processo inteiro, e não de cada lote: ver config.
+_VAGAS = threading.Semaphore(config.DOWNLOADS_SIMULTANEOS)
+
+
+def _sessao() -> requests.Session:
+    return _CONEXAO.__dict__.setdefault("sessao", requests.Session())
+
+# A API devolve tudo como texto. Estas são as colunas que continuam texto; todas as outras
+# (temperatura, umidade, chuva, vento, pressão, radiação, ponto de orvalho...) viram número.
+COLUNAS_TEXTO = ["DC_NOME", "UF", "CD_ESTACAO", "DT_MEDICAO", "HR_MEDICAO"]
 PALAVRAS_MINUSCULAS = {"da", "das", "de", "do", "dos", "e"}
+# A API marca cada estação como "Operante" ou "Pane"; só a primeira tem o que responder.
+SITUACAO_OPERANTE = "operante"
 
 
 class ErroINMET(Exception):
@@ -30,7 +46,10 @@ def _consultar(url: str, timeout: int) -> list | dict:
     espera = config.PAUSA_ENTRE_TENTATIVAS
     for tentativa in range(1, config.TENTATIVAS + 1):
         try:
-            resposta = requests.get(url, timeout=timeout)
+            # A espera entre tentativas fica fora da vaga: segurá-la enquanto se dorme tiraria
+            # do ar uma das oito faixas justamente quando a API está ruim.
+            with _VAGAS:
+                resposta = _sessao().get(url, timeout=timeout)
             if 400 <= resposta.status_code < 500:  # token inválido, estação inexistente: repetir não resolve
                 raise ErroINMET(f"HTTP {resposta.status_code}: {_sem_token(resposta.text[:100])}")
             resposta.raise_for_status()
@@ -53,17 +72,50 @@ def formatar_nome_estacao(nome) -> str:
     )
 
 
-def listar_estacoes(uf: str = config.UF) -> pd.DataFrame:
-    """Estações automáticas da UF, com coordenadas numéricas e a coluna 'Estação' (nome formatado)."""
+def _todas_as_estacoes() -> pd.DataFrame:
+    """A lista inteira do INMET (o país todo), com coordenadas numéricas e o nome formatado.
+
+    Fora as estações em pane: a API as devolve junto com as operantes, e pedir dados delas é
+    consulta que sempre volta vazia. Em MS são 3 das 62.
+    """
     estacoes = pd.DataFrame(_consultar(config.URL_ESTACOES, config.TIMEOUT_ESTACOES))
-    estacoes = estacoes[estacoes["SG_ESTADO"] == uf].copy()
+    if "CD_SITUACAO" in estacoes:
+        estacoes = estacoes[estacoes["CD_SITUACAO"].str.strip().str.casefold() == SITUACAO_OPERANTE]
+    estacoes = estacoes.copy()
     for coluna in ("VL_LATITUDE", "VL_LONGITUDE"):
         estacoes[coluna] = pd.to_numeric(estacoes[coluna], errors="coerce")
     estacoes["Estação"] = estacoes["DC_NOME"].map(formatar_nome_estacao)
+    return estacoes.dropna(subset=["VL_LATITUDE", "VL_LONGITUDE"])
+
+
+def estacoes_do_recorte(recorte: config.Recorte = config.RECORTE,
+                        margem: float = config.MARGEM_RECORTE) -> pd.DataFrame:
+    """As estações que ajudam a interpolar o enquadramento — de qualquer estado.
+
+    A margem
+    existe porque a estação do outro lado da divisa descreve a borda tão bem quanto a de cá: sem
+    ela, os 8 vizinhos que o IDW enxerga numa célula da divisa estão todos para dentro, e a
+    superfície extrapola tendo dado disponível.
+
+    A coluna `SG_ESTADO` continua ali: é por ela que se separa o que é do produto do que é só
+    apoio para a conta.
+    """
+    oeste, leste, sul, norte = recorte.limites
+    estacoes = _todas_as_estacoes()
+    dentro = (estacoes["VL_LONGITUDE"].between(oeste - margem, leste + margem)
+              & estacoes["VL_LATITUDE"].between(sul - margem, norte + margem))
+    return estacoes[dentro].copy()
+
+
+def listar_estacoes(uf: str = config.UF) -> pd.DataFrame:
+    """Estações automáticas da UF, com coordenadas numéricas e a coluna 'Estação' (nome formatado)."""
+    estacoes = _todas_as_estacoes()
+    estacoes = estacoes[estacoes["SG_ESTADO"] == uf].copy()
     return estacoes
 
 
-def baixar_dados_estacao(codigo: str, inicio: datetime, fim: datetime) -> pd.DataFrame | None:
+def baixar_dados_estacao(codigo: str, inicio: datetime, fim: datetime,
+                         fuso: ZoneInfo = config.FUSO_MS) -> pd.DataFrame | None:
     """Dados horários de uma estação com as leituras da janela (início, fim].
 
     A API trabalha com dias UTC inteiros (data final inclusiva); o recorte exato por
@@ -80,48 +132,107 @@ def baixar_dados_estacao(codigo: str, inicio: datetime, fim: datetime) -> pd.Dat
 
     try:
         dados = pd.DataFrame(registros)
-        for coluna in COLUNAS_NUMERICAS:
-            if coluna in dados:
-                dados[coluna] = pd.to_numeric(dados[coluna].astype(str).str.replace(",", "."), errors="coerce")
+        for coluna in dados.columns.difference(COLUNAS_TEXTO):
+            dados[coluna] = pd.to_numeric(dados[coluna].astype(str).str.replace(",", "."), errors="coerce")
 
         # HR_MEDICAO vem como "HHMM" (ex.: "1300"), em UTC
         horas = dados["HR_MEDICAO"].map(lambda hora: f"{str(hora).zfill(4)[:2]}:00")
         dados["dt_utc"] = pd.to_datetime(dados["DT_MEDICAO"] + " " + horas, errors="coerce", utc=True)
-        dados["dt_local"] = dados["dt_utc"].dt.tz_convert(config.FUSO_MS)
+        dados["dt_local"] = dados["dt_utc"].dt.tz_convert(fuso)
     except (KeyError, TypeError, ValueError) as erro:
         raise ErroINMET(f"resposta em formato inesperado ({erro})") from erro
 
     return dados.dropna(subset=["dt_utc"])
 
 
-def baixar_estacoes(inicio: datetime, fim: datetime, uf: str = config.UF) -> list[tuple[pd.Series, pd.DataFrame]]:
+def baixar_estacoes(inicio: datetime, fim: datetime, uf: str = config.UF,
+                    fuso: ZoneInfo = config.FUSO_MS) -> list[tuple[pd.Series, pd.DataFrame]]:
     """Lista as estações da UF e baixa os dados horários de cada uma para a janela (início, fim].
+
+    O fuso vai junto para cada estação porque é dele que sai a hora local da planilha. Até
+    01/10/2026 ele não ia: a hora local saía no horário de MS em qualquer estado, e numa UF
+    UTC−3 a máxima aparecia uma hora antes da que de fato aconteceu.
 
     Retorna (estação, dados) das estações que têm dados e, no fim, mostra quais ficaram de fora
     e por quê. Levanta ErroINMET se a lista de estações falhar.
     """
     estacoes = listar_estacoes(uf)
     print(f"✅ Encontradas {len(estacoes)} estações em {uf}")
+    coletados, sem_dados, com_falha = baixar_lista(estacoes, inicio, fim, fuso)
+    _resumir_coleta(len(estacoes), len(coletados), sem_dados, com_falha)
+    return coletados
 
+
+def baixar_lista(estacoes: pd.DataFrame, inicio: datetime, fim: datetime,
+                 fuso: ZoneInfo = config.FUSO_MS, detalhar: bool = True) -> tuple[list, list, list]:
+    """Baixa as estações dadas, uma por vez: (coletadas, sem dados, com falha).
+
+    `detalhar` escreve uma linha por estação. As do estado escrevem, que é o que quem roda o
+    produto acompanha; as vizinhas não, porque são insumo — 39 linhas a mais em MS só
+    esconderiam as que importam.
+    """
     coletados, sem_dados, com_falha = [], [], []
     for _, estacao in estacoes.iterrows():
         nome = estacao["Estação"]
-        print(f"🛰️ Lendo: {nome}...")
+        if detalhar:
+            print(f"🛰️ Lendo: {nome}...")
         try:
-            dados = baixar_dados_estacao(estacao["CD_ESTACAO"], inicio, fim)
+            dados = baixar_dados_estacao(estacao["CD_ESTACAO"], inicio, fim, fuso=fuso)
             time.sleep(config.PAUSA_ENTRE_REQUISICOES)
         except ErroINMET as erro:
-            print(f"    ❌ Não foi possível ler: {erro}")
+            if detalhar:
+                print(f"    ❌ Não foi possível ler: {erro}")
             com_falha.append(nome)
             continue
         if dados is None:
-            print("    ⚠️ Sem leituras no período")
+            if detalhar:
+                print("    ⚠️ Sem leituras no período")
             sem_dados.append(nome)
             continue
-        print(f"    📊 {len(dados)} registros")
+        if detalhar:
+            print(f"    📊 {len(dados)} registros")
         coletados.append((estacao, dados))
+    return coletados, sem_dados, com_falha
 
-    _resumir_coleta(len(estacoes), len(coletados), sem_dados, com_falha)
+
+def estacoes_de_apoio(recorte: config.Recorte, lon_celulas, lat_celulas) -> pd.DataFrame:
+    """As estações de fora do estado que podem entrar na conta de alguma célula.
+
+    Estar dentro da margem do recorte não basta: é preciso chegar às mais próximas de algum
+    lugar que vira desenho (ver calculos.apoio_que_entra). As células entram como coordenadas,
+    e não como a base cartográfica, para este módulo não depender dos mapas.
+
+    É a mesma lista para o painel e para os dois produtos — a superfície que a tela mostra e a
+    que o boletim publica saem das mesmas estações.
+    """
+    vizinhanca = estacoes_do_recorte(recorte)
+    fora = vizinhanca[vizinhanca["SG_ESTADO"] != recorte.uf]
+    dele = vizinhanca[vizinhanca["SG_ESTADO"] == recorte.uf]
+    entram = calculos.apoio_que_entra(fora["VL_LONGITUDE"].values, fora["VL_LATITUDE"].values,
+                                      dele["VL_LONGITUDE"].values, dele["VL_LATITUDE"].values,
+                                      lon_celulas, lat_celulas, config.VIZINHOS_NA_PODA)
+    return fora[entram].sort_values("Estação").reset_index(drop=True)
+
+
+def baixar_apoio(recorte: config.Recorte, lon_celulas, lat_celulas, inicio: datetime, fim: datetime,
+                 fuso: ZoneInfo = config.FUSO_MS) -> list[tuple[pd.Series, pd.DataFrame]]:
+    """Baixa as vizinhas que seguram a borda da interpolação, numa linha só de relato.
+
+    Elas são melhoria, não requisito: se a lista falhar, o produto segue com as estações do
+    estado, como sempre fez, e avisa. Um INMET instável não pode custar o boletim inteiro.
+    """
+    try:
+        estacoes = estacoes_de_apoio(recorte, lon_celulas, lat_celulas)
+    except ErroINMET as erro:
+        print(f"⚠️ Sem as estações vizinhas ({erro}); a borda sai só com as do estado.")
+        return []
+    if estacoes.empty:
+        return []
+    estados = ", ".join(estacoes["SG_ESTADO"].value_counts().index)
+    print(f"🧭 Lendo {len(estacoes)} estações vizinhas para a borda ({estados})...")
+    coletados, sem_dados, com_falha = baixar_lista(estacoes, inicio, fim, fuso, detalhar=False)
+    print(f"   {len(coletados)} com dados"
+          + (f", {len(sem_dados) + len(com_falha)} sem" if sem_dados or com_falha else ""))
     return coletados
 
 
