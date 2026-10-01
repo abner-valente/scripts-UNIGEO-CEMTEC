@@ -7,6 +7,7 @@ quem programa nada disso aparece — lá o venv tem as dependências dos dois la
 A verificação roda num processo à parte porque o pytest já importou meio mundo antes: é preciso
 ver o que os módulos do painel puxam **sozinhos**.
 """
+import ast
 import re
 import subprocess
 import sys
@@ -84,3 +85,27 @@ def test_o_painel_declara_tudo_o_que_seus_modulos_importam():
 def test_a_regra_do_risco_arrasta_o_escritor_de_planilha():
     """O caso concreto que derrubou o app, fixado: não é óbvio que o painel precise de openpyxl."""
     assert "openpyxl" in declarados()
+
+
+def test_todo_cache_resource_tem_teto_de_entradas():
+    """`cache_resource` guarda o objeto, e não uma cópia: sem teto ele vive enquanto o processo.
+
+    Com um estado isso era uma entrada de shapefile, carregada uma vez e usada para sempre — o
+    comportamento que se queria. Com 25, visitar todos prende ~740 MB, e o Streamlit Community
+    Cloud corta o app perto de 1 GB. Quando isso acontece cai a sessão de **todo mundo**, porque
+    esses caches são do processo e um contêiner serve a equipe inteira.
+
+    `cache_data` não entra aqui: ele serializa e devolve cópia, e quem guarda coisa grande nele
+    já tem max_entries declarado caso a caso.
+    """
+    arvore = ast.parse((RAIZ / "app" / "explorador.py").read_text(encoding="utf-8"))
+
+    sem_teto = [
+        no.name
+        for no in ast.walk(arvore) if isinstance(no, ast.FunctionDef)
+        for enfeite in no.decorator_list
+        if isinstance(enfeite, ast.Call) and ast.unparse(enfeite.func).endswith("cache_resource")
+        and not any(chave.arg == "max_entries" for chave in enfeite.keywords)
+    ]
+
+    assert not sem_teto, f"@st.cache_resource sem max_entries: {', '.join(sem_teto)}"
