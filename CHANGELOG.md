@@ -28,6 +28,7 @@ Ainda não está na `main`: o que entra aqui chega com o próximo `git pull` dep
 ### Corrigido
 
 - **Painel, aba Risco de Fogo: "Por dia" e "Período inteiro" caíam com erro** (`KeyError`) quando a caixa "Mostrar o nível e as condições de cada estação" estava ligada. Vinha desde a 0.2.1. Agora esses dois mapas mostram só o nível de cada estação, e os pontos das condições ficam no hora a hora, como no produto: o dia e o período juntam horas diferentes, e as condições de uma hora não representam o dia.
+- **Painel, aba Chuva: o acumulado mensal saía zerado no dia 1º às 00:00.** É o que acontece com um período que termina no último dia do mês: "Acumulados até 01/10 00:00" montava uma janela vazia, de 01/10 00:00 a 01/10 00:00. Como a leitura das 00:00 fecha o dia anterior, esse instante é o fim de 30/09, e o mensal agora é setembro inteiro. Uma hora depois, às 01:00, já é outubro.
 
 ## [0.2.2] — 01/10/2026
 
