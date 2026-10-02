@@ -767,8 +767,9 @@ def mapa_de_risco(grade, pontos: pd.DataFrame, coluna: str, quando: str, detalhe
                   dpi: int = DPI_MAPA) -> bytes | None:
     """PNG do mapa de níveis de risco: a superfície em quatro classes e as estações por cima.
 
-    Com `detalhes`, cada estação leva o seu nível escrito e os pontinhos das condições atendidas
-    — temperatura, umidade e rajada, da esquerda para a direita.
+    Com `detalhes`, cada estação leva o seu nível escrito e, no mapa de uma hora, os pontinhos das
+    condições atendidas — temperatura, umidade e rajada, da esquerda para a direita. O do dia e o
+    do período só levam o nível: juntam horas diferentes (`risco.indicadores`).
     """
     gdf = mapas.preparar_pontos(pontos, coluna, quando)
     if gdf is None:
@@ -777,8 +778,7 @@ def mapa_de_risco(grade, pontos: pd.DataFrame, coluna: str, quando: str, detalhe
                                config.CORES_RISCO, config.ROTULOS_RISCO)
     figura = mapas.mapa_classes_interpolado(
         grade, gdf, coluna, espec, base_cartografica(uf),
-        indicadores=risco_fogo.indicadores_condicoes() if detalhes else None,
-        tela=mapas.Tela(rotulos=detalhes))
+        indicadores=risco.indicadores(pontos, detalhes), tela=mapas.Tela(rotulos=detalhes))
     arquivo = io.BytesIO()
     figura.savefig(arquivo, format="png", dpi=dpi, bbox_inches="tight", facecolor="white")
     return arquivo.getvalue()
@@ -1386,9 +1386,11 @@ with aba_risco:
                                              key="modo_risco")]
             detalhes = st.checkbox("Mostrar o nível e as condições de cada estação", value=False,
                                    key="detalhes_risco",
-                                   help="O nível escrito em cada estação e, abaixo dela, um ponto "
-                                        "para cada condição atendida. Lado a lado eles se cobrem; "
-                                        "ligue ao ampliar um mapa.")
+                                   help="O nível escrito em cada estação e, no hora a hora, um "
+                                        "ponto abaixo dela para cada condição atendida. Por dia e "
+                                        "no período inteiro sai só o nível: eles juntam horas "
+                                        "diferentes, e as condições de uma hora não representam o "
+                                        "dia. Lado a lado eles se cobrem; ligue ao ampliar um mapa.")
 
             # --- hora a hora ---------------------------------------------------------------
             if modo_risco == variaveis.HORA:

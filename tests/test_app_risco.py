@@ -182,6 +182,34 @@ def test_o_nivel_de_cada_estacao_no_dia_e_o_pior_das_horas():
     assert risco.estacoes_do_dia(avaliadas, date(2026, 9, 18)).empty
 
 
+def test_os_pontos_das_condicoes_so_vao_no_mapa_de_uma_hora():
+    """O dia e o período juntam horas diferentes: a tabela deles não tem as condições."""
+    do_dia = pd.DataFrame({"Estação": ["Bonito"], "Latitude": [-21.1], "Longitude": [-56.5],
+                           risco_fogo.COLUNA_NIVEL_HORA: [3]})
+    da_hora = do_dia.assign(**{coluna: [True] for coluna in risco_fogo.COLUNAS_CONDICOES})
+
+    assert risco.indicadores(do_dia, detalhes=True) is None
+    assert risco.indicadores(da_hora, detalhes=True) == risco_fogo.indicadores_condicoes()
+    assert risco.indicadores(da_hora, detalhes=False) is None
+
+
+def test_o_mapa_do_dia_com_detalhes_desenha_sem_os_pontos():
+    """A aba caía com KeyError: 'Temperatura Atendida' no "Por dia" com a caixa de detalhes ligada."""
+    from modulos import mapas
+    base = mapas.carregar_base()
+    do_dia = pd.DataFrame({"Estação": ["Bonito", "Corumba", "Dourados"],
+                           "Latitude": [-21.1, -19.0, -22.2], "Longitude": [-56.5, -57.6, -54.8],
+                           risco_fogo.COLUNA_NIVEL_HORA: [1, 3, 0]})
+    gdf = mapas.preparar_pontos(do_dia, risco_fogo.COLUNA_NIVEL_HORA)
+
+    figura = mapas.mapa_classes_interpolado(
+        np.zeros(base.lon_grade.shape), gdf, risco_fogo.COLUNA_NIVEL_HORA,
+        risco_fogo.espec_nivel_maximo("MS", "30/09/2026"), base,
+        indicadores=risco.indicadores(do_dia, detalhes=True), tela=mapas.Tela(rotulos=True))
+
+    assert len(figura.axes[0].texts) == len(do_dia)  # o nível de cada estação continua escrito
+
+
 def test_o_pior_do_dia_respeita_o_fechamento_do_dia_do_projeto():
     """A leitura das 00:00 fecha o dia anterior: um dia não vira dois."""
     marcas = pd.date_range("2026-09-17 23:00", periods=2, freq="h", tz=FUSO).tz_convert("UTC")

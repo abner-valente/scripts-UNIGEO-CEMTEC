@@ -139,6 +139,19 @@ def estacoes_do_dia(avaliadas: dict, dia) -> pd.DataFrame:
             [risco_fogo.COLUNA_NIVEL_HORA].max())
 
 
+def indicadores(pontos: pd.DataFrame, detalhes: bool):
+    """Os pontos das condições atendidas sobre cada estação, ou None.
+
+    Só a tabela de uma hora traz as condições. O mapa do dia e o do período juntam horas
+    diferentes, e as condições de uma hora não representam o dia — a mesma regra dos mapas de
+    síntese do produto, que também saem sem os pontos. Pedi-los ali derrubava a aba com
+    KeyError, com a caixa de detalhes ligada no "Por dia" ou no "Período inteiro".
+    """
+    if not detalhes or not set(risco_fogo.COLUNAS_CONDICOES) <= set(pontos.columns):
+        return None
+    return risco_fogo.indicadores_condicoes()
+
+
 def hora_a_hora(completas: list) -> pd.DataFrame:
     """Uma linha por estação e hora, com as condições atendidas, o nível e o dia — o que os
     gráficos comem."""

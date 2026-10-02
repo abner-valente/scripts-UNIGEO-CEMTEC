@@ -25,6 +25,10 @@ Ainda não está na `main`: o que entra aqui chega com o próximo `git pull` dep
   - O botão "Baixar PNG" de antes continua, com o desenho da tela.
 - `CHANGELOG.md`, e as versões viram tags (`0.1.1` a `0.2.2`): `git describe --tags` diz em que versão a cópia está.
 
+### Corrigido
+
+- **Painel, aba Risco de Fogo: "Por dia" e "Período inteiro" caíam com erro** (`KeyError`) quando a caixa "Mostrar o nível e as condições de cada estação" estava ligada. Vinha desde a 0.2.1. Agora esses dois mapas mostram só o nível de cada estação, e os pontos das condições ficam no hora a hora, como no produto: o dia e o período juntam horas diferentes, e as condições de uma hora não representam o dia.
+
 ## [0.2.2] — 01/10/2026
 
 De "só MS" para "qualquer estado com estação". Entrou na `main` junto com a 0.2.1.
