@@ -33,14 +33,23 @@ def inicio_necessario(fim: datetime) -> datetime:
     O mais antigo entre o começo do mês e 96 h atrás. É por isso que a aba da chuva carrega mais
     do que o período escolhido — e é a razão de ela ser uma aba à parte.
     """
-    comeco_do_mes = fim.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    return min(comeco_do_mes, fim - timedelta(hours=max(JANELAS_HORAS)))
+    return min(_comeco_do_mes(fim), fim - timedelta(hours=max(JANELAS_HORAS)))
+
+
+def _comeco_do_mes(fim: datetime) -> datetime:
+    """A 00 h do dia 1º do mês que `fim` fecha.
+
+    A leitura das 00:00 fecha o dia anterior, como em todo o projeto: "até 01/10 00:00" é o fim
+    de 30/09, e o mensal dali é setembro inteiro. Tomar o mês do próprio instante dava a janela
+    vazia de 01/10 00:00 a 01/10 00:00, e o mapa mensal saía zerado em todas as estações.
+    """
+    return (fim - timedelta(microseconds=1)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
 def janela(fim: datetime, rotulo: str) -> tuple[datetime, datetime]:
     """O intervalo `(início, fim]` de um acumulado."""
     if rotulo == MENSAL:
-        return fim.replace(day=1, hour=0, minute=0, second=0, microsecond=0), fim
+        return _comeco_do_mes(fim), fim
     return fim - timedelta(hours=int(rotulo.split()[0])), fim
 
 

@@ -32,6 +32,23 @@ def test_janela_mensal_comeca_no_primeiro_dia_do_mes():
     assert f"{comeco:%d/%m %H:%M}" == "01/09 00:00"
 
 
+def test_no_dia_1o_a_zero_hora_o_mensal_e_o_mes_que_acabou_de_fechar():
+    """A leitura das 00:00 de 01/10 fecha o dia 30/09: o mensal dali é setembro inteiro.
+
+    Antes a janela ia de 01/10 00:00 a 01/10 00:00 — vazia —, e o mapa saía zerado.
+    """
+    comeco, fim = chuva.janela(instante("2026-10-01 00:00"), chuva.MENSAL)
+
+    assert f"{comeco:%d/%m %H:%M} a {fim:%d/%m %H:%M}" == "01/09 00:00 a 01/10 00:00"
+    assert chuva.horas_da_janela(instante("2026-10-01 00:00"), chuva.MENSAL) == 30 * 24
+    assert f"{chuva.inicio_necessario(instante('2026-10-01 00:00')):%d/%m}" == "01/09"
+
+
+def test_uma_hora_depois_o_mensal_ja_e_o_mes_novo():
+    comeco, _ = chuva.janela(instante("2026-10-01 01:00"), chuva.MENSAL)
+    assert f"{comeco:%d/%m %H:%M}" == "01/10 00:00"
+
+
 def test_carga_necessaria_alcanca_o_comeco_do_mes():
     """A aba da chuva precisa de mais dado que o período escolhido — é a razão de ser separada."""
     assert f"{chuva.inicio_necessario(instante('2026-09-25 00:00')):%d/%m}" == "01/09"
@@ -67,6 +84,12 @@ def test_acumulado_mensal_pega_o_mes_inteiro_ate_o_fim():
     tabela = leituras("Bonito", "2026-08-30 01:00", 24 * 10, 1.0)  # atravessa a virada do mês
     somas = chuva.acumulado(tabela, instante("2026-09-05 00:00"), chuva.MENSAL)
     assert somas["Bonito"] == pytest.approx(24 * 4)  # só os dias 1 a 4 de setembro
+
+
+def test_acumulado_mensal_na_virada_soma_o_mes_que_fechou():
+    tabela = leituras("Bonito", "2026-09-29 01:00", 48, 1.0)  # 29 e 30/09, até a leitura de 01/10 00:00
+    somas = chuva.acumulado(tabela, instante("2026-10-01 00:00"), chuva.MENSAL)
+    assert somas["Bonito"] == pytest.approx(48.0)
 
 
 def test_avisa_quando_o_dado_carregado_nao_cobre_a_janela():
