@@ -195,7 +195,7 @@ def test_os_pontos_das_condicoes_so_vao_no_mapa_de_uma_hora():
 
 def test_o_mapa_do_dia_com_detalhes_desenha_sem_os_pontos():
     """A aba caía com KeyError: 'Temperatura Atendida' no "Por dia" com a caixa de detalhes ligada."""
-    from modulos import mapas
+    from modulos import config, mapas
     base = mapas.carregar_base()
     do_dia = pd.DataFrame({"Estação": ["Bonito", "Corumba", "Dourados"],
                            "Latitude": [-21.1, -19.0, -22.2], "Longitude": [-56.5, -57.6, -54.8],
@@ -204,7 +204,8 @@ def test_o_mapa_do_dia_com_detalhes_desenha_sem_os_pontos():
 
     figura = mapas.mapa_classes_interpolado(
         np.zeros(base.lon_grade.shape), gdf, risco_fogo.COLUNA_NIVEL_HORA,
-        risco_fogo.espec_nivel_maximo("MS", "30/09/2026"), base,
+        mapas.EspecClasses("Risco de fogo em MS", "30/09/2026", "", config.CORES_RISCO,
+                           config.ROTULOS_RISCO), base,
         indicadores=risco.indicadores(do_dia, detalhes=True), tela=mapas.Tela(rotulos=True))
 
     assert len(figura.axes[0].texts) == len(do_dia)  # o nível de cada estação continua escrito
