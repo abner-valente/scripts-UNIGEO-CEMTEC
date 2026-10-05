@@ -674,6 +674,8 @@ Radiação levemente negativa à noite é ruído conhecido do sensor, não defei
 
 Os scripts da equipe estão sendo migrados aos poucos. Cada um vira um produto em `modulos/produtos/`, reaproveitando as peças compartilhadas (API do INMET, períodos, cálculos, mapas e Excel). O passo a passo está em [`docs/como_migrar_um_script.md`](docs/como_migrar_um_script.md).
 
+Para mexer no código — como as peças se encaixam, onde mudar cada coisa e as armadilhas conhecidas —, veja o [guia de manutenção](docs/guia_de_manutencao.md).
+
 Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesmas subseções, nesta ordem: **O que calcula**, **Como rodar**, **modos de tempo aceitos**, **Saídas**, **Exemplos**, **Dados de referência**, **Notas metodológicas**, **Mudanças em relação aos scripts legados** e **Decisões da equipe de meteorologia**. As imagens dos exemplos ficam em `docs/img/<produto>/`, reduzidas para cerca de 1000 px de largura.
 
 ## Estrutura do repositório
@@ -705,7 +707,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 ├── ferramentas/          # Scripts auxiliares (ex.: preparar os shapefiles de um estado)
 ├── tests/                # Testes automatizados (pytest), com a API do INMET simulada
 ├── .github/workflows/    # Execução automática dos testes no GitHub (GitHub Actions)
-├── docs/                 # Documentos da equipe (ex.: questões para a meteorologia, guia de migração)
+├── docs/                 # Documentos da equipe (ex.: questões para a meteorologia, guias de migração e de manutenção)
 │   └── img/              # Mapas de exemplo usados neste README, um subdiretório por produto
 ├── shp/                  # Shapefiles de cada estado: limite estadual e municípios
 ├── img/                  # Logos inseridos nos mapas (PNG com fundo transparente)
