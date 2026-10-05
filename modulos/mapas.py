@@ -16,8 +16,12 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patheffects import withStroke
 from matplotlib.patches import Patch
+from matplotlib.ticker import MaxNLocator
 
 from . import calculos, config
+
+# Acima disso a lista de níveis é uma faixa contínua, e não classes (como as da chuva)
+MAX_CLASSES = 12
 
 
 @dataclass(frozen=True)
@@ -235,6 +239,13 @@ def mapa_de_grade(grade, gdf, espec: EspecMapa, base: BaseCartografica, caminho:
     superficie.set_clip_path(base.contorno_uf, transform=ax.transData)
     if tela is None or tela.barra_de_cores:
         barra = fig.colorbar(superficie, ax=ax, label=espec.unidade, shrink=0.75)
+        if np.ndim(niveis) and len(niveis) > MAX_CLASSES:
+            # Faixa fixa, a da tela: as marcas cairiam nos níveis, e 21 níveis de 0 a 45 °C dão
+            # 6,75, 13,50... Números redondos, como na régua deitada da tela. Os relatórios do
+            # main.py não passam por aqui — lá a escala se ajusta ao dado. Só as marcas dentro da
+            # faixa: a barra prende as de fora na ponta, e o vento (0 a 130) ganhava um 140 no topo.
+            marcas = MaxNLocator(nbins=10, steps=[1, 2, 2.5, 5, 10]).tick_values(niveis[0], niveis[-1])
+            barra.set_ticks([marca for marca in marcas if niveis[0] <= marca <= niveis[-1]])
         barra.set_label(espec.unidade, size=_corpo(tela))
         barra.ax.tick_params(labelsize=_corpo(tela))
     _desenhar_limites(ax, base)

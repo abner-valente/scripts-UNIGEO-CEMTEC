@@ -240,6 +240,29 @@ def _espec_classes(titulo: str, subtitulo: str, arquivo: str) -> EspecClasses:
     return EspecClasses(titulo, subtitulo, arquivo, config.CORES_RISCO, config.ROTULOS_RISCO)
 
 
+def espec_nivel_maximo(sigla: str, subtitulo: str) -> EspecClasses:
+    """O mapa do pior nível que cada lugar alcançou na janela.
+
+    Esta e as duas seguintes são públicas porque o painel baixa os mesmos mapas na moldura do
+    relatório: o título que a equipe publica não pode ter duas versões.
+    """
+    return _espec_classes(f"Risco de Fogo — Nível Máx. em {sigla}", subtitulo,
+                          f"Mapa_Risco_Fogo_Nivel_{sigla}")
+
+
+def espec_horas_em_risco_alto(sigla: str, subtitulo: str) -> EspecMapa:
+    """O mapa de exposição: em quantas horas cada lugar esteve no risco alto."""
+    return EspecMapa(ABA, COLUNA_HORAS_ALTO, f"Horas Agregadas de risco alto de fogo em {sigla}", subtitulo,
+                     f"Mapa_Risco_Fogo_Horas_{sigla}", "YlOrRd", "Horas em risco alto",
+                     "5 MAIORES EXPOSIÇÕES", decimais=0)  # horas são contagens: sem casas decimais
+
+
+def espec_da_hora(local, sigla: str) -> EspecClasses:
+    """O mapa de uma hora, com ela e o fuso no subtítulo: 03/09/2026 11:00 GMT-04."""
+    return _espec_classes(f"Risco de Fogo em {sigla}", f"{local:%d/%m/%Y %H:%M} {config._gmt(local)}",
+                          f"Mapa_Risco_Fogo_{sigla}")
+
+
 def rotulos_condicoes() -> list[str]:
     """Como cada condição aparece nas legendas, com o seu limiar.
 
@@ -274,13 +297,10 @@ def gerar_mapas(tabela: pd.DataFrame, horas: dict, periodo: Periodo, base: BaseC
     subtitulo = periodo.descrever_janela(*periodo.janela)
 
     sigla = base.recorte.uf
-    espec = _espec_classes(f"Risco de Fogo — Nível Máx. em {sigla}", subtitulo,
-                           f"Mapa_Risco_Fogo_Nivel_{sigla}")
+    espec = espec_nivel_maximo(sigla, subtitulo)
     mapas.mapa_classes_pontual(gdf, COLUNA_NIVEL, espec, base, pasta / f"{espec.arquivo}_{identificador}.png")
 
-    exposicao = EspecMapa(ABA, COLUNA_HORAS_ALTO, f"Horas Agregadas de risco alto de fogo em {sigla}", subtitulo,
-                          f"Mapa_Risco_Fogo_Horas_{sigla}", "YlOrRd", "Horas em risco alto",
-                          "5 MAIORES EXPOSIÇÕES", decimais=0)  # horas são contagens: sem casas decimais
+    exposicao = espec_horas_em_risco_alto(sigla, subtitulo)
     mapas.mapa_pontual(gdf, exposicao, base, pasta / f"{exposicao.arquivo}_{identificador}.png")
 
     if horas:
@@ -313,9 +333,7 @@ def _mapas_horarios(horas: dict, base: BaseCartografica, pasta: Path, todas_as_h
     print(f"\n🕐 Mapas horários: {len(selecionadas)} de {len(horas)} horas")
     for hora, avaliada in sorted(selecionadas.items()):
         local = hora.tz_convert(base.recorte.fuso)
-        espec = _espec_classes(f"Risco de Fogo em {base.recorte.uf}",
-                               f"{local:%d/%m/%Y %H:%M} {config._gmt(local)}",
-                               f"Mapa_Risco_Fogo_{base.recorte.uf}")
+        espec = espec_da_hora(local, base.recorte.uf)
         estacoes = mapas.preparar_pontos(avaliada.estacoes, COLUNA_NIVEL_HORA, espec.subtitulo)
         mapas.mapa_classes_interpolado(avaliada.grade, estacoes, COLUNA_NIVEL_HORA, espec, base,
                                        pasta / f"{espec.arquivo}_{local:%Y%m%d_%H}h.png", indicadores_condicoes())
