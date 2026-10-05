@@ -9,9 +9,9 @@ Cada versão separa as mudanças em até quatro grupos:
 
 Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
-## [0.2.3] — em andamento
+## [0.2.3] — 05/10/2026
 
-Ainda não está na `main`: o que entra aqui chega com o próximo `git pull` depois do merge.
+Fechada na branch `v0.2.2`, que é a do painel publicado no Streamlit Cloud. Chega à `main`, e ao `git pull` de quem usa a linha de comando, no próximo merge.
 
 ### Atenção ao atualizar
 
