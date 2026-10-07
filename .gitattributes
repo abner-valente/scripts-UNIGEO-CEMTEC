@@ -1,0 +1,3 @@
+# Arquivos .bat precisam de quebra de linha do Windows (CRLF): com LF, o cmd.exe pode ler
+# linhas pela metade e pular comandos.
+*.bat text eol=crlf

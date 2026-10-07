@@ -220,6 +220,8 @@ A regra de organização: **conta vai para um módulo de `app/` sem Streamlit; t
 | `shp/` | dois shapefiles por UF, `<UF>_UF_2022` (contorno) e `<UF>_mun_simplificado` (municípios). **Precisam estar no git**: a nuvem clona o repositório e não baixa nada na hora. |
 | `img/` | os logos dos mapas (PNG transparente). A posição deles fica em `config.LOGOS`. |
 | `ferramentas/simplificar_municipios.py` | gera os shapefiles de uma UF a partir da malha 2022 do IBGE (`--uf GO`, `--refazer`) |
+| `servidor/iniciar_painel.bat` | sobe o painel no servidor Windows da unidade, chamado pelo Agendador de Tarefas. A porta vem da variável `PORTA` (padrão 8501), a saída vai para `logs/painel.log`, fora do git, e o observador de arquivos fica **desligado**: depois de uma atualização, o painel só muda quando a tarefa é reiniciada, em vez de rodar metade código novo e metade velho |
+| `.gitattributes` | obriga os `.bat` a ter quebra de linha do Windows (CRLF): com LF, o `cmd.exe` pode pular comandos |
 | `legado/` | os scripts originais, só para comparação. Não são usados por nada. |
 | `docs/` | este guia, o de migração, as decisões da meteorologia, o escopo da 0.2.2 e as imagens do README |
 | `tests/` | seção 7 |

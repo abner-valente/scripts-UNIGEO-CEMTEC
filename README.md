@@ -705,6 +705,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │   ├── qualidade.py      # Regras de qualidade das leituras (sem tela, por isso testáveis)
 │   └── requirements.txt  # Dependências só do explorador
 ├── ferramentas/          # Scripts auxiliares (ex.: preparar os shapefiles de um estado)
+├── servidor/             # Para o servidor Windows da unidade: iniciar_painel.bat (logs em logs/)
 ├── tests/                # Testes automatizados (pytest), com a API do INMET simulada
 ├── .github/workflows/    # Execução automática dos testes no GitHub (GitHub Actions)
 ├── docs/                 # Documentos da equipe (ex.: questões para a meteorologia, guias de migração e de manutenção)

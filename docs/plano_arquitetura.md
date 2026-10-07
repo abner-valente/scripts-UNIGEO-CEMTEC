@@ -129,7 +129,8 @@ está rodando na VM).
   Windows, só para a rede interna.
 - **Para continuar no ar depois de um reinício**, o painel sobe por uma tarefa do **Agendador de
   Tarefas do Windows**, "ao iniciar o computador", que roda mesmo sem ninguém conectado e se
-  reinicia se cair.
+  reinicia se cair. A tarefa chama o **`servidor\iniciar_painel.bat`** (pronto desde 07/10), que
+  sobe o painel com o observador de arquivos desligado e grava a saída em `logs\painel.log`.
 - **Os coletores** também vão pelo Agendador de Tarefas: o do INMET de hora em hora, o do
   Open-Meteo duas vezes por dia.
 - **Para atualizar**, o mesmo caminho de sempre (`git fetch`, mudar para a tag escolhida, instalar
