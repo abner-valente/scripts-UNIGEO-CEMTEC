@@ -165,8 +165,10 @@ histórico de como a previsão mudou até a hora chegar. O observado do INMET n�
 inteiro dá uns 6,5 milhões de linhas por ano com as estações de hoje, e menos nos anos antigos,
 quando havia menos estações. O banco da UNIGEO comporta as duas coisas com folga.
 
-**7. A busca mora fora do painel**, num módulo novo, `modulos/previsao.py`, ao lado do
-`inmet.py`. No servidor, um coletor agendado chama essa função e grava no banco. Enquanto o
+**7. A busca mora fora do painel**, num módulo novo, `modulos/openmeteo.py`, ao lado do
+`inmet.py`: cada fonte tem o seu cliente, com o mesmo papel. As contas da aba que não são busca
+(rodada atual de cada modelo, séries dos gráficos, os mapas) ficam em `app/previsao.py`, sem
+tela, para poderem ser testadas. No servidor, um coletor agendado chama essa função e grava no banco. Enquanto o
 servidor não existir, o painel chama a mesma função sob demanda, com a cópia guardada por rodada
 e compartilhada por todos. A chave é a **rodada** ("ECMWF de 06/10, 00 UTC"), e não o relógio,
 porque cada modelo publica a rodada horas depois do horário nominal. A aba mostra de que rodada é
@@ -219,7 +221,7 @@ Para MS, com 3 modelos, 7 variáveis horárias e 14 dias, cada ponto custa 2,1:
 
 ## Ordem de trabalho
 
-1. **`modulos/previsao.py`.** A busca: os pontos da grade e as estações de MS, os três modelos, a
+1. **`modulos/openmeteo.py`.** A busca: os pontos da grade e as estações de MS, os três modelos, a
    identificação da rodada, a divisão em pedidos de até 600 chamadas por minuto, e o aviso quando
    o Open-Meteo não responder ou a cota acabar. Os testes usam um Open-Meteo simulado, como o
    INMET já é, sob a mesma trava que proíbe rede nos testes. Na primeira busca de verdade:
@@ -227,7 +229,8 @@ Para MS, com 3 modelos, 7 variáveis horárias e 14 dias, cada ponto custa 2,1:
    abaixo da do próprio Open-Meteo.
 2. **A tabela e o coletor**, se o servidor e o banco já existirem. Se não, o cache por rodada no
    painel.
-3. **Gráficos de linha por estação.** Os três modelos lado a lado. É o passo mais barato, e o que
+3. **Gráficos de linha por estação**, com as contas em `app/previsao.py` e a aba no
+   `explorador.py`. Os três modelos lado a lado. É o passo mais barato, e o que
    mostra se a fonte serve.
 4. **Mapas de dias**, de 1 a 14. Um modelo por vez, com um seletor para trocar, e o PNG do
    boletim.
@@ -240,6 +243,17 @@ Em 06/10 ficou decidido levar o painel para um servidor da UNIGEO, num container
 dados para o banco da unidade, administrado pelo programador. Cada fonte terá o seu coletor e a
 sua tabela: o INMET do Brasil inteiro, de hora em hora, e o Open-Meteo de MS. O prazo do servidor
 ainda está aberto.
+
+Em 07/10 ficaram definidos mais dois pontos:
+- **O banco é PostgreSQL.** O particionamento por dia de coleta usa o particionamento nativo dele.
+  As rodadas entram em lote (`COPY`), porque são ~500 mil linhas cada. A atualização das últimas
+  48 h do INMET usa `INSERT ... ON CONFLICT DO UPDATE`.
+- **O `Dockerfile` e o `docker-compose.yml` ficam no repositório.** O compose sobe o painel e os
+  coletores. O banco já existe na unidade e entra só pela conexão, lida do `.env` do servidor.
+
+Os arquivos novos dessa parte: `modulos/banco.py` (o único que fala SQL), `modulos/fonte.py` (lê
+da API ou do banco), `coletores/coletar_inmet.py`, `coletores/coletar_previsao.py`,
+`banco/esquema.sql`, `Dockerfile` e `docker-compose.yml`.
 
 - **A busca da decisão 7 é o coletor do Open-Meteo**, e a tabela da decisão 6 é a dele.
 - **Se o servidor e o banco chegarem antes do passo 4**, a aba já nasce lendo do banco, e o cache
