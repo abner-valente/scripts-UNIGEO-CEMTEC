@@ -79,6 +79,10 @@ radiação e pressão:
 | rajada | máxima |
 | direção do vento | dominante, como a resultante das horas já calculada em `app/variaveis.py` |
 
+São 7 e não 9 porque, por hora, só existem 7 grandezas diferentes: máxima, mínima e média do dia
+saem todas da mesma temperatura. Elas são exatamente as que o INMET mede, menos radiação e
+pressão. Pedir 9 horárias repetiria variáveis e faria cada ponto custar 2,7 em vez de 2,1.
+
 O dia é somado pela regra do projeto: a leitura das 00h fecha o dia anterior, como no INMET.
 Assim previsto e observado ficam comparáveis. O diário pronto do Open-Meteo vai das 00h às 23h,
 uma hora deslocado. Os nomes dos mapas seguem o catálogo do painel onde houver equivalente.
@@ -118,21 +122,28 @@ Por isso os mapas **não** são feitos interpolando a previsão nos pontos das e
 mostra um núcleo de chuva onde há estação. Os pontos das estações servem aos gráficos de linha e,
 mais tarde, ao previsto contra observado.
 
-**6. Guardar as horas, por rodada, só inserindo** (decidido em 07/10). Uma tabela só, com uma
-linha por modelo, rodada, ponto e hora prevista, e uma coluna por variável:
+**6. Guardar as horas, por rodada, só inserindo, e o diário tirado delas** (decidido em 07/10).
+Duas tabelas, as duas com uma coluna por variável:
 
 ```
-previsao_openmeteo
+previsao_horaria
   modelo, rodada_utc, ponto, latitude, longitude, hora_prevista_utc,
   temperatura, umidade, orvalho, chuva, vento, rajada, direcao
   chave: (modelo, rodada_utc, ponto, hora_prevista_utc)
+
+previsao_diaria
+  modelo, rodada_utc, ponto, latitude, longitude, dia_previsto,
+  temp_max, temp_min, temp_media, umid_min, orvalho_medio, chuva, vento_max, rajada_max,
+  direcao_dominante, risco_max
+  chave: (modelo, rodada_utc, ponto, dia_previsto)
 ```
 
 - **Cada rodada nova é um insert; nada é atualizado.** A "previsão atual" é uma consulta, ou uma
   view, que pega a rodada mais recente de cada modelo. A virada do dia não pede tratamento
   nenhum, e uma busca que falhe no meio não mistura rodadas.
-- **O diário sai das horas**, na consulta, pela regra da decisão 4. Uma fonte só para máxima,
-  mínima, chuva do dia e risco de fogo por hora e por dia.
+- **O diário é calculado das horas pelo coletor**, uma vez por rodada, pela regra da decisão 4, e
+  gravado na tabela diária. A mesma função faz isso para todos os pontos: não há duas versões de
+  "máxima do dia". Ele sobrevive à limpeza das horas antigas da grade.
 - **O histórico das rodadas fica**: o que cada rodada previa para um dia que já passou. É a base
   do previsto contra observado.
 - **Uma coluna por variável, e não uma linha por variável**, senão as linhas se multiplicam
@@ -144,11 +155,15 @@ Quanto guardar:
 
 | O quê | Prazo | Por quê | Tamanho |
 |---|---|---|---|
-| Grade horária (0,25°) | **21 dias** | 14 de horizonte + uma semana de folga para conferir a semana que passou com todas as antecedências | ~21 milhões de linhas, ~3 GB |
-| Estações, horário | a decidir | o horário para sempre custa ~37 milhões de linhas e ~4 GB por ano | |
-| Estações, diário tirado das horas | para sempre | é o que a verificação mais usa | ~1,5 milhão de linhas por ano |
+| Grade, horária e diária (0,25°) | **21 dias** | 14 de horizonte + uma semana de folga para conferir a semana que passou com todas as antecedências | ~21 milhões de linhas horárias, ~3 GB |
+| Estações, horária | **para sempre** | permite conferir horários: "a chuva chegou na hora prevista?" | ~37 milhões de linhas e ~4 GB por ano |
+| Estações, diária | **para sempre** | é o que a verificação do dia a dia mais usa | ~1,5 milhão de linhas por ano |
 
-O banco da UNIGEO comporta os 3 GB da grade com folga.
+A previsão incha por um motivo próprio: **cada hora futura é guardada uma vez por rodada**. Com 14
+dias de horizonte e duas rodadas por dia, cada hora real fica guardada umas 28 vezes, e esse é o
+histórico de como a previsão mudou até a hora chegar. O observado do INMET não tem isso: o Brasil
+inteiro dá uns 6,5 milhões de linhas por ano com as estações de hoje, e menos nos anos antigos,
+quando havia menos estações. O banco da UNIGEO comporta as duas coisas com folga.
 
 **7. A busca mora fora do painel**, num módulo novo, `modulos/previsao.py`, ao lado do
 `inmet.py`. No servidor, um coletor agendado chama essa função e grava no banco. Enquanto o
@@ -157,10 +172,16 @@ e compartilhada por todos. A chave é a **rodada** ("ECMWF de 06/10, 00 UTC"), e
 porque cada modelo publica a rodada horas depois do horário nominal. A aba mostra de que rodada é
 cada modelo.
 
-**8. Risco de fogo previsto, das mesmas horas.** A temperatura, a umidade e a rajada da regra
-30-30-30 estão entre as sete variáveis horárias: não há pedido separado. A regra já existe em
-`modulos/produtos/risco_fogo.py` e é aplicada como está, sem reescrever. Do dia 8 ao 14, sem o
-ICON, sai de dois modelos.
+**8. Risco de fogo previsto, hora a hora, das mesmas horas.** A temperatura, a umidade e a
+rajada da regra 30-30-30 estão entre as sete variáveis horárias: não há pedido separado. A regra é
+aplicada **a cada hora**, como no produto, e o pior nível do dia vai para a tabela diária. Ela já
+existe em `modulos/produtos/risco_fogo.py` e é usada como está, sem reescrever. Do dia 8 ao 14,
+sem o ICON, sai de dois modelos.
+
+Um cuidado conhecido: na estação, a regra usa a **máxima dentro da hora** (`TEM_MAX`) e a
+**mínima dentro da hora** (`UMD_MIN`) do INMET. O modelo dá o **valor da hora cheia**, que fica
+um pouco aquém dos extremos da hora. O risco previsto tende, então, a ser levemente mais
+conservador que o observado. O previsto contra observado vai mostrar quanto.
 
 **9. Escala de cores.** Os mapas de dias usam a mesma escala fixa dos mapas observados (0 a 45 °C
 etc.), para previsto e observado serem comparáveis. Os de anomalia pedem uma escala nova,
