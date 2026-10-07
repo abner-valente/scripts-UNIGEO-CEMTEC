@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from modulos import config, inmet
+from modulos import config, fonte
 
 PASTA_CACHE = config.RAIZ / "cache"
 
@@ -57,7 +57,7 @@ def leituras(codigo: str, inicio: datetime, fim: datetime,
     guardadas = _ler(codigo)
     faltando = _faltando(guardadas, inicio, fim)
     for comeco, termino in faltando:
-        guardadas = _juntar(guardadas, inmet.baixar_dados_estacao(codigo, comeco, termino))
+        guardadas = _juntar(guardadas, fonte.leituras_da_estacao(codigo, comeco, termino))
     if faltando:
         _gravar(codigo, guardadas)
     if guardadas is None:
@@ -89,7 +89,7 @@ def varias(codigos: tuple[str, ...], nomes: tuple[str, ...], inicio: datetime, f
             nome = tarefas[tarefa]
             try:
                 dados = tarefa.result()
-            except inmet.ErroINMET:
+            except fonte.ErroFonte:
                 falharam.append(nome)
             else:
                 if dados.empty:

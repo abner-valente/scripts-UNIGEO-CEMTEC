@@ -33,7 +33,7 @@ from app import qualidade
 from app import risco
 from app import superficie
 from app import variaveis
-from modulos import config, inmet, mapas
+from modulos import config, fonte, mapas
 from modulos.produtos import risco_fogo
 
 # A API manda o vento em m/s; os produtos trabalham em km/h, e aqui seguimos a mesma unidade
@@ -122,7 +122,7 @@ alt.data_transformers.enable("default", max_rows=20000)
 @st.cache_data(ttl=3600, show_spinner=False)
 def carregar_estacoes(uf: str) -> pd.DataFrame:
     """As estações do estado — as do produto: tabelas, listas, rankings e CSV saem daqui."""
-    return inmet.listar_estacoes(uf)
+    return fonte.estacoes(uf)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -140,7 +140,7 @@ def carregar_apoio(uf: str) -> pd.DataFrame:
     mapa, porque a poda tem folga (ver config.VIZINHOS_NA_PODA).
     """
     base = base_cartografica(uf)
-    return inmet.estacoes_de_apoio(config.recorte_de(uf), base.lon_grade[base.dentro_uf],
+    return fonte.estacoes_de_apoio(config.recorte_de(uf), base.lon_grade[base.dentro_uf],
                                    base.lat_grade[base.dentro_uf])
 
 

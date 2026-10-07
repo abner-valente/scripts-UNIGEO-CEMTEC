@@ -165,6 +165,11 @@ load_dotenv(RAIZ / ".env")
 TOKEN_INMET = os.getenv("TOKEN_INMET", "").strip()
 TOKEN_EXEMPLO = "seu_token_aqui"  # valor do .env.example, tratado como "não configurado"
 
+# De onde vêm os dados (modulos/fonte.py), escolhido por instalação: no .env do servidor ou nos
+# Secrets do Streamlit Cloud. Por enquanto só existe "apis", as APIs públicas; o banco da UNIGEO
+# e a API de leitura chegam nas próximas versões (docs/plano_arquitetura.md).
+FONTE_DADOS = os.getenv("FONTE_DADOS", "apis").strip().lower()
+
 # =====================================================
 # API DO INMET
 # =====================================================

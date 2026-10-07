@@ -685,6 +685,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 ├── main.py               # Ponto de entrada: escolha do produto e das datas
 ├── modulos/              # Peças compartilhadas por todos os produtos
 │   ├── config.py         # Configurações, o Recorte (o estado mapeado) e o Periodo (janelas de tempo)
+│   ├── fonte.py          # De onde vêm os dados: é a ele que os produtos e o painel pedem (hoje, as APIs)
 │   ├── inmet.py          # Acesso à API do INMET (estações e dados horários)
 │   ├── calculos.py       # Recorte no tempo, extremos, acumulados e interpolação IDW
 │   ├── mapas.py          # Mapas pontuais, interpolados e de classes (níveis de risco)

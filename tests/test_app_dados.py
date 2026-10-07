@@ -23,7 +23,7 @@ def api_contada(monkeypatch, serie):
     """Troca a API por dados sintéticos e conta quantas vezes ela foi chamada."""
     chamadas = []
 
-    def baixar(codigo, inicio, fim):
+    def baixar(codigo, inicio, fim, fuso=None):
         chamadas.append((inicio, fim))
         return serie("2026-09-15", "2026-09-16 05:00")
 
@@ -72,7 +72,7 @@ def test_alargar_a_janela_baixa_so_o_que_falta(cache_temporario, api_contada):
 
 def test_varias_sai_na_ordem_pedida_e_separa_quem_falhou(cache_temporario, monkeypatch, serie):
     """Em paralelo a ordem de chegada muda a cada consulta; a do gráfico não pode mudar junto."""
-    def baixar(codigo, inicio, fim):
+    def baixar(codigo, inicio, fim, fuso=None):
         if codigo == "A999":
             raise inmet.ErroINMET("estação fora do ar")
         return serie("2026-09-15", "2026-09-16 05:00")
@@ -99,7 +99,7 @@ def test_hora_guardada_vazia_e_reconsultada(cache_temporario, monkeypatch, serie
     medidas = [coluna for coluna in resposta.columns if coluna not in coleta.IDENTIFICACAO]
     resposta.loc[resposta["dt_utc"] >= pd.Timestamp("2026-09-15 20:00", tz="UTC"), medidas] = np.nan
 
-    def baixar(codigo, inicio, fim):
+    def baixar(codigo, inicio, fim, fuso=None):
         chamadas.append((inicio, fim))
         return resposta
 
@@ -117,7 +117,7 @@ def test_a_reconferencia_nao_volta_alem_do_teto(cache_temporario, monkeypatch, s
     vazia = serie("2026-09-15", "2026-09-16 05:00")
     medidas = [coluna for coluna in vazia.columns if coluna not in coleta.IDENTIFICACAO]
     vazia[medidas] = np.nan
-    monkeypatch.setattr(inmet, "baixar_dados_estacao", lambda codigo, inicio, fim: vazia)
+    monkeypatch.setattr(inmet, "baixar_dados_estacao", lambda codigo, inicio, fim, fuso=None: vazia)
 
     coleta.leituras("A702", *DIA.janela)
     faltando = coleta._faltando(coleta._ler("A702"), *DIA.janela)
@@ -127,7 +127,7 @@ def test_a_reconferencia_nao_volta_alem_do_teto(cache_temporario, monkeypatch, s
 
 
 def test_estacao_sem_dados_nao_deixa_arquivo(cache_temporario, monkeypatch):
-    monkeypatch.setattr(inmet, "baixar_dados_estacao", lambda codigo, inicio, fim: None)
+    monkeypatch.setattr(inmet, "baixar_dados_estacao", lambda codigo, inicio, fim, fuso=None: None)
 
     assert coleta.leituras("A702", *DIA.janela).empty
     assert not (cache_temporario / "cache").exists()

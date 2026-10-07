@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 
-from .. import calculos, config, excel, inmet, mapas
+from .. import calculos, config, excel, fonte, mapas
 from ..config import Periodo
 from ..mapas import EspecMapa
 
@@ -50,9 +50,9 @@ def _tabelas_de_apoio(recorte: config.Recorte, base, periodo: Periodo) -> dict |
     8 vizinhos que o IDW enxerga estariam todos do lado de cá, e a superfície extrapolaria
     tendo medição do outro lado.
     """
-    coletadas = inmet.baixar_apoio(recorte, base.lon_grade[base.dentro_uf],
-                                   base.lat_grade[base.dentro_uf], *periodo.janela_busca,
-                                   fuso=periodo.fuso)
+    coletadas = fonte.leituras_de_apoio(recorte, base.lon_grade[base.dentro_uf],
+                                        base.lat_grade[base.dentro_uf], *periodo.janela_busca,
+                                        fuso=periodo.fuso)
     if not coletadas:
         return None
     return montar_tabelas([resumir_estacao(dados, estacao, periodo, recorte.uf)
@@ -194,8 +194,8 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
     print("=" * 60)
 
     try:
-        coletados = inmet.baixar_estacoes(*periodo.janela_busca, uf=recorte.uf, fuso=periodo.fuso)
-    except inmet.ErroINMET as erro:
+        coletados = fonte.leituras_do_estado(*periodo.janela_busca, uf=recorte.uf, fuso=periodo.fuso)
+    except fonte.ErroFonte as erro:
         print(f"❌ Erro ao listar estações: {erro}")
         return 1
 

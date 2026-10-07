@@ -50,6 +50,8 @@ flowchart TD
 
 A regra de dependência é uma só: **`modulos/` nunca importa nada de `app/`**. O painel conhece os produtos, mas os produtos não sabem que o painel existe. Mantida essa regra, o `main.py` roda sem Streamlit instalado.
 
+E uma segunda, desde a v0.3.1: **os produtos e o painel pedem os dados ao `modulos/fonte.py`, e nunca direto ao `inmet.py`.** É o `fonte.py` que decide de onde vêm as leituras, pela configuração `FONTE_DADOS`: hoje só existem as APIs públicas, e o banco da UNIGEO e a API de leitura chegam nas próximas versões ([`plano_arquitetura.md`](plano_arquitetura.md)). Um teste (`test_produtos_e_painel_pedem_os_dados_a_fonte_e_nao_ao_inmet`) falha se alguém passar por fora.
+
 Tamanho de cada parte, para ter noção do que se está mantendo:
 
 | Parte | Linhas | O que tem |
@@ -132,7 +134,7 @@ python main.py --produto relatorio_inmet --uf MS --dataini 29/09/2026
 1. **`main.py` → `ler_consulta()`**: lê os argumentos, ou as variáveis no topo do arquivo quando eles faltam. Devolve três coisas: o **módulo do produto** (de `PRODUTOS`, que associa o `NOME` de cada produto ao seu módulo), o **`Periodo`** (com o fuso do recorte) e as **`opcoes`** (`{"recorte": ..., "hrtodas": ...}`).
 2. **`main.executar()`**: confere se o token está no `.env` e chama `produto.executar(periodo, opcoes)`. **Todo produto tem essa mesma assinatura**: é o contrato que o `main.py` conhece.
 3. Dentro do produto, no `relatorio_inmet.executar`:
-   1. `inmet.baixar_estacoes(...)` lista as estações operantes da UF (as em pane ficam de fora) e baixa as leituras de cada uma, **uma por vez**, com até 3 tentativas por consulta. Devolve uma lista de pares `(estação, leituras)` e imprime quem ficou de fora e por quê.
+   1. `fonte.leituras_do_estado(...)`, que hoje repassa ao `inmet.baixar_estacoes`, lista as estações operantes da UF (as em pane ficam de fora) e baixa as leituras de cada uma, **uma por vez**, com até 3 tentativas por consulta. Devolve uma lista de pares `(estação, leituras)` e imprime quem ficou de fora e por quê.
    2. `resumir_estacao` calcula, para cada estação, os extremos e os acumulados da janela, com `calculos.recortar`, `indice_extremo` e `acumulado_chuva`.
    3. `montar_tabelas` monta uma tabela por aba do Excel, ordenada.
    4. `excel.salvar_relatorio` grava a planilha.
@@ -190,6 +192,7 @@ A regra de organização: **conta vai para um módulo de `app/` sem Streamlit; t
 | Arquivo | Para que serve | Você mexe aqui quando… |
 |---|---|---|
 | `config.py` | `Recorte`, `Periodo` e **todas as constantes**: limiares do 30-30-30, IDW, DPI, logos, URLs, tentativas, cores do risco | quer mudar um número que vale para o projeto todo |
+| `fonte.py` | de onde vêm os dados: as funções que os produtos e o painel chamam (`estacoes`, `leituras_do_estado`, `leituras_de_apoio`…), e a escolha da fonte pela configuração `FONTE_DADOS`. Hoje só repassa ao `inmet.py`. | uma fonte nova entra (o banco, a API de leitura) |
 | `inmet.py` | toda conversa com a API: lista de estações, dados horários, tentativas, vizinhas, resumo de quem ficou de fora. O token sai das mensagens de erro (`_sem_token`). | a API muda, ou a forma de baixar |
 | `calculos.py` | contas puras: `recortar` (a janela `(início, fim]`), extremos, acumulado de chuva, `criar_grade`, `interpolar_idw` (distâncias em km), `apoio_que_entra` | quer mudar como se interpola ou se recorta no tempo |
 | `mapas.py` | todos os desenhos: `mapa_pontual`, `mapa_interpolado`, `mapa_de_grade`, os de classes, logos, ranking, setas de vento; `EspecMapa`, `EspecClasses`, `Tela`, `BaseCartografica` | o **visual** de um mapa muda, nos dois lados |
