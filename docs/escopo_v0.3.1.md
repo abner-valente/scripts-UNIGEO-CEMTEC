@@ -250,13 +250,16 @@ Em 07/10 ficaram definidos mais dois pontos:
   `pg_partman` nem `pg_cron` (detalhes em [`plano_arquitetura.md`](plano_arquitetura.md)).
   As rodadas entram em lote (`COPY`), porque são ~500 mil linhas cada. A atualização das últimas
   48 h do INMET usa `INSERT ... ON CONFLICT DO UPDATE`.
-- **O `Dockerfile` e o `docker-compose.yml` ficam no repositório.** O compose sobe o painel e os
-  coletores. O banco já existe na unidade e entra só pela conexão, lida do `.env` do servidor.
+- **O `Dockerfile` e o `docker-compose.yml` ficariam no repositório**, com o painel e os
+  coletores. **Adiado no mesmo dia:** a VM é Windows e o Docker não está rodando nela. Por ora, o
+  painel e os coletores rodam direto no Windows, pelo Agendador de Tarefas (passo 8 do plano). O
+  banco entra só pela conexão, lida do `.env` do servidor, nos dois casos.
 
 A ordem de execução dessa parte está em [`plano_arquitetura.md`](plano_arquitetura.md). Os
 arquivos novos dela: `modulos/banco.py` (o único que fala SQL), `modulos/fonte.py` (lê
 da API ou do banco), `coletores/coletar_inmet.py`, `coletores/coletar_previsao.py`,
-`banco/esquema.sql`, `Dockerfile` e `docker-compose.yml`.
+`banco/esquema.sql`, e o `Dockerfile` e o `docker-compose.yml` quando houver Docker no
+servidor.
 
 - **A busca da decisão 7 é o coletor do Open-Meteo**, e a tabela da decisão 6 é a dele.
 - **Se o servidor e o banco chegarem antes do passo 4**, a aba já nasce lendo do banco, e o cache
@@ -308,9 +311,9 @@ pela configuração de cada instalação:
 - o banco, no servidor interno;
 - a API de leitura, no app da nuvem e no `main.py`.
 
-O resto do código não sabe de onde os dados vêm. A API é um serviço a mais no
-`docker-compose.yml`. A tecnologia ainda vai ser escolhida; o candidato natural é o FastAPI, por
-ser Python como o resto.
+O resto do código não sabe de onde os dados vêm. A API é criada e mantida pelo programador, na
+máquina host, que alcança o banco e a VM. A tecnologia ainda vai ser escolhida; o candidato
+natural é o FastAPI, por ser Python como o resto.
 
 **Depende de:** a gerência aprovar uma versão externa, e a TI aceitar publicar um serviço por
 HTTPS. Enquanto isso, a versão da nuvem segue pela opção 1.

@@ -39,9 +39,10 @@ nuvem continuam indo direto às APIs.
 
 | Item | Situação em 07/10 |
 |---|---|
-| VM com Docker | **pronta**, e o programador já tem acesso |
+| A VM | **Windows**, com acesso do programador. **O Docker não está rodando nela**: por ora, o painel e os coletores rodam direto no Windows (ver abaixo) |
 | A VM alcança o INMET | **sim** |
-| A VM alcança o Open-Meteo, inclusive de dentro de um container | a testar, com os comandos `curl` registrados na conversa de 07/10 |
+| A VM alcança o Open-Meteo | a testar no PowerShell, com `Invoke-WebRequest` (o `curl` do PowerShell não é o curl de verdade) |
+| Versão do Windows da VM | a conferir: o Python 3.14 pede um Windows recente |
 | Versão do PostgreSQL e extensões disponíveis | **PostgreSQL 11.14**, com **PostGIS 2.5.3** instalado; sem `pg_partman`, `pg_cron` nem `timescaledb` (ver abaixo) |
 | Quem cria e mantém a API de leitura | **o programador**, na máquina host, que alcança o banco e a VM ao mesmo tempo |
 | A TI aceita publicar a API por HTTPS para fora? | a perguntar. Decide entre a "opção 2 com API" e a opção 3 (cópia na nuvem) |
@@ -61,7 +62,7 @@ outra das extensões procuradas.
 **O que muda no jeito de fazer:**
 - **Sem `pg_partman` e sem `pg_cron`, quem cuida das partições é o coletor.** A cada execução ele
   cria as partições dos próximos dias e apaga as que passaram do prazo. O agendamento fica no
-  Docker, junto dos coletores, e não no banco.
+  servidor, junto dos coletores, e não no banco.
 - **Três limites da 11 que o desenho respeita:**
   - partição se apaga de uma vez, porque desanexar sem travar só chegou na 14; a limpeza segura
     a tabela por um instante, de madrugada;
@@ -118,8 +119,23 @@ grade.
 - *Como confirmar:* os produtos e o painel lendo do banco dão o mesmo resultado que lendo das
   APIs.
 
-**8. O `Dockerfile` e o `docker-compose.yml`**, com o painel e os coletores, e a subida na VM. O
-banco entra só pela conexão, lida do `.env` do servidor.
+**8. A instalação na VM, direto no Windows, sem Docker** (decidido em 07/10, porque o Docker não
+está rodando na VM).
+- O Python 3.14 e o Git instalados na VM; o repositório clonado numa pasta fixa; um ambiente
+  virtual com o `app/requirements.txt`; o `.env` com o token e, depois, a conexão do banco. É o
+  mesmo jeito de rodar das máquinas de desenvolvimento.
+- **O painel** roda com `streamlit run app\explorador.py --server.port 8501 --server.address 0.0.0.0`,
+  e a equipe acessa por `http://<nome-da-VM>:8501`. A porta precisa estar liberada no firewall do
+  Windows, só para a rede interna.
+- **Para continuar no ar depois de um reinício**, o painel sobe por uma tarefa do **Agendador de
+  Tarefas do Windows**, "ao iniciar o computador", que roda mesmo sem ninguém conectado e se
+  reinicia se cair.
+- **Os coletores** também vão pelo Agendador de Tarefas: o do INMET de hora em hora, o do
+  Open-Meteo duas vezes por dia.
+- **Para atualizar**, o mesmo caminho de sempre (`git fetch`, mudar para a tag escolhida, instalar
+  o que faltar) e reiniciar a tarefa do painel, porque o Streamlit não recarrega os módulos sozinho.
+- **O Docker fica para depois**, se a TI ativar containers Linux na VM ou oferecer uma VM Linux. O
+  `Dockerfile` e o `docker-compose.yml` só entram no repositório quando houver onde usá-los.
 
 **Marco: o painel interno funcionando na rede da unidade.**
 
@@ -154,7 +170,7 @@ ela continua sob demanda, a 0,5°, até a publicação da API (passo 11).
 | Versão | O que entra |
 |---|---|
 | **v0.3.x** | a fase 1 e a aba de previsão sob demanda |
-| **v0.4.x** | o banco, os dois coletores, o Docker e o servidor interno (fases 2 e 3); a aba de previsão passa a ler do banco no servidor |
+| **v0.4.x** | o banco, os dois coletores e o servidor interno no Windows (fases 2 e 3); a aba de previsão passa a ler do banco no servidor |
 | **v0.5.x** | a API de leitura e a versão externa (fase 4) |
 
 Cada versão entra na `main` por PR, como de costume. O Streamlit Cloud acompanha a `main`; o
