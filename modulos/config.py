@@ -188,6 +188,19 @@ PAUSA_ENTRE_TENTATIVAS = 2     # segundos antes de repetir; dobra a cada tentati
 HORAS_BUSCA_TEMPO_REAL = 96    # histórico baixado no modo tempo real (cobre o acumulado de 72 h)
 
 # =====================================================
+# PREVISÃO (OPEN-METEO)
+# =====================================================
+# As decisões por trás destes números estão em docs/escopo_v0.3.1.md.
+URL_OPENMETEO = "https://api.open-meteo.com/v1/forecast"
+URL_OPENMETEO_RODADA = "https://api.open-meteo.com/data/{modelo}/static/meta.json"
+TIMEOUT_OPENMETEO = 120        # segundos: um pedido de centenas de pontos leva uns 2 s, mas pode demorar
+# Os modelos que a equipe de meteorologia prefere (07/10/2026). O ICON só vai até o dia 7,5.
+MODELOS_PREVISAO = ("ecmwf_ifs025", "gfs_seamless", "icon_seamless")
+DIAS_PREVISAO = 14             # o 15º dia faria cada ponto pesar 15/14 na cota
+GRADE_PREVISAO = 0.5           # graus entre os pontos da grade; 0,25 quando a busca for agendada
+OPENMETEO_POR_MINUTO = 600     # limite gratuito de chamadas por minuto
+
+# =====================================================
 # MAPAS
 # =====================================================
 # Até que distância do enquadramento uma estação de outro estado ainda ajuda a interpolar. Em MS

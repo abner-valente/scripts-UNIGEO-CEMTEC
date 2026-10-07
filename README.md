@@ -687,6 +687,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │   ├── config.py         # Configurações, o Recorte (o estado mapeado) e o Periodo (janelas de tempo)
 │   ├── fonte.py          # De onde vêm os dados: é a ele que os produtos e o painel pedem (hoje, as APIs)
 │   ├── inmet.py          # Acesso à API do INMET (estações e dados horários)
+│   ├── openmeteo.py      # Previsão do Open-Meteo (ECMWF, GFS e ICON), hora a hora, e o dia tirado das horas
 │   ├── calculos.py       # Recorte no tempo, extremos, acumulados e interpolação IDW
 │   ├── mapas.py          # Mapas pontuais, interpolados e de classes (níveis de risco)
 │   ├── graficos.py       # Gráficos de barras e calendário, com o estilo comum aos produtos

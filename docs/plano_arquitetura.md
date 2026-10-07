@@ -88,6 +88,9 @@ passam a pedir os dados a ele, e não mais direto ao INMET.
 das estações, os três modelos, a rodada e os pedidos de até 600 chamadas por minuto.
 - *Como confirmar:* os testes com o Open-Meteo simulado, e uma busca de verdade para medir o custo
   do dado horário e quanto a máxima tirada das horas fica abaixo da do próprio Open-Meteo.
+- *Feito em 07/10.* O horário custa o mesmo que o diário, e a máxima das horas é igual à do
+  Open-Meteo (diferença de 0,0 °C nos 14 dias). A busca de MS a 0,5° levou 12 s; os números estão
+  no escopo da v0.3.1.
 
 ## Fase 2: o banco e os coletores
 

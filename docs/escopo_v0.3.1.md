@@ -87,10 +87,11 @@ O dia é somado pela regra do projeto: a leitura das 00h fecha o dia anterior, c
 Assim previsto e observado ficam comparáveis. O diário pronto do Open-Meteo vai das 00h às 23h,
 uma hora deslocado. Os nomes dos mapas seguem o catálogo do painel onde houver equivalente.
 
-Um cuidado: o ECMWF só publica de 3 em 3 horas no começo e de 6 em 6 depois, e o Open-Meteo
-preenche as horas do meio. Nos dias mais distantes, a máxima tirada das horas pode ficar um pouco
-abaixo do pico. Isso é medido na primeira busca de verdade, comparando com a máxima diária do
-próprio Open-Meteo.
+O ECMWF só publica de 3 em 3 horas no começo e de 6 em 6 depois, e o Open-Meteo preenche as
+horas do meio. Temia-se que, nos dias mais distantes, a máxima tirada das horas ficasse abaixo do
+pico. **Medido em 07/10, não fica:** em 20 pontos de MS, nos 14 dias e nos três modelos, a máxima
+diária do próprio Open-Meteo foi igual à máxima das horas, com diferença de 0,0 °C. O diário pronto
+do Open-Meteo é tirado das mesmas horas; tirá-lo aqui não perde nada.
 
 **5. Grade de 0,25° no coletor agendado; 0,5° enquanto a busca for sob demanda.** A margem é
 igual ao espaçamento: uma fileira de pontos além da divisa, sem a qual a cor não chega até a
@@ -100,7 +101,7 @@ borda.
 |---|---|---|
 | retângulo inteiro do mapa (0,5°) | 272 | inclui cantos que o recorte esconde |
 | só dentro do estado (0,5°) | 124 | a borda fica sem cor |
-| estado + margem de 0,5°, grade de 0,5° | 178 | cabe num pedido só, de uns 2 segundos |
+| estado + margem de 0,5°, grade de 0,5° | 178 | cabe num pedido só: 12 segundos com as horas dos três modelos (07/10) |
 | **estado + margem de 0,25°, grade de 0,25°** | **607** | **o espaçamento do próprio ECMWF e do GFS** |
 
 A 0,25° um mapa custa mais que o limite de 600 chamadas por minuto, então precisa ser dividido
@@ -207,8 +208,9 @@ Em resumo, pela documentação e de acordo com o que foi medido:
 custo = pontos × máx(1, variáveis × modelos ÷ 10) × máx(1, dias ÷ 14)
 ```
 
-O que não entra na conta é quantos números voltam. **Que o dado horário custa o mesmo que o diário
-vem da regra documentada e não foi medido**: confere-se na primeira busca de verdade.
+O que não entra na conta é quantos números voltam. **O dado horário custa o mesmo que o diário,
+medido em 07/10:** 280 pontos horários (588 pela regra) deixaram passar o pedido seguinte do
+mesmo minuto, e 290 (609) o fizeram ser recusado, exatamente onde a regra põe o limite.
 
 Para MS, com 3 modelos, 7 variáveis horárias e 14 dias, cada ponto custa 2,1:
 
@@ -224,9 +226,10 @@ Para MS, com 3 modelos, 7 variáveis horárias e 14 dias, cada ponto custa 2,1:
 1. **`modulos/openmeteo.py`.** A busca: os pontos da grade e as estações de MS, os três modelos, a
    identificação da rodada, a divisão em pedidos de até 600 chamadas por minuto, e o aviso quando
    o Open-Meteo não responder ou a cota acabar. Os testes usam um Open-Meteo simulado, como o
-   INMET já é, sob a mesma trava que proíbe rede nos testes. Na primeira busca de verdade:
-   conferir se o horário custa o mesmo que o diário, e quanto a máxima tirada das horas fica
-   abaixo da do próprio Open-Meteo.
+   INMET já é, sob a mesma trava que proíbe rede nos testes. **Feito em 07/10.** A primeira
+   busca de verdade de MS (rodadas de 07/10, 12 UTC): a grade de 0,5° (178 pontos) levou 12 s e
+   deu 153.970 linhas horárias e 6.942 diárias; as 58 estações, 8 s, 50.170 e 2.262. O ICON dá
+   pouco mais da metade das linhas dos outros dois, porque para no dia 7,5.
 2. **A tabela e o coletor**, se o servidor e o banco já existirem. Se não, o cache por rodada no
    painel.
 3. **Gráficos de linha por estação**, com as contas em `app/previsao.py` e a aba no
