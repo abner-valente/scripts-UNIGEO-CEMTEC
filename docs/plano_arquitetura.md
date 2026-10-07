@@ -42,10 +42,39 @@ nuvem continuam indo direto às APIs.
 | VM com Docker | **pronta**, e o programador já tem acesso |
 | A VM alcança o INMET | **sim** |
 | A VM alcança o Open-Meteo, inclusive de dentro de um container | a testar, com os comandos `curl` registrados na conversa de 07/10 |
-| Versão do PostgreSQL e extensões disponíveis (`pg_partman`, `pg_cron`, `postgis`) | a conferir no DBeaver |
+| Versão do PostgreSQL e extensões disponíveis | **PostgreSQL 11.14**, com **PostGIS 2.5.3** instalado; sem `pg_partman`, `pg_cron` nem `timescaledb` (ver abaixo) |
 | Quem cria e mantém a API de leitura | **o programador**, na máquina host, que alcança o banco e a VM ao mesmo tempo |
 | A TI aceita publicar a API por HTTPS para fora? | a perguntar. Decide entre a "opção 2 com API" e a opção 3 (cópia na nuvem) |
 | A gerência quer uma versão externa? | a perguntar. Sem ela, a fase 4 para no passo 10 |
+
+### O que a versão do banco muda
+
+Consultado em 07/10: **PostgreSQL 11.14** (Red Hat, 64 bits), com **PostGIS 2.5.3** e nenhuma
+outra das extensões procuradas.
+
+**O que a 11 já tem e o plano usa:**
+- tabelas particionadas, com chave primária na tabela inteira e `INSERT ... ON CONFLICT`
+  funcionando nelas. É o que permite atualizar as últimas 48 h do INMET;
+- `COPY` direto na tabela particionada;
+- índices BRIN, pequenos e bons para tabelas que só crescem no tempo.
+
+**O que muda no jeito de fazer:**
+- **Sem `pg_partman` e sem `pg_cron`, quem cuida das partições é o coletor.** A cada execução ele
+  cria as partições dos próximos dias e apaga as que passaram do prazo. O agendamento fica no
+  Docker, junto dos coletores, e não no banco.
+- **Três limites da 11 que o desenho respeita:**
+  - partição se apaga de uma vez, porque desanexar sem travar só chegou na 14; a limpeza segura
+    a tabela por um instante, de madrugada;
+  - não há colunas calculadas pelo banco, que só chegaram na 12;
+  - outras tabelas não podem apontar (chave estrangeira) para uma tabela particionada; isso só
+    chegou na 12.
+- **O PostGIS é um bônus, não uma dependência.** Ele permite guardar estações e pontos da grade
+  com geometria e perguntar, por exemplo, quais caem dentro de MS.
+
+**Um alerta para a TI:** o PostgreSQL 11 está fora de suporte desde novembro de 2023 e não recebe
+mais correções de segurança. O banco continua fechado para fora em todas as opções, e é a API que
+vai para a internet na fase 4. Mesmo assim, vale recomendar uma atualização (14 ou mais nova) em
+algum momento. O plano não depende dela.
 
 ## Fase 1: a fundação, sem mudar nada para a equipe
 

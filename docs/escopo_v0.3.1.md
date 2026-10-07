@@ -245,7 +245,9 @@ sua tabela: o INMET do Brasil inteiro, de hora em hora, e o Open-Meteo de MS. O 
 ainda está aberto.
 
 Em 07/10 ficaram definidos mais dois pontos:
-- **O banco é PostgreSQL.** O particionamento por dia de coleta usa o particionamento nativo dele.
+- **O banco é PostgreSQL**, versão 11.14, com PostGIS. O particionamento por dia de coleta usa o
+  particionamento nativo dele, e é o coletor quem cria e apaga as partições, porque o banco não tem
+  `pg_partman` nem `pg_cron` (detalhes em [`plano_arquitetura.md`](plano_arquitetura.md)).
   As rodadas entram em lote (`COPY`), porque são ~500 mil linhas cada. A atualização das últimas
   48 h do INMET usa `INSERT ... ON CONFLICT DO UPDATE`.
 - **O `Dockerfile` e o `docker-compose.yml` ficam no repositório.** O compose sobe o painel e os
