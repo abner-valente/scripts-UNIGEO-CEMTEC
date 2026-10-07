@@ -261,6 +261,57 @@ da API ou do banco), `coletores/coletar_inmet.py`, `coletores/coletar_previsao.p
 - **No servidor, a busca é agendada.** A primeira pessoa deixa de esperar, e a grade de 0,25°
   passa a caber.
 
+### Duas instalações: o servidor interno e o Streamlit Cloud
+
+A ideia de partida da gerência é que o painel fique só na rede interna do IMASUL. O programador
+prefere manter também uma versão na internet, e isso pode mudar. Por isso o código é pensado para
+**rodar nos dois lugares ao mesmo tempo**: um repositório, duas instalações, cada uma com a sua
+configuração. O problema é a versão da nuvem ler dados que estão atrás do firewall da unidade.
+Foram consideradas quatro formas:
+
+| Opção | Como a versão da nuvem lê os dados | Situação |
+|---|---|---|
+| 1. Direto das APIs | Como hoje: consulta o INMET e o Open-Meteo sozinha. Sem o histórico do banco, com a previsão a 0,5° sob demanda. | o ponto de partida: não pede nada novo |
+| 2. O banco aberto para a internet | O app da nuvem faz consultas SQL no PostgreSQL da unidade | **descartada**: expõe o banco |
+| **2 com API. Uma API só de leitura na frente do banco** | O app da nuvem pede à API, por HTTPS, com chave | **escolhida em 07/10**, se houver versão externa com os mesmos dados |
+| 3. Uma cópia publicada na nuvem | O servidor envia uma cópia para fora, e a nuvem lê a cópia | a saída se a TI não aceitar nenhuma conexão de fora para dentro |
+
+**Por que a API.** Ela já seria necessária de qualquer jeito: é o que deixa o `main.py`, nas
+máquinas da equipe, ler do banco sem que cada máquina tenha a senha dele. Com a API pronta,
+atender também o app da nuvem vira uma decisão de rede (deixá-la acessível de fora) e não um
+software novo. E, comparada a abrir o banco:
+- **o banco nunca fica exposto.** De fora, só se alcança a API, por HTTPS;
+- **só existem as perguntas que foram escritas**, como "as leituras destas estações nesta janela"
+  ou "a previsão atual deste modelo". Ninguém de fora manda SQL, e a API entra no banco com um
+  usuário que só lê;
+- **há controle de quem pede e quanto pede**: uma chave, guardada nos Secrets do Streamlit, um
+  limite de pedidos e um registro dos acessos;
+- **o banco pode mudar sem quebrar o painel**, porque o que o painel conhece é o formato das
+  respostas.
+
+**O que ela pede:**
+- **A TI precisa liberar a API para a internet**, com HTTPS e um endereço próprio, e alguém
+  cuida das atualizações e do monitoramento.
+- **A chave é a principal proteção.** O Streamlit Cloud não sai por um endereço fixo, então não
+  dá para liberar a API só para ele pelo endereço.
+- **As respostas têm de ser enxutas.** A API entrega o que o painel vai desenhar, como o mapa de
+  um dia (607 valores), e não a tabela crua de ~600 mil linhas de uma rodada.
+- **A versão da nuvem passa a depender do servidor interno.** Se ele cair, ela cai junto. Na
+  opção 3 isso não aconteceria.
+
+**Como fica o código.** O `modulos/fonte.py` passa a ter três formas de buscar os dados, escolhidas
+pela configuração de cada instalação:
+- as APIs públicas, como hoje;
+- o banco, no servidor interno;
+- a API de leitura, no app da nuvem e no `main.py`.
+
+O resto do código não sabe de onde os dados vêm. A API é um serviço a mais no
+`docker-compose.yml`. A tecnologia ainda vai ser escolhida; o candidato natural é o FastAPI, por
+ser Python como o resto.
+
+**Depende de:** a gerência aprovar uma versão externa, e a TI aceitar publicar um serviço por
+HTTPS. Enquanto isso, a versão da nuvem segue pela opção 1.
+
 ## Fora do escopo
 
 - **Outros estados**, por causa do custo (decisão 1).
