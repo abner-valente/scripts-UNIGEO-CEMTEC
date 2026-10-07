@@ -458,8 +458,12 @@ Pronto — os arquivos passam a ser os da versão nova. A pasta `saida/`, com os
 Para ver em que versão você está:
 
 ```bash
-git log --oneline -1
+git describe --tags
 ```
+
+A resposta `0.2.2` quer dizer exatamente a versão 0.2.2. Algo como `0.2.2-3-g1a2b3c4` quer dizer três commits depois dela, ainda sem versão nova fechada. O que mudou em cada uma está no [CHANGELOG.md](CHANGELOG.md).
+
+A versão fechada é uma tag **sem** o `v` (`0.2.2`). O nome com `v` (`v0.2.3`) é a branch onde a versão está sendo feita: se os dois tivessem o mesmo nome, o git não saberia qual dos dois você quer dizer.
 
 ### Se o `git pull` reclamar de alterações locais
 
@@ -487,7 +491,7 @@ Se a atualização mexeu no `requirements.txt`, instale o que faltar, com o ambi
 pip install -r requirements.txt
 ```
 
-Vale também conferir a seção [Como usar](#como-usar): uma versão nova pode trazer produtos novos ou mudar o nome de alguma opção.
+O que mudou em cada versão está no [CHANGELOG.md](CHANGELOG.md). Comece pelo grupo **Atenção ao atualizar** da versão nova: é ali que fica o que pode quebrar um comando anotado ou mudar um resultado já conhecido. Vale também conferir a seção [Como usar](#como-usar), que descreve as opções como elas estão hoje.
 
 ## Configuração
 
@@ -598,7 +602,8 @@ O **mesmo mapa interpolado dos produtos** — mesma interpolação IDW, mesmo re
 | **O que o mapa mostra** | Neste tamanho, o **padrão**: a superfície interpolada e as estações como pontos. Barra de cores, grade de latitude e longitude e valor de cada estação saem do desenho — com 62 estações numa coluna de ~470 px eles se cobrem e viram borrão, e a moldura de coordenadas toma a borda inteira. A **faixa de valores** (mínimo e máximo do instante) vai escrita sob cada mapa, e a caixa **"Mostrar o valor de cada estação"** traz os números de volta, para ler ampliando no ícone de tela cheia |
 | **Variáveis** | Todas, menos a direção do vento: interpolar ângulo entre 350° e 10° daria 180°, o rumo oposto. No mapa, direção se mostra com seta, como o relatório faz sobre a rajada |
 | **Quando não desenha** | Se menos de 3 estações mediram naquele instante, a tela avisa em vez de mostrar uma superfície inventada |
-| **Baixar PNG** | Um botão por mapa, com o mesmo desenho da tela em 150 dpi. Os mapas do relatório, com título, logos e ranking, continuam saindo pelo `main.py` |
+| **Baixar PNG** | Um botão por mapa, com o mesmo desenho da tela em 150 dpi |
+| **Baixar PNG do boletim** | Um segundo botão por mapa, nesta aba, na Chuva e no Risco de Fogo: o mapa **na moldura do relatório**, como o `main.py` grava — título, subtítulo com a janela e o fuso, crédito INMET/SEMADESC, os logos do CEMTEC e da SEMADESC, o ranking das cinco estações e a barra de cores, em 300 dpi. **As cores e a escala são as da tela** (decisão da equipe, 01/10/2026): o que se baixa é o que se vê, e não o que o `main.py` pintaria — ele estica a escala ao dado do dia e usa outras paletas na temperatura. Os mapas de risco saem com os títulos e os nomes de arquivo do `risco_fogo`, e o horário leva o nível e as condições de cada estação, como o mapa horário do produto. O desenho só acontece no clique (~0,7 s e 1,5 MB por mapa), para o deslizante não pagar por um arquivo que se baixa de vez em quando. Exige o Streamlit 1.52 ou mais novo |
 | **GIF do período** | Um botão por mapa monta a **sequência** da janela — um quadro por hora (ou por dia), cada um com a data e a hora escritas dentro, porque fora do painel o GIF vira um arquivo solto. O mapa parado diz como estava naquela hora; a sequência mostra por onde a frente entrou. A escala de cores fica **travada no período inteiro**: esticada a cada quadro, as cores piscariam e quem olha veria variação onde não houve. Acima de 72 quadros ele passa a pular de tantas em tantas horas — o carimbo deixa o salto à vista. Fica atrás de um botão porque custa ~0,08 s por quadro |
 
 ### Aba "Risco de Fogo"
@@ -669,6 +674,8 @@ Radiação levemente negativa à noite é ruído conhecido do sensor, não defei
 
 Os scripts da equipe estão sendo migrados aos poucos. Cada um vira um produto em `modulos/produtos/`, reaproveitando as peças compartilhadas (API do INMET, períodos, cálculos, mapas e Excel). O passo a passo está em [`docs/como_migrar_um_script.md`](docs/como_migrar_um_script.md).
 
+Para mexer no código — como as peças se encaixam, onde mudar cada coisa e as armadilhas conhecidas —, veja o [guia de manutenção](docs/guia_de_manutencao.md).
+
 Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesmas subseções, nesta ordem: **O que calcula**, **Como rodar**, **modos de tempo aceitos**, **Saídas**, **Exemplos**, **Dados de referência**, **Notas metodológicas**, **Mudanças em relação aos scripts legados** e **Decisões da equipe de meteorologia**. As imagens dos exemplos ficam em `docs/img/<produto>/`, reduzidas para cerca de 1000 px de largura.
 
 ## Estrutura do repositório
@@ -691,6 +698,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │   ├── dados.py          # Coleta com cache, usada só pelo explorador
 │   ├── variaveis.py      # Catálogo do que se pode mapear e traçar, com a regra de cada um
 │   ├── animacao.py       # GIF do mapa no tempo: quais quadros entram e o carimbo de cada um
+│   ├── boletim.py        # Moldura do relatório (título, logos, ranking) para o PNG do boletim
 │   ├── chuva.py          # Acumulados que olham para trás do período e a cascata
 │   ├── risco.py          # Risco de fogo na tela: traduz o formato para a regra do produto
 │   ├── superficie.py     # Superfície interpolada como imagem, para o mapa navegável
@@ -699,7 +707,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 ├── ferramentas/          # Scripts auxiliares (ex.: preparar os shapefiles de um estado)
 ├── tests/                # Testes automatizados (pytest), com a API do INMET simulada
 ├── .github/workflows/    # Execução automática dos testes no GitHub (GitHub Actions)
-├── docs/                 # Documentos da equipe (ex.: questões para a meteorologia, guia de migração)
+├── docs/                 # Documentos da equipe (ex.: questões para a meteorologia, guias de migração e de manutenção)
 │   └── img/              # Mapas de exemplo usados neste README, um subdiretório por produto
 ├── shp/                  # Shapefiles de cada estado: limite estadual e municípios
 ├── img/                  # Logos inseridos nos mapas (PNG com fundo transparente)
@@ -708,6 +716,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 ├── requirements.txt
 ├── requirements-dev.txt  # Dependências de desenvolvimento (testes)
 ├── pytest.ini            # Configuração dos testes
+├── CHANGELOG.md          # O que mudou em cada versão, para quem usa
 ├── .env                  # Token do INMET (local, fora do controle de versão)
 ├── .env.example          # Modelo do arquivo .env
 └── README.md

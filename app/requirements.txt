@@ -9,7 +9,7 @@
 # manter. Se um dia isso pesar demais, o caminho é converter os shapefiles para GeoJSON e fazer
 # o IDW em numpy puro — mas aí a tela e o relatório podem divergir com o tempo.
 
-streamlit>=1.50
+streamlit>=1.52   # o botão do PNG do boletim só desenha no clique: data= aceita função desde a 1.52
 altair>=5.0
 pydeck>=0.9   # mapa navegável; já vem com o streamlit, declarado aqui porque o app o importa
 pandas>=2.0
