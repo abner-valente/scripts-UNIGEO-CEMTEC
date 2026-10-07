@@ -251,7 +251,8 @@ Em 07/10 ficaram definidos mais dois pontos:
 - **O `Dockerfile` e o `docker-compose.yml` ficam no repositório.** O compose sobe o painel e os
   coletores. O banco já existe na unidade e entra só pela conexão, lida do `.env` do servidor.
 
-Os arquivos novos dessa parte: `modulos/banco.py` (o único que fala SQL), `modulos/fonte.py` (lê
+A ordem de execução dessa parte está em [`plano_arquitetura.md`](plano_arquitetura.md). Os
+arquivos novos dela: `modulos/banco.py` (o único que fala SQL), `modulos/fonte.py` (lê
 da API ou do banco), `coletores/coletar_inmet.py`, `coletores/coletar_previsao.py`,
 `banco/esquema.sql`, `Dockerfile` e `docker-compose.yml`.
 
