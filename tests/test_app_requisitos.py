@@ -24,7 +24,7 @@ REQUISITOS = RAIZ / "app" / "requirements.txt"
 
 # Os módulos do painel que a tela importa. O explorador.py fica de fora: importá-lo executa a
 # página inteira, que precisa do Streamlit rodando.
-MODULOS = ["animacao", "chuva", "dados", "qualidade", "risco", "superficie", "variaveis"]
+MODULOS = ["animacao", "chuva", "dados", "previsao", "qualidade", "risco", "superficie", "variaveis"]
 
 ESPIAO = f"""
 import sys
