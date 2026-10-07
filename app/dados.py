@@ -100,7 +100,21 @@ def varias(codigos: tuple[str, ...], nomes: tuple[str, ...], inicio: datetime, f
                 aviso(concluidas, len(tarefas))
 
     series = [chegaram[nome].assign(Estação=nome) for nome in nomes if nome in chegaram]
-    return (pd.concat(series, ignore_index=True) if series else pd.DataFrame()), sorted(falharam)
+    if not series:
+        return _sem_leituras(fuso), sorted(falharam)
+    return pd.concat(series, ignore_index=True), sorted(falharam)
+
+
+def _sem_leituras(fuso: ZoneInfo) -> pd.DataFrame:
+    """Uma tabela vazia, mas com as colunas que todo mundo procura: a estação e as duas horas.
+
+    Acontece quando nenhuma estação veio, como quando o INMET não devolve a lista das vizinhas,
+    ou devolve e todas falham. Uma tabela sem coluna nenhuma derrubava quem filtrava pelo
+    horário (`leituras["dt_local"]`), e o painel caía por falta de dado que ele nem ia desenhar.
+    """
+    return pd.DataFrame({"Estação": pd.Series(dtype=object),
+                         "dt_utc": pd.Series(dtype=pd.DatetimeTZDtype(tz="UTC")),
+                         "dt_local": pd.Series(dtype=pd.DatetimeTZDtype(tz=fuso))})
 
 
 def planilha(leituras: pd.DataFrame, uf: str = config.UF) -> pd.DataFrame:

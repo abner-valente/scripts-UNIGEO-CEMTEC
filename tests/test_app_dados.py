@@ -194,3 +194,26 @@ def test_limpar_cache_remove_os_arquivos(cache_temporario, api_contada):
     assert (quantidade, megabytes > 0) == (1, True)
     assert coleta.limpar_cache() == 1
     assert coleta.tamanho_do_cache()[0] == 0
+
+
+@pytest.mark.parametrize("codigos, nomes", [((), ()), (("A702",), ("Campo Grande",))])
+def test_sem_nenhuma_estacao_a_tabela_vazia_ainda_tem_as_horas(cache_temporario, monkeypatch, codigos,
+                                                                  nomes):
+    """Sem vizinhas (a lista não veio, ou todas falharam), a tabela sai vazia mas filtrável.
+
+    Uma tabela sem coluna nenhuma derrubava o painel com KeyError: 'dt_local' em quem filtrava
+    pelo horário, por falta de um dado que ele nem ia desenhar.
+    """
+    from app import variaveis
+    monkeypatch.setattr(inmet, "baixar_dados_estacao", lambda codigo, inicio, fim, fuso=None: None)
+    fuso = Periodo.de_datas(date(2026, 9, 17), date(2026, 9, 17)).fuso
+
+    tabela, falharam = coleta.varias(codigos, nomes, *DIA.janela, fuso=fuso)
+
+    assert tabela.empty and falharam == list(nomes)
+    assert {"Estação", "dt_utc", "dt_local"} <= set(tabela.columns)
+    assert str(tabela["dt_local"].dt.tz) == str(fuso)
+    momento = pd.Timestamp("2026-09-17 12:00", tz=fuso)
+    assert tabela[tabela["dt_local"] > momento].empty
+    assert variaveis.recorte(tabela, variaveis.HORA, momento).empty
+    assert variaveis.recorte(tabela, variaveis.DIA, momento.normalize()).empty

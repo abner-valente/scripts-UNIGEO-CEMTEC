@@ -9,9 +9,18 @@ Cada versão separa as mudanças em até quatro grupos:
 
 Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
+## [0.3.1] — em andamento
+
+Ainda não está na `main`. O plano desta versão está em `docs/escopo_v0.3.1.md` e `docs/plano_arquitetura.md`.
+
+### Corrigido
+
+- **Painel: quando o INMET não devolve a lista de estações, aparece um aviso em vez do erro do Python.** O INMET às vezes responde vazio por alguns minutos. Antes, quem abria o painel via um traceback ("ErroINMET: Expecting value…") e não sabia se o problema era com ele. Agora aparece "O INMET não respondeu à lista de estações agora", com um botão para tentar de novo.
+- **Painel: sem a lista das estações vizinhas, os mapas saem só com as do estado**, com um aviso. Antes, o painel caía nas abas de mapas. É o mesmo que os produtos já faziam.
+
 ## [0.2.3] — 05/10/2026
 
-Fechada na branch `v0.2.2`, que é a do painel publicado no Streamlit Cloud. Chega à `main`, e ao `git pull` de quem usa a linha de comando, no próximo merge.
+Fechada na branch `v0.2.2`, que é a do painel publicado no Streamlit Cloud, e levada à `main` em 07/10.
 
 ### Atenção ao atualizar
 

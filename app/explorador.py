@@ -514,13 +514,45 @@ def camada_superficie(valores: pd.Series, nome_produto: str, quando: str, uf: st
                                   apoio=vizinhas))
 
 
+def estacoes_vizinhas(uf: str, avisar: bool = True) -> pd.DataFrame:
+    """As estações vizinhas do estado, ou nenhuma se o INMET não devolver a lista, e o painel segue.
+
+    Sem elas a borda dos mapas extrapola, mas todo o resto funciona: é o mesmo que os produtos
+    fazem em `inmet.baixar_apoio`. Melhor um mapa com a borda menos firme do que nenhum mapa. A
+    tabela vazia tem as colunas do cadastro, para quem vem depois não precisar tratar o caso; e a
+    falha não fica no cache, então a próxima consulta tenta de novo.
+    """
+    try:
+        return carregar_apoio(uf)
+    except fonte.ErroFonte:
+        if avisar:
+            st.warning("O INMET não devolveu agora a lista das estações vizinhas. Os mapas saem só com "
+                       "as estações do estado, com a borda menos firme. Tente de novo em alguns minutos.")
+        return carregar_estacoes(uf).iloc[0:0]
+
+
+def sem_lista_de_estacoes(onde, uf: str) -> None:
+    """Para o painel com um aviso claro quando a lista de estações do estado não vem.
+
+    Sem ela não há o que mostrar: a barra lateral precisa dos nomes, e os mapas, das coordenadas.
+    Antes o painel caía com o traceback do Python na tela ("ErroINMET: Expecting value..."), e
+    quem abria não sabia se o problema era com ele. O INMET às vezes devolve resposta vazia por
+    alguns minutos, e as três tentativas de `inmet._consultar` não bastam; tentar de novo depois
+    resolve. A falha não fica no cache, então o botão refaz a consulta de verdade.
+    """
+    onde.error(f"O INMET não respondeu à lista de estações de {uf} agora. Costuma passar em alguns "
+               "minutos.")
+    onde.button("Tentar de novo", key="tentar_lista_de_novo")
+    st.stop()
+
+
 def _com_coordenadas(valores: pd.Series, nome_variavel: str, uf: str) -> pd.DataFrame:
     """Valores de um instante com a latitude e a longitude de cada estação.
 
     O cadastro reúne as duas listas — as do estado e as de apoio —, e quem manda é o índice da
     série: entra o que estiver nela, saia de onde sair.
     """
-    cadastro = pd.concat([carregar_estacoes(uf), carregar_apoio(uf)], ignore_index=True)
+    cadastro = pd.concat([carregar_estacoes(uf), estacoes_vizinhas(uf, avisar=False)], ignore_index=True)
     coordenadas = (cadastro.set_index("Estação")[["VL_LATITUDE", "VL_LONGITUDE"]]
                    .rename(columns={"VL_LATITUDE": "Latitude", "VL_LONGITUDE": "Longitude"}))
     return coordenadas.join(valores.rename(nome_variavel), how="inner").reset_index().dropna()
@@ -910,6 +942,9 @@ def condicoes_do_dia(horaria: pd.DataFrame, dia, ordem: list[str]) -> alt.Chart:
 # FILTROS
 # =====================================================
 st.title("Painel Meteorológico")
+# Lugar na área principal para os avisos que nascem dentro da barra lateral: escritos lá, ficariam
+# espremidos ao lado, onde quase ninguém olha.
+aviso_principal = st.container()
 
 if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
     st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
@@ -933,7 +968,10 @@ with st.sidebar:
         st.info("Escolha a data inicial e a final.")
         st.stop()
 
-    estacoes = carregar_estacoes(uf).sort_values("Estação")
+    try:
+        estacoes = carregar_estacoes(uf).sort_values("Estação")
+    except fonte.ErroFonte:
+        sem_lista_de_estacoes(aviso_principal, uf)
     # Sem estação escolhida de saída: quem abre decide o que quer ver, e nenhuma consulta
     # à API acontece antes disso.
     nomes = st.multiselect("Estações", estacoes["Estação"].tolist(), default=[],
@@ -1076,7 +1114,7 @@ with aba_mapa:
                                                          tuple(estacoes["Estação"]), inicio, fim, uf)
         # As vizinhas vêm numa consulta à parte para o caminho do produto ficar intocado: o que
         # sai delas só alimenta a interpolação da borda.
-        vizinhas = carregar_apoio(uf)
+        vizinhas = estacoes_vizinhas(uf)
         leituras_apoio, _ = carregar_leituras(tuple(vizinhas["CD_ESTACAO"]), tuple(vizinhas["Estação"]),
                                               inicio, fim, uf, "Consultando as estações vizinhas")
         # O modo mora aqui, e não na barra lateral, porque o mapa tem um a mais que o gráfico: o
@@ -1209,7 +1247,7 @@ with aba_chuva:
             tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]),
             inicio_chuva.astimezone(config.FUSO_UTC), ate.astimezone(config.FUSO_UTC), uf,
             f"Consultando a chuva desde {inicio_chuva:%d/%m}")
-        vizinhas_chuva = carregar_apoio(uf)
+        vizinhas_chuva = estacoes_vizinhas(uf)
         chuva_apoio, _ = carregar_leituras(
             tuple(vizinhas_chuva["CD_ESTACAO"]), tuple(vizinhas_chuva["Estação"]),
             inicio_chuva.astimezone(config.FUSO_UTC), ate.astimezone(config.FUSO_UTC), uf,
@@ -1363,7 +1401,7 @@ with aba_risco:
     else:
         leituras_risco, _ = carregar_leituras(tuple(estacoes["CD_ESTACAO"]),
                                               tuple(estacoes["Estação"]), inicio, fim, uf)
-        vizinhas_risco = carregar_apoio(uf)
+        vizinhas_risco = estacoes_vizinhas(uf)
         risco_apoio, _ = carregar_leituras(tuple(vizinhas_risco["CD_ESTACAO"]),
                                            tuple(vizinhas_risco["Estação"]), inicio, fim, uf,
                                            "Consultando as estações vizinhas")
@@ -1556,7 +1594,7 @@ with aba_navegavel:
     else:
         leituras_navegavel, _ = carregar_leituras(tuple(estacoes["CD_ESTACAO"]),
                                                   tuple(estacoes["Estação"]), inicio, fim, uf)
-        vizinhas_nav = carregar_apoio(uf)
+        vizinhas_nav = estacoes_vizinhas(uf)
         apoio_navegavel, _ = carregar_leituras(tuple(vizinhas_nav["CD_ESTACAO"]),
                                                tuple(vizinhas_nav["Estação"]), inicio, fim, uf,
                                                "Consultando as estações vizinhas")
