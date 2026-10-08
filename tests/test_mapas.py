@@ -1,5 +1,6 @@
 """Mapas: base cartográfica (máscara da grade e recorte pelo estado), estações e indicadores."""
 from dataclasses import replace
+import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -265,3 +266,103 @@ def test_a_vizinha_nao_estica_a_escala_de_cores(monkeypatch, base):
     sem, com = (grade[base.dentro_uf] for grade in vistas)
     assert not np.array_equal(sem, com)                     # a vizinha mexeu na superfície
     assert com.min() >= sem.min() and com.max() <= sem.max()   # mas dentro da faixa do estado
+
+
+# =====================================================
+# AS CLASSES DESIGUAIS E OS MAPAS DA PREVISÃO
+# =====================================================
+def _sem_estacoes(coluna: str = "v"):
+    return gpd.GeoDataFrame(pd.DataFrame({"Estação": [], coluna: []}), geometry=gpd.points_from_xy([], []),
+                            crs="EPSG:4326")
+
+
+def _cor_de_cada_classe(figura, niveis):
+    from matplotlib.colors import to_hex
+    superficie = next(colecao for colecao in figura.axes[0].collections if hasattr(colecao, "levels"))
+    meios = [(a + b) / 2 for a, b in zip(niveis[:-1], niveis[1:])]
+    return [to_hex(superficie.cmap(superficie.norm(meio))) for meio in meios]
+
+
+def test_classes_desiguais_tem_uma_cor_por_classe_como_a_barra_da_tela():
+    """Pela régua do valor, as classes de 1 a 50 mm da chuva saíam quase brancas no mapa, e a barra
+    da tela (que pinta por classe) mostrava azuis bem mais fortes: quem lia pela barra errava."""
+    from matplotlib import colormaps
+    from matplotlib.colors import BoundaryNorm, to_hex
+    base = mapas.carregar_base()
+    niveis = [0.2, 1, 5, 10, 20, 30, 50, 75, 100]
+    grade = (base.lon_grade - base.lon_grade.min()) / np.ptp(base.lon_grade) * 100
+    espec = mapas.EspecMapa("", "v", "t", "", "", "Blues", "mm", "")
+
+    figura = mapas.mapa_de_grade(grade, _sem_estacoes(), espec, base, niveis=niveis, tela=mapas.Tela())
+
+    por_classe = BoundaryNorm(niveis, ncolors=256, extend="max")
+    barra = [to_hex(colormaps["Blues"](por_classe((a + b) / 2))) for a, b in zip(niveis[:-1], niveis[1:])]
+    assert _cor_de_cada_classe(figura, niveis) == barra
+
+
+def test_niveis_iguais_seguem_pintados_pela_regua_como_no_main_py():
+    from matplotlib.colors import BoundaryNorm
+    base = mapas.carregar_base()
+    grade = (base.lon_grade - base.lon_grade.min()) / np.ptp(base.lon_grade) * 10
+    espec = mapas.EspecMapa("", "v", "t", "", "", "Blues", "h", "")
+
+    figura = mapas.mapa_de_grade(grade, _sem_estacoes(), espec, base, niveis=np.arange(0, 11), tela=mapas.Tela())
+
+    superficie = next(colecao for colecao in figura.axes[0].collections if hasattr(colecao, "levels"))
+    assert not isinstance(superficie.norm, BoundaryNorm)
+
+
+def test_na_anomalia_o_normal_sai_branco_mesmo_com_a_escala_assimetrica():
+    base = mapas.carregar_base()
+    niveis = [-50, -30, -20, -10, -5, 5, 10, 25, 50, 100]
+    grade = (base.lon_grade - base.lon_grade.min()) / np.ptp(base.lon_grade) * 150 - 50
+    espec = mapas.EspecMapa("", "v", "t", "", "", "BrBG", "mm", "")
+
+    cores = _cor_de_cada_classe(mapas.mapa_de_grade(grade, _sem_estacoes(), espec, base, niveis=niveis,
+                                                    tela=mapas.Tela()), niveis)
+
+    vermelho, verde, azul = (int(cores[4][i:i + 2], 16) for i in (1, 3, 5))
+    assert min(vermelho, verde, azul) > 235                        # a classe de -5 a 5 é quase branca
+
+
+def test_o_mapa_de_grade_sai_sem_estacoes():
+    """A superfície da previsão vem do modelo: sem a previsão das estações, o mapa sai sem os pontos."""
+    base = mapas.carregar_base()
+    espec = mapas.EspecMapa("", "v", "t", "s", "", "Blues", "mm", "5 MAIORES ACUMULADOS")
+
+    figura = mapas.mapa_de_grade(np.zeros(base.lon_grade.shape), _sem_estacoes(), espec, base, niveis=[1, 5, 25])
+
+    assert figura is not None
+
+
+def test_o_ranking_das_anomalias_e_pelo_tamanho_do_desvio():
+    """Numa semana fria, "as maiores" seriam as menos frias; o que se procura é o maior desvio."""
+    base = mapas.carregar_base()
+    pontos = gpd.GeoDataFrame(pd.DataFrame({"Estação": list("ABCDEF"), "v": [0.4, -3.4, -0.3, -2.9, 1.0, -0.1]}),
+                              geometry=gpd.points_from_xy([-54.0] * 6, [-20.0 - i * 0.3 for i in range(6)]),
+                              crs="EPSG:4326")
+    espec = mapas.EspecMapa("", "v", "t", "s", "", "RdBu_r", "°C", "5 MAIORES DESVIOS DO NORMAL",
+                            ranking_absoluto=True)
+
+    figura = mapas.mapa_de_grade(np.zeros(base.lon_grade.shape), pontos, espec, base,
+                                 niveis=[-5, -1, -0.5, 0.5, 1, 5])
+
+    ranking = next(texto.get_text() for texto in figura.axes[0].texts if texto.get_text().startswith("5 MAIORES"))
+    assert ranking.splitlines()[1:6] == ["B: -3.4", "D: -2.9", "E: 1.0", "A: 0.4", "C: -0.3"]
+
+
+def test_nas_anomalias_os_positivos_levam_o_sinal():
+    espec = mapas.EspecMapa("", "v", "t", "s", "", "RdBu_r", "°C", "", com_sinal=True)
+
+    assert [mapas._formato(espec)(valor) for valor in (0.4, -2.1, 0.0)] == ["+0.4", "-2.1", "+0.0"]
+    assert mapas._formato(mapas.EspecMapa("", "v", "t", "s", "", "RdBu_r", "°C", ""))(0.4) == "0.4"
+
+
+def test_com_classes_a_barra_marca_todas_as_fronteiras():
+    base = mapas.carregar_base()
+    niveis = [-5, -4, -3, -2, -1, -0.5, 0.5, 1, 2, 3, 4, 5]
+    espec = mapas.EspecMapa("", "v", "t", "s", "", "RdBu_r", "°C", "")
+
+    figura = mapas.mapa_de_grade(np.zeros(base.lon_grade.shape), _sem_estacoes(), espec, base, niveis=niveis)
+
+    assert list(figura.axes[1].get_yticks()) == niveis

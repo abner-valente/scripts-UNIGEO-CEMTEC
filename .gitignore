@@ -42,3 +42,6 @@ shp/fonte/
 
 # Configuração local do Claude Code (não faz parte do projeto)
 .claude/
+
+# Logs do painel no servidor (servidor/iniciar_painel.bat grava aqui)
+logs/

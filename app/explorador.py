@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import altair as alt
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pydeck as pdk
@@ -29,11 +30,12 @@ from app import animacao
 from app import boletim
 from app import chuva as chuva_calc
 from app import dados as coleta
+from app import previsao
 from app import qualidade
 from app import risco
 from app import superficie
 from app import variaveis
-from modulos import config, inmet, mapas
+from modulos import config, fonte, mapas, openmeteo
 from modulos.produtos import risco_fogo
 
 # A API manda o vento em m/s; os produtos trabalham em km/h, e aqui seguimos a mesma unidade
@@ -122,7 +124,7 @@ alt.data_transformers.enable("default", max_rows=20000)
 @st.cache_data(ttl=3600, show_spinner=False)
 def carregar_estacoes(uf: str) -> pd.DataFrame:
     """As estações do estado — as do produto: tabelas, listas, rankings e CSV saem daqui."""
-    return inmet.listar_estacoes(uf)
+    return fonte.estacoes(uf)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -140,7 +142,7 @@ def carregar_apoio(uf: str) -> pd.DataFrame:
     mapa, porque a poda tem folga (ver config.VIZINHOS_NA_PODA).
     """
     base = base_cartografica(uf)
-    return inmet.estacoes_de_apoio(config.recorte_de(uf), base.lon_grade[base.dentro_uf],
+    return fonte.estacoes_de_apoio(config.recorte_de(uf), base.lon_grade[base.dentro_uf],
                                    base.lat_grade[base.dentro_uf])
 
 
@@ -241,12 +243,23 @@ def _regua(dados: pd.DataFrame, linhas_do_balao: list[tuple[str, str, str]], cas
             .add_params(apontar))
 
 
-def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, casas: int = 1) -> alt.Chart:
+def _escala_das_cores(cores: dict[str, str] | None, presentes: pd.Series):
+    """A cor fixa de cada modelo, só com os que estão no gráfico: os outros não vão para a legenda."""
+    if not cores:
+        return alt.Undefined
+    nomes = [nome for nome in cores if nome in set(presentes)]
+    return alt.Scale(domain=nomes, range=[cores[nome] for nome in nomes])
+
+
+def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, casas: int = 1,
+             cores: dict[str, str] | None = None) -> alt.Chart:
     """As séries de uma grandeza no tempo: cor separa a estação, traço separa a série.
 
     Cinco estações com três séries dariam quinze linhas iguais. Cor para a estação e traço para
     a série (máxima, mínima, média) deixa as duas leituras possíveis no mesmo desenho; clicar na
     legenda isola uma série, no desenho e também no balão.
+
+    Na previsão, a coluna "Estação" leva o nome do modelo, e `cores` fixa a cor de cada um.
     """
     # Arrastar move e Shift+roda aproxima. Sem o Shift, a roda do mouse em cima do gráfico
     # aproximaria em vez de rolar a página, e quem passa por vários gráficos fica preso no
@@ -275,7 +288,8 @@ def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, 
         x=eixo_x,
         y=alt.Y("valor:Q", title=rotulo_y, scale=alt.Scale(zero=zero_na_base),
                 axis=alt.Axis(grid=True, gridOpacity=0.25)),
-        color=alt.Color("Estação:N", title=None, legend=alt.Legend(orient="bottom")),
+        color=alt.Color("Estação:N", title=None, legend=alt.Legend(orient="bottom"),
+                        scale=_escala_das_cores(cores, longo["Estação"])),
         opacity=alt.condition(isolar, alt.value(1), alt.value(0.12)))
     linhas = (base.mark_line(strokeWidth=2, point=alt.OverlayMarkDef(filled=True, size=32))
               .encode(strokeDash=alt.StrokeDash("Série:N", title=None,
@@ -514,13 +528,45 @@ def camada_superficie(valores: pd.Series, nome_produto: str, quando: str, uf: st
                                   apoio=vizinhas))
 
 
+def estacoes_vizinhas(uf: str, avisar: bool = True) -> pd.DataFrame:
+    """As estações vizinhas do estado, ou nenhuma se o INMET não devolver a lista, e o painel segue.
+
+    Sem elas a borda dos mapas extrapola, mas todo o resto funciona: é o mesmo que os produtos
+    fazem em `inmet.baixar_apoio`. Melhor um mapa com a borda menos firme do que nenhum mapa. A
+    tabela vazia tem as colunas do cadastro, para quem vem depois não precisar tratar o caso; e a
+    falha não fica no cache, então a próxima consulta tenta de novo.
+    """
+    try:
+        return carregar_apoio(uf)
+    except fonte.ErroFonte:
+        if avisar:
+            st.warning("O INMET não devolveu agora a lista das estações vizinhas. Os mapas saem só com "
+                       "as estações do estado, com a borda menos firme. Tente de novo em alguns minutos.")
+        return carregar_estacoes(uf).iloc[0:0]
+
+
+def sem_lista_de_estacoes(onde, uf: str) -> None:
+    """Para o painel com um aviso claro quando a lista de estações do estado não vem.
+
+    Sem ela não há o que mostrar: a barra lateral precisa dos nomes, e os mapas, das coordenadas.
+    Antes o painel caía com o traceback do Python na tela ("ErroINMET: Expecting value..."), e
+    quem abria não sabia se o problema era com ele. O INMET às vezes devolve resposta vazia por
+    alguns minutos, e as três tentativas de `inmet._consultar` não bastam; tentar de novo depois
+    resolve. A falha não fica no cache, então o botão refaz a consulta de verdade.
+    """
+    onde.error(f"O INMET não respondeu à lista de estações de {uf} agora. Costuma passar em alguns "
+               "minutos.")
+    onde.button("Tentar de novo", key="tentar_lista_de_novo")
+    st.stop()
+
+
 def _com_coordenadas(valores: pd.Series, nome_variavel: str, uf: str) -> pd.DataFrame:
     """Valores de um instante com a latitude e a longitude de cada estação.
 
     O cadastro reúne as duas listas — as do estado e as de apoio —, e quem manda é o índice da
     série: entra o que estiver nela, saia de onde sair.
     """
-    cadastro = pd.concat([carregar_estacoes(uf), carregar_apoio(uf)], ignore_index=True)
+    cadastro = pd.concat([carregar_estacoes(uf), estacoes_vizinhas(uf, avisar=False)], ignore_index=True)
     coordenadas = (cadastro.set_index("Estação")[["VL_LATITUDE", "VL_LONGITUDE"]]
                    .rename(columns={"VL_LATITUDE": "Latitude", "VL_LONGITUDE": "Longitude"}))
     return coordenadas.join(valores.rename(nome_variavel), how="inner").reset_index().dropna()
@@ -907,9 +953,723 @@ def condicoes_do_dia(horaria: pd.DataFrame, dia, ordem: list[str]) -> alt.Chart:
 
 
 # =====================================================
+# PREVISÃO
+# =====================================================
+@st.cache_resource(show_spinner=False, max_entries=1)
+def guarda_da_previsao() -> previsao.Guarda:
+    """A previsão guardada, uma só no processo: todos os que abrem o painel dividem a mesma.
+
+    São as estações e a grade de 0,5° de MS nos três modelos, uns 26 MB (medido em 08/10: 7,7 MB a
+    grade de um modelo): a função não tem argumentos, e a entrada é uma só.
+    """
+    return previsao.Guarda()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def rodadas_atuais() -> tuple[dict | None, str | None]:
+    """A rodada que o Open-Meteo está servindo de cada modelo, conferida no máximo a cada 5 minutos.
+
+    Conferir não gasta cota, mas são três pedidos, e o script roda a cada clique. A falha fica
+    guardada pelos mesmos 5 minutos: com o Open-Meteo fora do ar, cada clique esperaria de novo as
+    três tentativas de cada pedido.
+    """
+    try:
+        return openmeteo.rodadas(config.MODELOS_PREVISAO), None
+    except openmeteo.ErroOpenMeteo as erro:
+        return None, str(erro)
+
+
+def previsao_dos_pontos(conjunto: str, pontos: pd.DataFrame,
+                        modelos: tuple[str, ...]) -> tuple[list[pd.DataFrame], list[str]]:
+    """A previsão horária dos pontos, uma tabela por modelo, e os avisos para a tela.
+
+    `conjunto` nomeia os pontos na guarda: "estações" ou "grade".
+    """
+    rodadas, falha = rodadas_atuais()
+    tabelas, avisos = [], []
+    for modelo in modelos:
+        tabela = _obter_previsao(conjunto, modelo, rodadas[modelo] if rodadas else None, falha,
+                                 lambda modelo=modelo: openmeteo.buscar(pontos, (modelo,)), avisos)
+        if tabela is not None:
+            tabelas.append(tabela)
+    return tabelas, avisos
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def rodada_semanal_atual() -> tuple[datetime | None, str | None]:
+    """A rodada do EC46 que o Open-Meteo está servindo, conferida no máximo a cada 5 minutos."""
+    try:
+        return openmeteo.rodadas((config.MODELO_SEMANAS,))[config.MODELO_SEMANAS], None
+    except openmeteo.ErroOpenMeteo as erro:
+        return None, str(erro)
+
+
+def semanas_dos_pontos(conjunto: str, pontos: pd.DataFrame) -> tuple[pd.DataFrame | None, list[str]]:
+    """As anomalias semanais do EC46 nos pontos, guardadas como as dos outros modelos."""
+    rodada, falha = rodada_semanal_atual()
+    avisos = []
+    tabela = _obter_previsao(conjunto, config.MODELO_SEMANAS, rodada, falha,
+                             lambda: openmeteo.buscar_semanas(pontos), avisos)
+    return tabela, avisos
+
+
+def _obter_previsao(conjunto: str, modelo: str, rodada: datetime | None, falha: str | None, buscar,
+                    avisos: list[str]) -> pd.DataFrame | None:
+    """A previsão de um modelo, da guarda ou do Open-Meteo, com os avisos acrescentados à lista."""
+    nome = openmeteo.NOMES[modelo]
+    guarda = guarda_da_previsao()
+    try:
+        if not guarda.precisa_buscar(conjunto, modelo, rodada):
+            obtida = guarda.obter(conjunto, modelo, rodada, buscar)
+        elif rodada is None:
+            # Nada guardado e nem os metadados responderam: a busca falharia do mesmo jeito,
+            # depois de esperar as tentativas
+            avisos.append(f"**{nome}** ficou de fora: o Open-Meteo não respondeu ({falha}).")
+            return None
+        else:
+            with st.spinner(f"Buscando a previsão do {nome} ({conjunto}) no Open-Meteo…"):
+                obtida = guarda.obter(conjunto, modelo, rodada, buscar)
+    except openmeteo.ErroOpenMeteo as erro:
+        avisos.append(f"**{nome}** ficou de fora: o Open-Meteo não respondeu ({erro}).")
+        return None
+    guardada = previsao.rodada_da(obtida.tabela)
+    if obtida.aviso and guardada is not None:
+        avisos.append(f"**{nome}**: mostrando a rodada de {guardada:%d/%m %H} UTC, a última guardada, "
+                      f"porque {obtida.aviso}.")
+    return obtida.tabela
+
+
+def barras_da_chuva_prevista(longo: pd.DataFrame) -> alt.Chart:
+    """A chuva de cada dia, com os modelos lado a lado: chuva se lê em barra, e não em linha."""
+    return (alt.Chart(longo)
+            .mark_bar()
+            .encode(x=alt.X("yearmonthdate(dt_local):O", title=None,
+                            axis=alt.Axis(format="%d/%m", formatType="time", labelAngle=0)),
+                    xOffset=alt.XOffset("Modelo:N", sort=list(previsao.CORES)),
+                    y=alt.Y("valor:Q", title="Chuva (mm)", axis=alt.Axis(grid=True, gridOpacity=0.25)),
+                    color=alt.Color("Modelo:N", title=None, legend=alt.Legend(orient="bottom"),
+                                    scale=_escala_das_cores(previsao.CORES, longo["Modelo"])),
+                    tooltip=[alt.Tooltip("yearmonthdate(dt_local):T", title="Dia", format="%d/%m"),
+                             alt.Tooltip("Modelo:N"),
+                             alt.Tooltip("valor:Q", title="Chuva (mm)", format=".1f")])
+            .properties(height=ALTURA_GRAFICO))
+
+
+# O Streamlit apaga o que se escolheu num widget quando ele não aparece numa execução. Cada
+# página aparece sozinha, então ir à previsão e voltar perderia as estações escolhidas no
+# observado. Ficam só os filtros da barra lateral: as escolhas dentro das abas voltam ao padrão.
+CHAVES_DOS_FILTROS = ("uf", "estacoes", "grandezas",
+                      "previsao_estacao", "previsao_modelos", "previsao_grandezas", "previsao_modo",
+                      "mapas_previstos_modelo", "mapas_previstos", "semanas_mapas", "semanas_estacao")
+
+
+def lembrar_filtros() -> None:
+    """Mantém o que se escolheu nos filtros de cada página. Chamada no topo de toda execução.
+
+    É a receita da documentação do Streamlit: regravar a chave a cada execução impede que ela seja
+    apagada. Tem de ser em toda execução, e não só na da outra página: regravada só lá, a chave
+    sobrevivia, mas o widget voltava vazio na tela, e o painel mostrava uma estação que o seletor
+    não mostrava. Por isso esses widgets não recebem valor inicial pelo parâmetro: ele entra no
+    estado com `setdefault`, antes do widget. Com os dois, o Streamlit avisa que o valor veio de
+    dois lugares.
+
+    O período fica de fora: o seletor de datas só sabe que é de intervalo pelo valor inicial. Ele
+    volta pelo valor guardado em `periodo_guardado`.
+    """
+    for chave in CHAVES_DOS_FILTROS:
+        if chave in st.session_state:
+            st.session_state[chave] = st.session_state[chave]
+
+
+def pagina_previsao() -> None:
+    """A previsão de MS nas estações, com os três modelos lado a lado (passo 3 do escopo)."""
+    st.title("Previsão do tempo — Mato Grosso do Sul")
+    aviso = st.container()
+    # A previsão é do Open-Meteo, mas a lista das estações é do INMET
+    if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
+        st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
+        st.stop()
+
+    with st.sidebar:
+        st.header("Filtros")
+        try:
+            estacoes = carregar_estacoes(previsao.UF).sort_values("Estação")
+        except fonte.ErroFonte:
+            sem_lista_de_estacoes(aviso, previsao.UF)
+        nomes = estacoes["Estação"].tolist()
+        codigos = estacoes["CD_ESTACAO"].astype(str).tolist()
+        # Aqui a estação já vem escolhida, ao contrário do observado: a busca é das estações todas
+        # de uma vez, e escolher uma ou outra não muda o custo
+        if st.session_state.get("previsao_estacao") not in nomes:
+            st.session_state["previsao_estacao"] = (nomes[codigos.index(previsao.ESTACAO_INICIAL)]
+                                                    if previsao.ESTACAO_INICIAL in codigos else nomes[0])
+        nome = st.selectbox("Estação", nomes, key="previsao_estacao",
+                            help="A previsão é a do ponto da estação: é o que permite comparar, "
+                                 "depois, o previsto com o que ela mediu.")
+        st.session_state.setdefault("previsao_modelos", list(config.MODELOS_PREVISAO))
+        modelos = st.multiselect("Modelos", list(config.MODELOS_PREVISAO),
+                                 format_func=openmeteo.NOMES.get, key="previsao_modelos",
+                                 help="O ECMWF e o GFS vão até o dia 14; o ICON, até o dia 7.")
+        st.session_state.setdefault("previsao_grandezas", ["Temperatura", "Chuva"])
+        escolhidas = st.multiselect("Grandezas", [*previsao.GRANDEZAS, previsao.GRANDEZA_RISCO],
+                                    key="previsao_grandezas",
+                                    help="Cada grandeza ganha o seu gráfico, com os modelos lado a lado.")
+
+    if not modelos:
+        st.info("Escolha ao menos um modelo na barra lateral.")
+        st.stop()
+    tabelas, avisos = previsao_dos_pontos("estações", openmeteo.pontos_das_estacoes(estacoes), tuple(modelos))
+    for texto in avisos:
+        aviso.warning(texto)
+    if not tabelas:
+        st.stop()
+    codigo = str(estacoes.set_index("Estação").loc[nome, "CD_ESTACAO"])
+    horaria = pd.concat([tabela[tabela["ponto"] == codigo] for tabela in tabelas], ignore_index=True)
+
+    # Por dia de saída: catorze dias hora a hora são 336 pontos por linha
+    st.session_state.setdefault("previsao_modo", "Por dia")
+    modo = MODOS_GRAFICO[st.radio("Agregação", list(MODOS_GRAFICO), horizontal=True, key="previsao_modo")]
+    rodadas = " · ".join(f"{openmeteo.NOMES[modelo]} {rodada:%d/%m %H} UTC" for modelo, rodada
+                         in horaria.groupby("modelo")["rodada_utc"].first().items())
+    st.caption(f"**Rodadas:** {rodadas}. Cada modelo é buscado de novo quando sai uma rodada dele, "
+               "de 6 em 6 horas. O dia vai da 01:00 à 00:00 do dia seguinte, como no observado; no "
+               "modo por dia entram só os dias inteiros. "
+               "Previsão: [Open-Meteo.com](https://open-meteo.com/), com dados do ECMWF, da NOAA e "
+               "do DWD ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)).")
+    st.markdown(ESTILO_BALAO, unsafe_allow_html=True)
+    if not escolhidas:
+        st.info("Escolha ao menos uma grandeza na barra lateral.")
+
+    desde = pd.Timestamp.now(tz=config.FUSO_MS).floor("h")
+    # Na ordem do catálogo, e não na da escolha: a direção fica logo depois do vento
+    for grandeza in [nome for nome in previsao.GRANDEZAS if nome in escolhidas]:
+        dados_grandeza = previsao.GRANDEZAS[grandeza]
+        longo = previsao.series(horaria, grandeza, modo, desde)
+        if longo.empty:
+            st.warning(f"{grandeza}: nenhum modelo trouxe essa variável para {nome}.")
+            continue
+        st.subheader(grandeza)
+        if grandeza == "Chuva" and modo == variaveis.DIA:
+            grafico = barras_da_chuva_prevista(longo)
+        else:
+            grafico = desenhar(longo.rename(columns={"Modelo": "Estação"}),
+                               f"{grandeza} ({dados_grandeza.unidade})", dados_grandeza.zero_na_base,
+                               modo, dados_grandeza.decimais, cores=previsao.CORES)
+        st.altair_chart(grafico, width="stretch")
+        regras = " · ".join(f"**{serie.nome}**: {serie.regra}" for serie in dados_grandeza.series[modo])
+        if dados_grandeza.circular:
+            regras += (". A direção ligada por linha engana: entre 350° e 10° o vento mal mudou, mas o "
+                       "traço desce o gráfico inteiro.")
+        if grandeza == "Chuva":
+            totais = previsao.chuva_total(horaria, desde)
+            regras += ". **Total previsto:** " + " · ".join(
+                f"{linha.Modelo} {linha.chuva:.1f} mm até {linha.ate:%d/%m}" for linha in totais.itertuples())
+        st.caption(regras)
+
+    if previsao.GRANDEZA_RISCO in escolhidas:
+        st.subheader(previsao.GRANDEZA_RISCO)
+        dias = previsao.diario_com_risco(horaria)
+        dias = dias[(dias["horas"] == 24) & (dias["dia_previsto"] >= desde.date())].dropna(subset=["risco_max"])
+        if dias.empty:
+            st.warning(f"Nenhum modelo trouxe as três variáveis da regra para {nome}.")
+        else:
+            st.altair_chart(calendario_do_risco_previsto(dias), width="stretch")
+            st.caption("O pior nível de cada dia pela regra 30-30-30 (temperatura ≥ 30 °C, umidade ≤ 30 %, "
+                       "rajada ≥ 30 km/h), aplicada a cada hora prevista, como no produto. O modelo dá o valor "
+                       "da hora cheia, e a estação mede a máxima e a mínima dentro da hora: o risco previsto "
+                       "tende a sair um pouco abaixo do medido. No balão, as horas em risco alto.")
+
+    with st.expander("Ver e baixar a previsão diária desta estação"):
+        visivel = previsao.planilha(horaria)
+        st.caption("Um dia por linha e modelo, pela regra do observado. `horas` diz quantas horas o "
+                   "dia tem na previsão: menos de 24 no primeiro, no último e no fim do ICON.")
+        st.dataframe(visivel, width="stretch", height=300, hide_index=True)
+        st.download_button("Baixar CSV", visivel.to_csv(index=False).encode("utf-8-sig"),
+                           file_name=f"previsao_{codigo}_{desde:%Y%m%d_%H}h.csv", mime="text/csv")
+
+
+@st.cache_data(show_spinner=False, max_entries=12)
+def diario_previsto(conjunto: str, modelo: str, rodada: datetime, _horaria: pd.DataFrame) -> pd.DataFrame:
+    """O dia de cada ponto, tirado das horas uma vez por rodada.
+
+    As horas da grade são 60 mil linhas por modelo: refazer a soma a cada clique custaria mais que
+    o desenho. A chave é o conjunto, o modelo e a rodada, que é o que muda a tabela. Vem com o pior
+    nível de risco de fogo de cada dia e as horas em risco alto.
+    """
+    return previsao.diario_com_risco(_horaria, config.FUSO_MS)
+
+
+@st.cache_data(show_spinner=False, max_entries=12)
+def risco_na_grade_prevista(modelo: str, rodada: datetime, dia: date, _horaria: pd.DataFrame,
+                            _pontos: pd.DataFrame) -> tuple[np.ndarray, np.ndarray] | None:
+    """O pior nível e as horas em risco alto do dia, célula a célula: a regra aplicada a cada hora."""
+    base = base_cartografica(previsao.UF)
+    return previsao.risco_na_grade(_horaria, _pontos, dia, base.lon_grade, base.lat_grade, config.FUSO_MS)
+
+
+@st.cache_data(show_spinner=False, max_entries=20)
+def mapa_de_risco_previsto(origem: tuple, nome: str, rotulos: bool, _grade: np.ndarray,
+                           _estacoes: pd.DataFrame) -> bytes:
+    """PNG do mapa do pior nível de risco previsto para a tela, com as cores do produto."""
+    espec = mapas.EspecClasses(nome, "", "", config.CORES_RISCO, config.ROTULOS_RISCO)
+    figura = mapas.mapa_classes_interpolado(_grade, _pontos_previstos(_estacoes, nome), nome, espec,
+                                            base_cartografica(previsao.UF), tela=mapas.Tela(rotulos=rotulos))
+    arquivo = io.BytesIO()
+    figura.savefig(arquivo, format="png", dpi=DPI_MAPA, bbox_inches="tight", facecolor="white")
+    return arquivo.getvalue()
+
+
+@st.cache_data(show_spinner=False, max_entries=40)
+def mapa_previsto(origem: tuple, nome: str, paleta: str, unidade: str, decimais: int, setas: bool,
+                  rotulos: bool, niveis: tuple | None, _grade: np.ndarray, _estacoes: pd.DataFrame,
+                  com_sinal: bool = False) -> bytes:
+    """PNG de um mapa da previsão para a tela, sem a moldura.
+
+    `origem` diz de que previsão é o desenho: o modelo, a rodada e o dia (ou a semana). Com o
+    mapa e a escala, é a chave; a superfície e as estações vêm deles e ficam fora dela, que não
+    precisa comparar 10 mil números a cada clique.
+    """
+    espec = mapas.EspecMapa(tabela="", coluna=nome, titulo=nome, subtitulo="", arquivo="",
+                            cmap=paleta, unidade=f"{nome} ({unidade})", ranking="",
+                            decimais=decimais, direcao_vento=setas, com_sinal=com_sinal)
+    figura = mapas.mapa_de_grade(_grade, _pontos_previstos(_estacoes, nome), espec,
+                                 base_cartografica(previsao.UF), niveis=list(niveis) if niveis else 20,
+                                 tela=mapas.Tela(rotulos=rotulos))
+    arquivo = io.BytesIO()
+    figura.savefig(arquivo, format="png", dpi=DPI_MAPA, bbox_inches="tight", facecolor="white")
+    return arquivo.getvalue()
+
+
+def _pontos_previstos(estacoes: pd.DataFrame, nome: str):
+    """As estações com a previsão no ponto delas, prontas para o mapa; vazias se não houver."""
+    pontos = mapas.preparar_pontos(estacoes, nome, nome)
+    if pontos is None:
+        colunas = ["Estação", "Latitude", "Longitude", nome, "Direção (°)"]
+        pontos = gpd.GeoDataFrame(pd.DataFrame(columns=colunas), geometry=gpd.points_from_xy([], []),
+                                  crs="EPSG:4326")
+    return pontos
+
+
+def painel_do_mapa_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: datetime, dia: date,
+                            hoje: date, rotulos: bool, ajustar: bool, diaria_grade: pd.DataFrame,
+                            pontos_grade: pd.DataFrame, diaria_estacoes: pd.DataFrame,
+                            estacoes: pd.DataFrame, horaria_grade: pd.DataFrame) -> None:
+    """Uma coluna da linha de mapas da previsão: o desenho, a escala, a regra e os botões."""
+    st.markdown(f"**{mapa.nome}**")
+    if mapa.risco:
+        painel_do_risco_previsto(mapa, modelo, rodada, dia, hoje, rotulos, horaria_grade, pontos_grade,
+                                 diaria_estacoes, estacoes)
+        return
+    base = base_cartografica(previsao.UF)
+    grade = previsao.superficie(previsao.valores_do_dia(diaria_grade, mapa, dia, hoje), pontos_grade,
+                                base.lon_grade, base.lat_grade)
+    if grade is None:
+        st.info(f"O {openmeteo.NOMES[modelo]} não traz {mapa.nome.lower()} para {previsao.nome_do_dia(dia)}.")
+        return
+    pontos = previsao.nas_estacoes(diaria_estacoes, estacoes, mapa, dia, hoje)
+    niveis = previsao.niveis(mapa, previsao.dias_somados(mapa, dia, hoje), ajustar)
+    escala = None if niveis is None else tuple(float(nivel) for nivel in niveis)
+
+    png = mapa_previsto(("dias", modelo, rodada, dia, hoje), mapa.nome, mapa.paleta, mapa.unidade,
+                        mapa.decimais, mapa.setas, rotulos, escala, _grade=grade, _estacoes=pontos)
+    st.image(png, width="stretch")
+    if escala is not None:
+        st.image(barra_de_escala(mapa.paleta, escala, mapa.unidade), width="stretch")
+    no_estado = grade[base.dentro_uf]
+    st.caption(f"{np.nanmin(no_estado):.{mapa.decimais}f} a {np.nanmax(no_estado):.{mapa.decimais}f} "
+               f"{mapa.unidade} · {mapa.regra}.")
+
+    carimbo = previsao.carimbo(modelo, rodada, mapa, dia, hoje)
+    st.download_button(f"Baixar PNG — {mapa.nome.lower()}", png, mime="image/png",
+                       key=f"baixar_previsto_{mapa.nome}",
+                       file_name=f"Mapa_{mapa.titulo.replace(' ', '_')}_{carimbo}.png")
+    espec = boletim.espec(mapa.titulo, mapa.grandeza, mapa.unidade, mapa.paleta, mapa.decimais,
+                          previsao.UF, previsao.subtitulo(modelo, rodada, mapa, dia, hoje), mapa.setas,
+                          credito=previsao.CREDITO, coluna=mapa.nome)
+    gdf = _pontos_previstos(pontos, mapa.nome)
+    botao_do_boletim(mapa.nome.lower(), f"previsto_{mapa.nome}",
+                     boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo),
+                     lambda: mapas.mapa_de_grade(grade, gdf, espec, base,
+                                                 niveis=list(escala) if escala else 20))
+
+
+def painel_do_risco_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: datetime, dia: date,
+                             hoje: date, rotulos: bool, horaria_grade: pd.DataFrame,
+                             pontos_grade: pd.DataFrame, diaria_estacoes: pd.DataFrame,
+                             estacoes: pd.DataFrame) -> None:
+    """Os mapas do risco de fogo previsto: o pior nível do dia ou as horas em risco alto.
+
+    A superfície sai da regra aplicada célula a célula, hora a hora (`previsao.risco_na_grade`), e
+    os números sobre as estações, da regra aplicada às horas previstas no ponto de cada uma.
+    """
+    base = base_cartografica(previsao.UF)
+    calculado = risco_na_grade_prevista(modelo, rodada, dia, _horaria=horaria_grade, _pontos=pontos_grade)
+    if calculado is None:
+        st.info(f"O {openmeteo.NOMES[modelo]} não traz as três variáveis da regra para {previsao.nome_do_dia(dia)}.")
+        return
+    nivel, horas_alto = calculado
+    pontos = previsao.nas_estacoes(diaria_estacoes, estacoes, mapa, dia, hoje)
+    carimbo = previsao.carimbo(modelo, rodada, mapa, dia, hoje)
+    subtitulo = previsao.subtitulo_do_risco(modelo, rodada, dia)
+    gdf = _pontos_previstos(pontos, mapa.nome)
+    no_estado = (nivel if mapa.risco == "nivel" else horas_alto)[base.dentro_uf]
+
+    if mapa.risco == "nivel":
+        png = mapa_de_risco_previsto(("dias", modelo, rodada, dia), mapa.nome, rotulos, _grade=nivel,
+                                     _estacoes=pontos)
+        st.image(png, width="stretch")
+        partes = [f"{config.ROTULOS_RISCO[classe].replace('Risco ', '').capitalize()} em "
+                  f"{(no_estado == classe).mean():.0%}" for classe in range(len(config.CORES_RISCO) - 1, -1, -1)
+                  if (no_estado == classe).any()]
+        st.caption(f"{' · '.join(partes)} do estado · {mapa.regra}.")
+        espec = mapas.EspecClasses(boletim.titulo(mapa.titulo, previsao.UF), subtitulo, "", config.CORES_RISCO,
+                                   config.ROTULOS_RISCO, credito=previsao.CREDITO)
+        desenhar = lambda: mapas.mapa_classes_interpolado(nivel, gdf, mapa.nome, espec, base)  # noqa: E731
+    else:
+        niveis = niveis_das_horas(horas_alto)
+        escala = tuple(float(valor) for valor in niveis) if np.ndim(niveis) else None
+        png = mapa_previsto(("dias", modelo, rodada, dia, hoje), mapa.nome, mapa.paleta, mapa.unidade,
+                            mapa.decimais, False, rotulos, escala, _grade=horas_alto, _estacoes=pontos)
+        st.image(png, width="stretch")
+        if escala is not None:
+            st.image(barra_de_escala(mapa.paleta, escala, "horas"), width="stretch")
+        st.caption(f"0 a {int(no_estado.max())} h · {mapa.regra}.")
+        espec = mapas.EspecMapa("", mapa.nome, boletim.titulo(mapa.titulo, previsao.UF), subtitulo, "",
+                                mapa.paleta, "Horas em risco alto", "5 MAIORES EXPOSIÇÕES", decimais=0,
+                                credito=previsao.CREDITO)
+        desenhar = lambda: mapas.mapa_de_grade(horas_alto, gdf, espec, base, niveis=niveis)  # noqa: E731
+
+    arquivo = mapa.titulo.replace(" — ", " ")   # sem o travessão no nome do arquivo
+    st.download_button(f"Baixar PNG — {mapa.nome.lower()}", png, mime="image/png",
+                       key=f"baixar_previsto_{mapa.nome}",
+                       file_name=f"Mapa_{arquivo.replace(' ', '_')}_{carimbo}.png")
+    botao_do_boletim(mapa.nome.lower(), f"previsto_{mapa.nome}",
+                     boletim.nome_do_arquivo(arquivo, previsao.UF, carimbo), desenhar)
+
+
+def calendario_do_risco_previsto(dias: pd.DataFrame) -> alt.Chart:
+    """O pior nível de cada dia em cada modelo, na estação: as duas semanas de relance."""
+    dados = dias.assign(Modelo=dias["modelo"].map(openmeteo.NOMES),
+                        dia=dias["dia_previsto"].map(previsao.nome_do_dia),
+                        risco_max=dias["risco_max"].astype(int))
+    ordem_dos_dias = list(dict.fromkeys(dados.sort_values("dia_previsto")["dia"]))
+    return (alt.Chart(dados)
+            .mark_rect(stroke="#111111", strokeWidth=1)
+            .encode(x=alt.X("dia:O", sort=ordem_dos_dias, title=None, axis=alt.Axis(labelAngle=0, labelFontSize=11)),
+                    y=alt.Y("Modelo:N", sort=list(previsao.CORES), title=None, axis=alt.Axis(labelFontSize=12)),
+                    color=alt.Color("risco_max:O", title="Pior nível do dia",
+                                    scale=alt.Scale(domain=[0, 1, risco.NIVEL_MEDIO, risco.NIVEL_ALTO],
+                                                    range=config.CORES_RISCO),
+                                    legend=alt.Legend(orient="bottom",
+                                                      labelExpr="{'0': 'Sem condição', '1': 'Baixo', "
+                                                                "'2': 'Médio', '3': 'Alto'}[datum.label]")),
+                    tooltip=[alt.Tooltip("Modelo:N"), alt.Tooltip("dia:O", title="Dia"),
+                             alt.Tooltip("risco_max:O", title="Pior nível"),
+                             alt.Tooltip("horas_risco_alto:Q", title="Horas em risco alto")])
+            # A altura vai por linha, e não total: o Streamlit encaixa o gráfico na altura pedida, e o
+            # eixo dos dias e a legenda tomam uns 120 px dela. Com um total de 45 px por modelo, um
+            # modelo só ficava sem linha nenhuma, e dois, com linhas de 13 px.
+            .properties(height=alt.Step(32)))
+
+
+def pagina_mapas_previstos() -> None:
+    """Os mapas dos dias 1 a 14 de MS, um modelo por vez (passo 4 do escopo)."""
+    st.title("Mapas da previsão — Mato Grosso do Sul")
+    aviso = st.container()
+    # A superfície é do Open-Meteo; os números sobre as estações precisam da lista do INMET
+    if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
+        st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
+        st.stop()
+
+    with st.sidebar:
+        st.header("Filtros")
+        st.session_state.setdefault("mapas_previstos_modelo", config.MODELOS_PREVISAO[0])
+        modelo = st.radio("Modelo", list(config.MODELOS_PREVISAO), format_func=openmeteo.NOMES.get,
+                          key="mapas_previstos_modelo",
+                          help="Um modelo por vez. O ECMWF e o GFS vão até o dia 14; o ICON, até o dia 7.")
+        st.session_state.setdefault("mapas_previstos", list(previsao.PADRAO_MAPAS))
+        escolhidos = st.multiselect("Mapas", list(previsao.MAPAS), key="mapas_previstos",
+                                    help="A chuva acumulada soma de hoje até o dia escolhido.")
+    try:
+        estacoes = carregar_estacoes(previsao.UF).sort_values("Estação")
+    except fonte.ErroFonte:
+        sem_lista_de_estacoes(aviso, previsao.UF)
+    if not escolhidos:
+        st.info("Escolha ao menos um mapa na barra lateral.")
+        st.stop()
+
+    pontos_grade = openmeteo.pontos_da_grade()
+    grades, avisos = previsao_dos_pontos("grade", pontos_grade, (modelo,))
+    nas_estacoes, avisos_estacoes = previsao_dos_pontos("estações", openmeteo.pontos_das_estacoes(estacoes),
+                                                        (modelo,))
+    for texto in avisos + avisos_estacoes:
+        aviso.warning(texto)
+    if not grades:
+        st.stop()
+    rodada = previsao.rodada_da(grades[0])
+    diaria_grade = diario_previsto("grade", modelo, rodada, grades[0])
+    diaria_estacoes = (diario_previsto("estações", modelo, previsao.rodada_da(nas_estacoes[0]), nas_estacoes[0])
+                       if nas_estacoes else pd.DataFrame())
+
+    hoje = pd.Timestamp.now(tz=config.FUSO_MS).date()
+    dias = previsao.dias_inteiros(diaria_grade, hoje)
+    if not dias:
+        st.warning(f"O {openmeteo.NOMES[modelo]} não trouxe nenhum dia inteiro de hoje em diante.")
+        st.stop()
+    # Trocando de modelo, o dia escolhido pode não existir no outro (o ICON para no dia 7): fica o
+    # último que o modelo tem até ele, e não o primeiro, para quem olhava o fim da semana
+    escolhido = st.session_state.get("mapas_previstos_dia")
+    if escolhido not in dias:
+        st.session_state["mapas_previstos_dia"] = max((dia for dia in dias if escolhido and dia <= escolhido),
+                                                      default=dias[0])
+    dia = st.select_slider("Dia", options=dias, format_func=previsao.nome_do_dia, key="mapas_previstos_dia")
+    marcar, ajustar_escala = st.columns([1, 1])
+    with marcar:
+        rotulos = st.checkbox("Mostrar o valor de cada estação", value=True, key="mapas_previstos_rotulos",
+                              help="A previsão do mesmo modelo no ponto de cada estação.")
+    with ajustar_escala:
+        ajustar = st.checkbox("Ajustar a escala ao dado", value=False, key="mapas_previstos_ajustar",
+                              help="Desligada, a escala é a mesma dos mapas do observado: a mesma cor "
+                                   "quer dizer o mesmo valor, previsto ou medido.")
+    st.caption(f"**{openmeteo.NOMES[modelo]}**, rodada de {rodada:%d/%m %H} UTC. "
+               "Previsão: [Open-Meteo.com](https://open-meteo.com/), com dados do ECMWF, da NOAA e do "
+               "DWD ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)).")
+
+    # Na ordem do catálogo, e todas as linhas com a mesma quantidade de colunas, como no observado
+    ordem = [nome for nome in previsao.MAPAS if nome in escolhidos]
+    por_linha = min(len(ordem), MAPAS_POR_LINHA)
+    with st.spinner("Desenhando os mapas..."):
+        for primeiro in range(0, len(ordem), por_linha):
+            for coluna_tela, nome in zip(st.columns(por_linha), ordem[primeiro:primeiro + por_linha]):
+                with coluna_tela:
+                    painel_do_mapa_previsto(previsao.MAPAS[nome], modelo, rodada, dia, hoje, rotulos, ajustar,
+                                            diaria_grade, pontos_grade, diaria_estacoes, estacoes, grades[0])
+    espacamento = f"{config.GRADE_PREVISAO:g}".replace(".", ",")
+    st.caption(f"A superfície é a do próprio modelo, nos {len(pontos_grade)} pontos da grade de "
+               f"{espacamento}° que cobrem o estado, levada à resolução do mapa por interpolação bilinear: "
+               "não é IDW de estação. Os números sobre as estações são a previsão do mesmo modelo no ponto "
+               "de cada uma, e são eles que entram no ranking do PNG do boletim.")
+
+
+def painel_do_mapa_semanal(mapa: previsao.MapaSemanal, rodada: datetime, semana: date, rotulos: bool,
+                           semanal_grade: pd.DataFrame, pontos_grade: pd.DataFrame,
+                           semanal_estacoes: pd.DataFrame, estacoes: pd.DataFrame, titulo: str) -> None:
+    """Uma coluna de mapas das semanas: o desenho, a escala divergente, a regra e os botões."""
+    st.markdown(f"**{titulo}**")
+    base = base_cartografica(previsao.UF)
+    grade = previsao.superficie(previsao.valores_da_semana(semanal_grade, mapa, semana), pontos_grade,
+                                base.lon_grade, base.lat_grade)
+    if grade is None:
+        st.info(f"O EC46 não traz {mapa.nome.lower()} para a semana de {previsao.nome_da_semana(semana)}.")
+        return
+    pontos = previsao.nas_estacoes_na_semana(semanal_estacoes, estacoes, mapa, semana)
+    escala = tuple(float(nivel) for nivel in mapa.niveis)
+
+    png = mapa_previsto(("semanas", rodada, semana), mapa.titulo, mapa.paleta, mapa.unidade, mapa.decimais,
+                        False, rotulos, escala, _grade=grade, _estacoes=pontos, com_sinal=True)
+    st.image(png, width="stretch")
+    st.image(barra_de_escala(mapa.paleta, escala, f"{mapa.unidade} em relação ao normal"), width="stretch")
+    no_estado = grade[base.dentro_uf]
+    st.caption(f"De {np.nanmin(no_estado):+.{mapa.decimais}f} a {np.nanmax(no_estado):+.{mapa.decimais}f} "
+               f"{mapa.unidade} em relação ao normal · {mapa.regra}.")
+
+    carimbo = previsao.carimbo_da_semana(rodada, semana)
+    chave = f"{mapa.nome}_{semana:%Y%m%d}"
+    st.download_button(f"Baixar PNG — {mapa.titulo.lower()}", png, mime="image/png",
+                       key=f"baixar_semana_{chave}",
+                       file_name=f"Mapa_{mapa.titulo.replace(' ', '_')}_{carimbo}.png")
+    # O ranking é o dos maiores desvios, para cima ou para baixo, em qualquer mapa: o "mínima" do
+    # nome, que nos outros mapas pede as menores, aqui não muda o que se procura
+    espec = mapas.EspecMapa(tabela="", coluna=mapa.titulo, titulo=boletim.titulo(mapa.titulo, previsao.UF),
+                            subtitulo=previsao.subtitulo_da_semana(rodada, semana), arquivo="",
+                            cmap=mapa.paleta, unidade=f"{mapa.unidade} em relação ao normal",
+                            ranking=previsao.RANKING_SEMANAS, decimais=mapa.decimais,
+                            credito=previsao.CREDITO, ranking_absoluto=True, com_sinal=True)
+    gdf = _pontos_previstos(pontos, mapa.titulo)
+    botao_do_boletim(mapa.titulo.lower(), f"semana_{chave}",
+                     boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo),
+                     lambda: mapas.mapa_de_grade(grade, gdf, espec, base, niveis=list(escala)))
+
+
+def semana_contra_o_normal(tabela: pd.DataFrame, grandeza: str) -> alt.Chart:
+    """A previsão de cada semana contra a normal da época, e a anomalia como a distância entre as duas.
+
+    A barra entre as linhas é o número dos mapas: vermelha (ou verde, na chuva) quando a semana fica
+    acima do normal, azul (ou marrom) quando fica abaixo.
+    """
+    _, _, unidade = previsao.SERIES_SEMANAIS[grandeza]
+    chuva = grandeza == "Chuva"
+    acima, abaixo = ("#1b7837", "#8c510a") if chuva else ("#d6604d", "#4393c3")
+    ordem = list(tabela["rotulo"])
+    # "12/10 a 18/10" em duas linhas: numa linha só, metade das semanas sumia do eixo por falta de lugar
+    eixo_x = alt.X("rotulo:O", sort=ordem, title=None,
+                   axis=alt.Axis(labelAngle=0, labelFontSize=11, labelOverlap=False,
+                                 labelExpr="[split(datum.label, ' a ')[0], 'a ' + split(datum.label, ' a ')[1]]"))
+    series = [previsao.PREVISTA, previsao.NORMAL]
+    longo = (tabela.melt(id_vars=["rotulo"], value_vars=["prevista", "normal"], var_name="qual", value_name="valor")
+             .assign(Série=lambda dados: dados["qual"].map({"prevista": previsao.PREVISTA,
+                                                           "normal": previsao.NORMAL})))
+    linhas = (alt.Chart(longo).mark_line(point=alt.OverlayMarkDef(filled=True, size=60), strokeWidth=2.5)
+              .encode(x=eixo_x,
+                      y=alt.Y("valor:Q", title=f"{grandeza} ({unidade})", scale=alt.Scale(zero=chuva),
+                              axis=alt.Axis(grid=True, gridOpacity=0.25)),
+                      color=alt.Color("Série:N", title=None, legend=alt.Legend(orient="bottom"),
+                                      scale=alt.Scale(domain=series, range=["#1f77b4", "#9e9e9e"])),
+                      strokeDash=alt.StrokeDash("Série:N", legend=None,
+                                                scale=alt.Scale(domain=series, range=[[1, 0], [6, 4]])),
+                      tooltip=[alt.Tooltip("rotulo:O", title="Semana"), alt.Tooltip("Série:N"),
+                               alt.Tooltip("valor:Q", title=unidade, format=".1f")]))
+    com_sinal = tabela.assign(lado=np.where(tabela["anomalia"] >= 0, "acima", "abaixo"),
+                              texto=tabela["anomalia"].map(lambda valor: f"{valor:+.1f}".replace(".", ",")),
+                              meio=(tabela["prevista"] + tabela["normal"]) / 2)
+    cor_do_lado = alt.Color("lado:N", legend=None, scale=alt.Scale(domain=["acima", "abaixo"], range=[acima, abaixo]))
+    barras = (alt.Chart(com_sinal).mark_rule(strokeWidth=7, opacity=0.5)
+              .encode(x=eixo_x, y="normal:Q", y2="prevista:Q", color=cor_do_lado,
+                      tooltip=[alt.Tooltip("rotulo:O", title="Semana"),
+                               alt.Tooltip("prevista:Q", title=previsao.PREVISTA, format=".1f"),
+                               alt.Tooltip("normal:Q", title=previsao.NORMAL, format=".1f"),
+                               alt.Tooltip("anomalia:Q", title="Anomalia", format="+.1f")]))
+    numeros = (alt.Chart(com_sinal).mark_text(align="left", dx=8, fontSize=13, fontWeight="bold")
+               .encode(x=eixo_x, y="meio:Q", text="texto:N", color=cor_do_lado))
+    return alt.layer(barras, linhas, numeros).resolve_scale(color="independent").properties(height=320)
+
+
+def pagina_semanas() -> None:
+    """A anomalia semanal do EC46 em MS, até 6 semanas à frente (passo 5 do escopo)."""
+    st.title("Previsão por semana — Mato Grosso do Sul")
+    aviso = st.container()
+    # A superfície é do Open-Meteo; os números sobre as estações precisam da lista do INMET
+    if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
+        st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
+        st.stop()
+
+    try:
+        estacoes = carregar_estacoes(previsao.UF).sort_values("Estação")
+    except fonte.ErroFonte:
+        sem_lista_de_estacoes(aviso, previsao.UF)
+    with st.sidebar:
+        st.header("Filtros")
+        nomes = estacoes["Estação"].tolist()
+        codigos = estacoes["CD_ESTACAO"].astype(str).tolist()
+        if st.session_state.get("semanas_estacao") not in nomes:
+            st.session_state["semanas_estacao"] = (nomes[codigos.index(previsao.ESTACAO_INICIAL)]
+                                                   if previsao.ESTACAO_INICIAL in codigos else nomes[0])
+        nome_estacao = st.selectbox("Estação", nomes, key="semanas_estacao",
+                                    help="A do gráfico da semana contra o normal, no topo da página.")
+        st.session_state.setdefault("semanas_mapas", list(previsao.PADRAO_SEMANAIS))
+        # Um nome que deixou de existir (os mapas foram renomeados em 08/10) seria recusado pelo widget
+        st.session_state["semanas_mapas"] = [nome for nome in st.session_state["semanas_mapas"]
+                                             if nome in previsao.MAPAS_SEMANAIS] or list(previsao.PADRAO_SEMANAIS)
+        escolhidos = st.multiselect("Anomalias", list(previsao.MAPAS_SEMANAIS), key="semanas_mapas",
+                                    help="A anomalia de cada grandeza: quanto a semana deve ficar acima ou "
+                                         "abaixo do normal.")
+    if not escolhidos:
+        st.info("Escolha ao menos um mapa na barra lateral.")
+        st.stop()
+
+    pontos_grade = openmeteo.pontos_da_grade()
+    semanal_grade, avisos = semanas_dos_pontos("grade-semanas", pontos_grade)
+    semanal_estacoes, avisos_estacoes = semanas_dos_pontos("estações-semanas",
+                                                           openmeteo.pontos_das_estacoes(estacoes))
+    for texto in avisos + avisos_estacoes:
+        aviso.warning(texto)
+    if semanal_grade is None:
+        st.stop()
+    semanal_estacoes = pd.DataFrame() if semanal_estacoes is None else semanal_estacoes
+    rodada = previsao.rodada_da(semanal_grade)
+    semanas = previsao.semanas_inteiras(semanal_grade, rodada)
+    if not semanas:
+        st.warning("O EC46 não trouxe nenhuma semana inteira nesta rodada.")
+        st.stop()
+
+    codigo_estacao = str(estacoes.set_index("Estação").loc[nome_estacao, "CD_ESTACAO"])
+    st.subheader(f"{nome_estacao}: a semana contra o normal")
+    colunas_graficos = st.columns(2)
+    for coluna_tela, grandeza in zip(colunas_graficos, previsao.SERIES_SEMANAIS):
+        with coluna_tela:
+            tabela = previsao.semana_contra_o_normal(semanal_estacoes, codigo_estacao, grandeza, rodada)
+            if tabela.empty:
+                st.info(f"O EC46 não trouxe {grandeza.lower()} para {nome_estacao}.")
+            else:
+                st.altair_chart(semana_contra_o_normal(tabela, grandeza), width="stretch")
+    st.caption("A linha cinza tracejada é a **normal da época**: a do próprio modelo, tirada das reprevisões "
+               "do ECMWF dos últimos anos para as mesmas semanas. A azul é a **previsão do EC46** para cada "
+               "semana (na chuva, o total da semana). A barra entre as duas é a **anomalia**, o número dos "
+               "mapas abaixo: o quanto a semana deve ficar acima ou abaixo do normal.")
+    st.divider()
+
+    ordem = [nome for nome in previsao.MAPAS_SEMANAIS if nome in escolhidos]
+    ver = st.radio("Ver", ["Uma semana", "Todas as semanas"], horizontal=True, key="semanas_ver",
+                   help="Todas as semanas mostra o primeiro mapa escolhido, uma semana em cada mapa: é "
+                        "como se vê a tendência mudar.")
+    if ver == "Uma semana":
+        if st.session_state.get("semanas_semana") not in semanas:
+            st.session_state["semanas_semana"] = semanas[0]
+        semana = st.select_slider("Semana", options=semanas, format_func=previsao.nome_da_semana,
+                                  key="semanas_semana")
+        paineis = [(previsao.MAPAS_SEMANAIS[nome], semana, nome) for nome in ordem]
+    else:
+        mapa = previsao.MAPAS_SEMANAIS[ordem[0]]
+        paineis = [(mapa, semana, f"{mapa.nome}, {previsao.nome_da_semana(semana)}") for semana in semanas]
+    rotulos = st.checkbox("Mostrar o valor de cada estação", value=True, key="semanas_rotulos",
+                          help="A anomalia do EC46 no ponto de cada estação.")
+    st.info("**Os números destes mapas são desvios do normal, e não temperaturas ou chuvas.** −2,0 °C quer "
+            "dizer uma semana 2 °C mais fria que o normal daquela época; +30 mm, 30 mm a mais de chuva que o "
+            "normal da semana.")
+    st.caption(f"**EC46**, a previsão estendida do ECMWF, na média dos membros; rodada de {rodada:%d/%m %H} UTC "
+               "(sai uma por dia). **Anomalia** é a previsão da semana menos a normal do próprio modelo para a "
+               "mesma época, tirada das reprevisões do ECMWF dos últimos anos: branco é o normal; azul, mais "
+               "frio, e vermelho, mais quente; marrom, menos chuva, e verde, mais. Dá a tendência da semana, e "
+               "não o tempo de um dia. A semana vai de segunda a domingo. Previsão: "
+               "[Open-Meteo.com](https://open-meteo.com/), com dados do ECMWF "
+               "([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)).")
+
+    por_linha = min(len(paineis), MAPAS_POR_LINHA)
+    with st.spinner("Desenhando os mapas..."):
+        for primeiro in range(0, len(paineis), por_linha):
+            for coluna_tela, (mapa, semana, titulo) in zip(st.columns(por_linha),
+                                                            paineis[primeiro:primeiro + por_linha]):
+                with coluna_tela:
+                    painel_do_mapa_semanal(mapa, rodada, semana, rotulos, semanal_grade, pontos_grade,
+                                           semanal_estacoes, estacoes, titulo)
+    espacamento = f"{config.GRADE_PREVISAO:g}".replace(".", ",")
+    st.caption(f"A superfície é a do EC46 nos {len(pontos_grade)} pontos da grade de {espacamento}°, levada à "
+               "resolução do mapa por interpolação bilinear, como nos mapas dos dias. Os números sobre as "
+               "estações são a anomalia no ponto de cada uma, e são eles que entram no ranking do PNG do "
+               "boletim.")
+
+
+# =====================================================
+# PÁGINAS
+# =====================================================
+def _observado() -> None:
+    """O observado do INMET: é o resto deste arquivo, que segue depois da navegação."""
+
+
+# A previsão não usa nenhum filtro do observado (estado, período, estações), e numa aba ela ficaria
+# atrás deles; como página, ela só consulta o Open-Meteo quando alguém a abre. Os gráficos e os
+# mapas são páginas separadas pelo mesmo motivo: os mapas pedem a grade, os gráficos não.
+observado = st.Page(_observado, title="Observado (INMET)", icon=":material/history:", default=True)
+lembrar_filtros()
+pagina = st.navigation({
+    "": [observado],
+    "Previsão (MS)": [
+        st.Page(pagina_previsao, title="Estações", icon=":material/show_chart:", url_path="previsao"),
+        st.Page(pagina_mapas_previstos, title="Mapas", icon=":material/map:", url_path="previsao-mapas"),
+        st.Page(pagina_semanas, title="Semanas", icon=":material/date_range:", url_path="previsao-semanas"),
+    ],
+})
+pagina.run()
+if pagina is not observado:
+    st.stop()
+
+# =====================================================
 # FILTROS
 # =====================================================
 st.title("Painel Meteorológico")
+# Lugar na área principal para os avisos que nascem dentro da barra lateral: escritos lá, ficariam
+# espremidos ao lado, onde quase ninguém olha.
+aviso_principal = st.container()
 
 if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
     st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
@@ -920,32 +1680,43 @@ with st.sidebar:
     # O estado vem primeiro porque tudo abaixo depende dele: as estações, o fuso que define o
     # dia, os shapefiles do mapa. Só aparecem as UFs que têm shapefile na pasta shp/.
     ufs = config.ufs_disponiveis()
-    uf = st.selectbox("Estado", ufs, index=ufs.index(config.UF) if config.UF in ufs else 0,
+    st.session_state.setdefault("uf", config.UF if config.UF in ufs else ufs[0])
+    uf = st.selectbox("Estado", ufs, key="uf",
                       format_func=lambda sigla: f"{sigla} — {config.ESTADOS[sigla][0]}",
                       help="Para acrescentar um estado, rode "
                            "ferramentas/simplificar_municipios.py --uf SIGLA, que busca a "
                            "malha dele no IBGE.")
     recorte = config.recorte_de(uf)
     hoje = date.today()
-    intervalo = st.date_input("Período", value=(hoje - timedelta(days=7), hoje - timedelta(days=1)),
-                              max_value=hoje, format="DD/MM/YYYY")
+    intervalo = st.date_input("Período", max_value=hoje, format="DD/MM/YYYY",
+                              value=st.session_state.get("periodo_guardado",
+                                                         (hoje - timedelta(days=7), hoje - timedelta(days=1))))
     if len(intervalo) != 2:
         st.info("Escolha a data inicial e a final.")
         st.stop()
+    st.session_state["periodo_guardado"] = intervalo
 
-    estacoes = carregar_estacoes(uf).sort_values("Estação")
+    try:
+        estacoes = carregar_estacoes(uf).sort_values("Estação")
+    except fonte.ErroFonte:
+        sem_lista_de_estacoes(aviso_principal, uf)
     # Sem estação escolhida de saída: quem abre decide o que quer ver, e nenhuma consulta
     # à API acontece antes disso.
-    nomes = st.multiselect("Estações", estacoes["Estação"].tolist(), default=[],
+    # As escolhidas que não são do estado saem antes do widget: trocando o estado, as do anterior
+    # não estão mais entre as opções, e o Streamlit recusaria o valor guardado
+    st.session_state["estacoes"] = [nome for nome in st.session_state.get("estacoes", [])
+                                    if nome in set(estacoes["Estação"])]
+    nomes = st.multiselect("Estações", estacoes["Estação"].tolist(), key="estacoes",
                            help="Cada estação vira uma linha no gráfico. Os mapas usam sempre "
                                 "todas as estações do estado.")
     # Uma grandeza dá um gráfico, com as suas séries dentro (máxima, mínima, média): escalas
     # diferentes nunca se misturam num eixo só. A chuva ficou de fora: ela não vira linha, vira
     # cascata, e a cascata mora na aba Chuva, junto do resto do que se lê dela.
+    st.session_state.setdefault("grandezas", ["Temperatura", "Vento"])
     escolhidas = st.multiselect("Grandezas",
                                 [nome for nome in variaveis.grandezas(variaveis.HORA, variaveis.GRAFICO)
                                  if nome != "Chuva"],
-                                default=["Temperatura", "Vento"],
+                                key="grandezas",
                                 help="Cada grandeza ganha o seu gráfico, com as séries que a equipe "
                                      "de meteorologia definiu.")
 
@@ -1076,7 +1847,7 @@ with aba_mapa:
                                                          tuple(estacoes["Estação"]), inicio, fim, uf)
         # As vizinhas vêm numa consulta à parte para o caminho do produto ficar intocado: o que
         # sai delas só alimenta a interpolação da borda.
-        vizinhas = carregar_apoio(uf)
+        vizinhas = estacoes_vizinhas(uf)
         leituras_apoio, _ = carregar_leituras(tuple(vizinhas["CD_ESTACAO"]), tuple(vizinhas["Estação"]),
                                               inicio, fim, uf, "Consultando as estações vizinhas")
         # O modo mora aqui, e não na barra lateral, porque o mapa tem um a mais que o gráfico: o
@@ -1209,7 +1980,7 @@ with aba_chuva:
             tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]),
             inicio_chuva.astimezone(config.FUSO_UTC), ate.astimezone(config.FUSO_UTC), uf,
             f"Consultando a chuva desde {inicio_chuva:%d/%m}")
-        vizinhas_chuva = carregar_apoio(uf)
+        vizinhas_chuva = estacoes_vizinhas(uf)
         chuva_apoio, _ = carregar_leituras(
             tuple(vizinhas_chuva["CD_ESTACAO"]), tuple(vizinhas_chuva["Estação"]),
             inicio_chuva.astimezone(config.FUSO_UTC), ate.astimezone(config.FUSO_UTC), uf,
@@ -1363,7 +2134,7 @@ with aba_risco:
     else:
         leituras_risco, _ = carregar_leituras(tuple(estacoes["CD_ESTACAO"]),
                                               tuple(estacoes["Estação"]), inicio, fim, uf)
-        vizinhas_risco = carregar_apoio(uf)
+        vizinhas_risco = estacoes_vizinhas(uf)
         risco_apoio, _ = carregar_leituras(tuple(vizinhas_risco["CD_ESTACAO"]),
                                            tuple(vizinhas_risco["Estação"]), inicio, fim, uf,
                                            "Consultando as estações vizinhas")
@@ -1556,7 +2327,7 @@ with aba_navegavel:
     else:
         leituras_navegavel, _ = carregar_leituras(tuple(estacoes["CD_ESTACAO"]),
                                                   tuple(estacoes["Estação"]), inicio, fim, uf)
-        vizinhas_nav = carregar_apoio(uf)
+        vizinhas_nav = estacoes_vizinhas(uf)
         apoio_navegavel, _ = carregar_leituras(tuple(vizinhas_nav["CD_ESTACAO"]),
                                                tuple(vizinhas_nav["Estação"]), inicio, fim, uf,
                                                "Consultando as estações vizinhas")

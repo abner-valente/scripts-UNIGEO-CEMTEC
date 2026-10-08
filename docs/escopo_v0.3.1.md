@@ -1,26 +1,27 @@
-# Escopo da v0.3.1 — aba de previsão para MS
+# Escopo da v0.3.1 — previsão para MS
 
-> Escrito em 06/10/2026 e atualizado em 07/10, com as decisões tomadas pelo programador e pela
+> Escrito em 06/10/2026 e atualizado até 08/10, com as decisões tomadas pelo programador e pela
 > equipe de meteorologia entre 05 e 07/10. Os custos foram **medidos** contra a API do
 > Open-Meteo em 05 e 06/10, e não tirados da documentação, salvo onde dito. Este documento
-> registra o que foi decidido e por quê; nada daqui está implementado ainda.
+> registra o que foi decidido e por quê. O que já está feito vem marcado na
+> [ordem de trabalho](#ordem-de-trabalho).
 
 ## O que muda, em uma frase
 
-O painel passa a mostrar também o que **vai** acontecer: uma aba de previsão para Mato Grosso do
-Sul, com três modelos até 14 dias e a anomalia semanal até 6 semanas.
+O painel passa a mostrar também o que **vai** acontecer: uma página de previsão para Mato Grosso
+do Sul, com três modelos até 14 dias e a anomalia semanal até 6 semanas.
 
 ## A ideia central
 
 "Algumas semanas à frente" são dois produtos diferentes, porque a previsão muda de natureza no
 meio do caminho:
 
-| Horizonte | O que o modelo sabe dizer | O que a aba mostra |
+| Horizonte | O que o modelo sabe dizer | O que a página mostra |
 |---|---|---|
 | **Dias 1 a 14** | o valor de cada hora e de cada dia: "máxima de 34 °C na quinta" | mapas no padrão do boletim, dia a dia ou acumulados, e gráficos de linha por estação, um modelo ao lado do outro |
 | **Semanas 1 a 6** | o desvio da semana em relação ao normal: "semana mais quente que o normal no sul do estado" | mapas de **anomalia semanal** |
 
-**A aba não oferece mapa diário depois do dia 14.** Um mapa de "temperatura do dia 20" seria ruído
+**A página não oferece mapa diário depois do dia 14.** Um mapa de "temperatura do dia 20" seria ruído
 com cara de previsão.
 
 O dado do modelo já vem em grade, então **não há interpolação**: a superfície é desenhada direto,
@@ -87,10 +88,11 @@ O dia é somado pela regra do projeto: a leitura das 00h fecha o dia anterior, c
 Assim previsto e observado ficam comparáveis. O diário pronto do Open-Meteo vai das 00h às 23h,
 uma hora deslocado. Os nomes dos mapas seguem o catálogo do painel onde houver equivalente.
 
-Um cuidado: o ECMWF só publica de 3 em 3 horas no começo e de 6 em 6 depois, e o Open-Meteo
-preenche as horas do meio. Nos dias mais distantes, a máxima tirada das horas pode ficar um pouco
-abaixo do pico. Isso é medido na primeira busca de verdade, comparando com a máxima diária do
-próprio Open-Meteo.
+O ECMWF só publica de 3 em 3 horas no começo e de 6 em 6 depois, e o Open-Meteo preenche as
+horas do meio. Temia-se que, nos dias mais distantes, a máxima tirada das horas ficasse abaixo do
+pico. **Medido em 07/10, não fica:** em 20 pontos de MS, nos 14 dias e nos três modelos, a máxima
+diária do próprio Open-Meteo foi igual à máxima das horas, com diferença de 0,0 °C. O diário pronto
+do Open-Meteo é tirado das mesmas horas; tirá-lo aqui não perde nada.
 
 **5. Grade de 0,25° no coletor agendado; 0,5° enquanto a busca for sob demanda.** A margem é
 igual ao espaçamento: uma fileira de pontos além da divisa, sem a qual a cor não chega até a
@@ -100,7 +102,7 @@ borda.
 |---|---|---|
 | retângulo inteiro do mapa (0,5°) | 272 | inclui cantos que o recorte esconde |
 | só dentro do estado (0,5°) | 124 | a borda fica sem cor |
-| estado + margem de 0,5°, grade de 0,5° | 178 | cabe num pedido só, de uns 2 segundos |
+| estado + margem de 0,5°, grade de 0,5° | 178 | cabe num pedido só: 12 segundos com as horas dos três modelos (07/10) |
 | **estado + margem de 0,25°, grade de 0,25°** | **607** | **o espaçamento do próprio ECMWF e do GFS** |
 
 A 0,25° um mapa custa mais que o limite de 600 chamadas por minuto, então precisa ser dividido
@@ -166,12 +168,12 @@ inteiro dá uns 6,5 milhões de linhas por ano com as estações de hoje, e meno
 quando havia menos estações. O banco da UNIGEO comporta as duas coisas com folga.
 
 **7. A busca mora fora do painel**, num módulo novo, `modulos/openmeteo.py`, ao lado do
-`inmet.py`: cada fonte tem o seu cliente, com o mesmo papel. As contas da aba que não são busca
+`inmet.py`: cada fonte tem o seu cliente, com o mesmo papel. As contas da página que não são busca
 (rodada atual de cada modelo, séries dos gráficos, os mapas) ficam em `app/previsao.py`, sem
 tela, para poderem ser testadas. No servidor, um coletor agendado chama essa função e grava no banco. Enquanto o
 servidor não existir, o painel chama a mesma função sob demanda, com a cópia guardada por rodada
 e compartilhada por todos. A chave é a **rodada** ("ECMWF de 06/10, 00 UTC"), e não o relógio,
-porque cada modelo publica a rodada horas depois do horário nominal. A aba mostra de que rodada é
+porque cada modelo publica a rodada horas depois do horário nominal. A página mostra de que rodada é
 cada modelo.
 
 **8. Risco de fogo previsto, hora a hora, das mesmas horas.** A temperatura, a umidade e a
@@ -189,6 +191,19 @@ conservador que o observado. O previsto contra observado vai mostrar quanto.
 etc.), para previsto e observado serem comparáveis. Os de anomalia pedem uma escala nova,
 **divergente**: azul abaixo do normal, branco no normal, vermelho acima.
 
+**10. Uma página própria, e não uma aba** (decidido em 07/10). A previsão não usa nenhum filtro do
+observado (estado, período, estações). Numa aba, ela só apareceria depois de escolher estações do
+passado, e o Streamlit executa todas as abas a cada clique: o Open-Meteo seria consultado até
+por quem nunca olhasse a previsão. Como página, ao lado do "Observado (INMET)" na barra lateral,
+ela tem os seus filtros e um endereço próprio (`…/previsao`), e só busca quando alguém a abre.
+
+**11. Cada modelo é buscado sozinho** (decidido em 07/10). Os três atualizam de 6 em 6 horas, mas
+cada rodada fica pronta numa hora diferente: em 07/10, a das 12 UTC ficou pronta às 15:35 UTC no
+ICON, às 17:57 no GFS e às 19:42 no ECMWF. Num pedido só com os três, a rodada nova de qualquer um
+refaria a busca inteira, a 2,1 chamadas por ponto. Sozinho, cada modelo custa 1 por ponto (7
+variáveis não passam de 10) e só é buscado na vez dele. Na página, a cópia guardada é uma por
+modelo (`app/previsao.py`, `Guarda`), e se o Open-Meteo falhar fica a última, com aviso.
+
 ## O custo, medido
 
 Como o Open-Meteo conta, conforme os testes de 05 e 06/10:
@@ -198,7 +213,7 @@ Como o Open-Meteo conta, conforme os testes de 05 e 06/10:
 - **Num pedido com vários modelos, as variáveis contam por modelo.** 7 variáveis × 3 modelos
   pesam como 21, ou seja, 2,1 vezes. Pedir o ICON junto sai mais barato que separado, mesmo com
   ele parando no dia 7,5: 2,1 contra 2,4.
-- **Mais de 14 dias pesa** na proporção. Por isso a aba usa 14 (decisão 3).
+- **Mais de 14 dias pesa** na proporção. Por isso a página usa 14 (decisão 3).
 - A API não informa quanto já foi gasto. Só se descobre o limite ao chegar nele.
 
 Em resumo, pela documentação e de acordo com o que foi medido:
@@ -207,35 +222,87 @@ Em resumo, pela documentação e de acordo com o que foi medido:
 custo = pontos × máx(1, variáveis × modelos ÷ 10) × máx(1, dias ÷ 14)
 ```
 
-O que não entra na conta é quantos números voltam. **Que o dado horário custa o mesmo que o diário
-vem da regra documentada e não foi medido**: confere-se na primeira busca de verdade.
+O que não entra na conta é quantos números voltam. **O dado horário custa o mesmo que o diário,
+medido em 07/10:** 280 pontos horários (588 pela regra) deixaram passar o pedido seguinte do
+mesmo minuto, e 290 (609) o fizeram ser recusado, exatamente onde a regra põe o limite.
 
 Para MS, com 3 modelos, 7 variáveis horárias e 14 dias, cada ponto custa 2,1:
 
 | Produto | Sob demanda, 0,5° | Agendado, 0,25° |
 |---|---|---|
-| Grade (mapas e risco de fogo), 2 rodadas | ~750 | ~2.550 |
-| Gráficos de linha nas 59 estações, 2 rodadas | ~250 | ~250 |
-| Anomalia semanal do EC46, 46 dias, a 0,5°, 1 por dia | ~590 | ~590 |
-| **Total por dia** | **~1.600 (16% da cota)** | **~3.400 (34% da cota)** |
+| Grade de 0,5° dos mapas: cada modelo, a cada rodada dele | até ~2.100 | ~2.550 |
+| Gráficos de linha nas 58 estações: cada modelo, a cada rodada dele | até ~700 | ~250 |
+| Anomalia semanal do EC46, grade e estações, 1 rodada por dia | até ~780 | ~780 |
+| **Total por dia, no pior caso** | **~3.600 (36% da cota)** | **~3.600 (36% da cota)** |
+
+As duas primeiras linhas mudaram em 08/10, com a decisão 11: são 178 (grade) e 58 (estações)
+chamadas por modelo e rodada, e cada modelo tem até 4 rodadas por dia. É o pior caso: só gasta
+isso se alguém abrir os mapas de cada modelo depois de cada rodada dele. A coluna do agendado
+continua com as contas de 06/10 (duas rodadas, os três modelos juntos); o coletor da v0.4.x
+decide de quais rodadas precisa.
 
 ## Ordem de trabalho
 
 1. **`modulos/openmeteo.py`.** A busca: os pontos da grade e as estações de MS, os três modelos, a
    identificação da rodada, a divisão em pedidos de até 600 chamadas por minuto, e o aviso quando
    o Open-Meteo não responder ou a cota acabar. Os testes usam um Open-Meteo simulado, como o
-   INMET já é, sob a mesma trava que proíbe rede nos testes. Na primeira busca de verdade:
-   conferir se o horário custa o mesmo que o diário, e quanto a máxima tirada das horas fica
-   abaixo da do próprio Open-Meteo.
+   INMET já é, sob a mesma trava que proíbe rede nos testes. **Feito em 07/10.** A primeira
+   busca de verdade de MS (rodadas de 07/10, 12 UTC): a grade de 0,5° (178 pontos) levou 12 s e
+   deu 153.970 linhas horárias e 6.942 diárias; as 58 estações, 8 s, 50.170 e 2.262. O ICON dá
+   pouco mais da metade das linhas dos outros dois, porque para no dia 7,5.
 2. **A tabela e o coletor**, se o servidor e o banco já existirem. Se não, o cache por rodada no
-   painel.
-3. **Gráficos de linha por estação**, com as contas em `app/previsao.py` e a aba no
+   painel. **O cache ficou pronto em 08/10**, um por modelo (decisão 11); a tabela e o coletor
+   ficam para a v0.4.x, com o banco.
+3. **Gráficos de linha por estação**, com as contas em `app/previsao.py` e a página no
    `explorador.py`. Os três modelos lado a lado. É o passo mais barato, e o que
-   mostra se a fonte serve.
+   mostra se a fonte serve. **Feito em 08/10**: temperatura, umidade, ponto de orvalho, vento,
+   direção e chuva, por hora ou por dia, com a tabela diária em CSV.
 4. **Mapas de dias**, de 1 a 14. Um modelo por vez, com um seletor para trocar, e o PNG do
-   boletim.
-5. **Mapas de anomalia semanal** do EC46.
-6. **Risco de fogo previsto.**
+   boletim. **Feito em 08/10**, numa página própria, ao lado da dos gráficos:
+   - temperatura máxima, mínima e média, umidade mínima, chuva do dia, chuva acumulada de hoje
+     até o dia escolhido, rajada e vento máximos com a seta da direção dominante;
+   - **a superfície é a do modelo**, levada da grade de 0,5° à do mapa por interpolação
+     **bilinear**. Comparadas no mesmo dia, a linear por triângulos deixava facetas retas e a
+     cúbica inventava bolhas entre os pontos;
+   - os números e o ranking são a previsão do mesmo modelo **no ponto de cada estação**;
+   - o PNG do boletim leva "Open-Meteo (CC BY 4.0)/SEMADESC" no lugar do "INMET/SEMADESC".
+5. **Mapas de anomalia semanal** do EC46. **Feito em 08/10**, numa página "Semanas":
+   - a API sazonal, com `models=ecmwf_ec46_ensemble_mean` e `forecast_days=46` (sem ele, a API
+     devolve 27 semanas e cobra por elas). As quatro anomalias: `temperature_2m_anomaly`,
+     `temperature_max6h_2m_anomaly`, `temperature_min6h_2m_anomaly` e `precipitation_anomaly`
+     (mm na semana). Os nomes foram achados por teste: a documentação só traz os rótulos. A
+     máxima e a mínima são as de cada 6 horas, na média da semana, e não as do dia: em Campo
+     Grande, na semana de 12/10, a "máxima" deu 25,6 °C, e a do dia do ECMWF, 26,7 °C;
+   - a busca traz também a previsão da semana em valor (`temperature_2m_mean`, as de 6 h e
+     `precipitation_mean`, o total da semana): são 8 variáveis, e o custo por ponto não muda.
+     A normal da época é a previsão menos a anomalia. No topo da página, os gráficos de uma
+     estação mostram as duas linhas e a anomalia entre elas (pedido de 08/10, para explicar o
+     que é a previsão semanal);
+   - na tela, tudo diz "anomalia" e os números levam sinal: com o título "Temperatura média"
+     sobre um −2,4, o mapa se lia como uma temperatura de −2,4 °C (corrigido em 08/10);
+   - a semana vai de segunda a domingo. Entram só as que começam no dia da rodada ou depois: a
+     que já tinha começado só teria os dias que faltavam, e a que passa do dia 46 vem vazia. Na
+     prática, cinco semanas;
+   - a rodada vem dos metadados do `ecmwf_ec46` (uma por dia, pronta por volta das 20:30 UTC); os
+     da média dos membros dizem 744 h de intervalo;
+   - **custo:** a regra dá 3,3 chamadas por ponto (46/14), mas 190 pontos (624 pela regra) não
+     esgotaram o minuto em 08/10, nem na API sazonal nem na de previsão. A regra fica como teto: os
+     lotes de até 182 pontos têm folga, e o custo do dia fica abaixo das ~780 da tabela;
+   - escalas divergentes e fixas: de −5 a 5 °C na temperatura (azul e vermelho) e de −50 a 100 mm
+     na chuva (marrom e verde), com o normal (−0,5 a 0,5 °C; −5 a 5 mm) em branco. O lado chuvoso
+     vai mais longe porque o seco não passa da normal da semana; a primeira semana medida passou de
+     80 mm. O ranking do boletim é o dos **maiores desvios do normal**, para cima ou para baixo.
+6. **Risco de fogo previsto.** **Feito em 08/10**:
+   - a regra é a do produto (`risco_fogo.condicoes_atendidas`), sem reescrever, aplicada a cada
+     hora prevista; o dia segue a regra do produto (`dia_da_leitura`). A tabela diária ganha o
+     `risco_max` da decisão 6 e as horas em risco alto (`app/previsao.diario_com_risco`);
+   - nos **Mapas**, o pior nível do dia e as horas em risco alto. A superfície é feita como o
+     produto faz: em cada hora, as três variáveis viram superfície (bilinear) e a regra é
+     aplicada em cada célula. Aplicar a regra nos 178 pontos e interpolar o nível daria degraus
+     falsos, porque nível não se interpola. Custa ~0,14 s por dia e modelo;
+   - nas **Estações**, um calendário com o pior nível de cada dia em cada modelo;
+   - na rodada de 08/10, 06 UTC, do ECMWF: risco médio em 83% do estado e alto em 2% para o dia
+     08/10, com até 4 horas em risco alto.
 
 ## Encaixe com a ida para o servidor da UNIGEO
 
@@ -245,19 +312,25 @@ sua tabela: o INMET do Brasil inteiro, de hora em hora, e o Open-Meteo de MS. O 
 ainda está aberto.
 
 Em 07/10 ficaram definidos mais dois pontos:
-- **O banco é PostgreSQL.** O particionamento por dia de coleta usa o particionamento nativo dele.
+- **O banco é PostgreSQL**, versão 11.14, com PostGIS. O particionamento por dia de coleta usa o
+  particionamento nativo dele, e é o coletor quem cria e apaga as partições, porque o banco não tem
+  `pg_partman` nem `pg_cron` (detalhes em [`plano_arquitetura.md`](plano_arquitetura.md)).
   As rodadas entram em lote (`COPY`), porque são ~500 mil linhas cada. A atualização das últimas
   48 h do INMET usa `INSERT ... ON CONFLICT DO UPDATE`.
-- **O `Dockerfile` e o `docker-compose.yml` ficam no repositório.** O compose sobe o painel e os
-  coletores. O banco já existe na unidade e entra só pela conexão, lida do `.env` do servidor.
+- **O `Dockerfile` e o `docker-compose.yml` ficariam no repositório**, com o painel e os
+  coletores. **Adiado no mesmo dia:** a VM é Windows e o Docker não está rodando nela. Por ora, o
+  painel e os coletores rodam direto no Windows, pelo Agendador de Tarefas (passo 8 do plano). O
+  banco entra só pela conexão, lida do `.env` do servidor, nos dois casos.
 
-Os arquivos novos dessa parte: `modulos/banco.py` (o único que fala SQL), `modulos/fonte.py` (lê
+A ordem de execução dessa parte está em [`plano_arquitetura.md`](plano_arquitetura.md). Os
+arquivos novos dela: `modulos/banco.py` (o único que fala SQL), `modulos/fonte.py` (lê
 da API ou do banco), `coletores/coletar_inmet.py`, `coletores/coletar_previsao.py`,
-`banco/esquema.sql`, `Dockerfile` e `docker-compose.yml`.
+`banco/esquema.sql`, e o `Dockerfile` e o `docker-compose.yml` quando houver Docker no
+servidor.
 
 - **A busca da decisão 7 é o coletor do Open-Meteo**, e a tabela da decisão 6 é a dele.
-- **Se o servidor e o banco chegarem antes do passo 4**, a aba já nasce lendo do banco, e o cache
-  sob demanda nem chega a ser escrito.
+- **Se o servidor e o banco chegarem antes do passo 4**, os mapas já nascem lendo do banco. O
+  cache sob demanda, já escrito para os gráficos, continua valendo na nuvem.
 - **No servidor, a busca é agendada.** A primeira pessoa deixa de esperar, e a grade de 0,25°
   passa a caber.
 
@@ -305,9 +378,9 @@ pela configuração de cada instalação:
 - o banco, no servidor interno;
 - a API de leitura, no app da nuvem e no `main.py`.
 
-O resto do código não sabe de onde os dados vêm. A API é um serviço a mais no
-`docker-compose.yml`. A tecnologia ainda vai ser escolhida; o candidato natural é o FastAPI, por
-ser Python como o resto.
+O resto do código não sabe de onde os dados vêm. A API é criada e mantida pelo programador, na
+máquina host, que alcança o banco e a VM. A tecnologia ainda vai ser escolhida; o candidato
+natural é o FastAPI, por ser Python como o resto.
 
 **Depende de:** a gerência aprovar uma versão externa, e a TI aceitar publicar um serviço por
 HTTPS. Enquanto isso, a versão da nuvem segue pela opção 1.
@@ -315,7 +388,7 @@ HTTPS. Enquanto isso, a versão da nuvem segue pela opção 1.
 ## Fora do escopo
 
 - **Outros estados**, por causa do custo (decisão 1).
-- **Previsão na linha de comando** (`main.py`). Pode virar um produto depois que a aba estiver
+- **Previsão na linha de comando** (`main.py`). Pode virar um produto depois que a página estiver
   validada pela equipe.
 - **Previsto contra observado.** A comparação com as estações do INMET, para a equipe saber em
   que modelo confiar em MS, fica para a versão seguinte. Os dados para ela começam a ser
@@ -326,8 +399,8 @@ HTTPS. Enquanto isso, a versão da nuvem segue pela opção 1.
 
 - **A cota pode estar sendo dividida com outros apps na nuvem.** O limite do Open-Meteo é por
   endereço de saída, e no Streamlit Community Cloud os apps provavelmente saem por endereços
-  compartilhados. Isso não foi medido. Se acontecer, a aba recebe "limite excedido" sem ter
+  compartilhados. Isso não foi medido. Se acontecer, a página recebe "limite excedido" sem ter
   gastado nada. No servidor da UNIGEO o risco diminui, porque o endereço é o da unidade.
-- **O Open-Meteo gratuito não garante disponibilidade.** A aba avisa e mostra a última rodada
+- **O Open-Meteo gratuito não garante disponibilidade.** A página avisa e mostra a última rodada
   guardada, com a data dela.
 - **O crédito é obrigatório** (CC BY 4.0), nos mapas e na tela.

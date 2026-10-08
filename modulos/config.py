@@ -165,6 +165,11 @@ load_dotenv(RAIZ / ".env")
 TOKEN_INMET = os.getenv("TOKEN_INMET", "").strip()
 TOKEN_EXEMPLO = "seu_token_aqui"  # valor do .env.example, tratado como "não configurado"
 
+# De onde vêm os dados (modulos/fonte.py), escolhido por instalação: no .env do servidor ou nos
+# Secrets do Streamlit Cloud. Por enquanto só existe "apis", as APIs públicas; o banco da UNIGEO
+# e a API de leitura chegam nas próximas versões (docs/plano_arquitetura.md).
+FONTE_DADOS = os.getenv("FONTE_DADOS", "apis").strip().lower()
+
 # =====================================================
 # API DO INMET
 # =====================================================
@@ -181,6 +186,24 @@ DOWNLOADS_SIMULTANEOS = 8
 TENTATIVAS = 3                 # tentativas por requisição quando a API falha por um instante
 PAUSA_ENTRE_TENTATIVAS = 2     # segundos antes de repetir; dobra a cada tentativa (2 s, 4 s, ...)
 HORAS_BUSCA_TEMPO_REAL = 96    # histórico baixado no modo tempo real (cobre o acumulado de 72 h)
+
+# =====================================================
+# PREVISÃO (OPEN-METEO)
+# =====================================================
+# As decisões por trás destes números estão em docs/escopo_v0.3.1.md.
+URL_OPENMETEO = "https://api.open-meteo.com/v1/forecast"
+URL_OPENMETEO_RODADA = "https://api.open-meteo.com/data/{modelo}/static/meta.json"
+TIMEOUT_OPENMETEO = 120        # segundos: um pedido de centenas de pontos leva uns 2 s, mas pode demorar
+# Os modelos que a equipe de meteorologia prefere (07/10/2026). O ICON só vai até o dia 7,5.
+MODELOS_PREVISAO = ("ecmwf_ifs025", "gfs_seamless", "icon_seamless")
+DIAS_PREVISAO = 14             # o 15º dia faria cada ponto pesar 15/14 na cota
+GRADE_PREVISAO = 0.5           # graus entre os pontos da grade; 0,25 quando a busca for agendada
+OPENMETEO_POR_MINUTO = 600     # limite gratuito de chamadas por minuto
+# As semanas: a anomalia semanal do EC46, a previsão estendida do ECMWF, na média dos membros
+URL_OPENMETEO_SAZONAL = "https://seasonal-api.open-meteo.com/v1/seasonal"
+URL_OPENMETEO_SAZONAL_RODADA = "https://seasonal-api.open-meteo.com/data/{modelo}/static/meta.json"
+MODELO_SEMANAS = "ecmwf_ec46_ensemble_mean"
+DIAS_SEMANAS = 46              # o alcance do EC46; sem isto a API devolve 27 semanas e cobra por elas
 
 # =====================================================
 # MAPAS

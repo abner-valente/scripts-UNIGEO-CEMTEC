@@ -567,7 +567,7 @@ E abra:
 streamlit run app/explorador.py
 ```
 
-O navegador abre em `http://localhost:8501`. Na barra lateral ficam o **estado**, o período, as estações e as **grandezas**. O seletor de estado só oferece as UFs que têm shapefile em `shp/` — hoje **os 25 que têm estação automática operante**, ou seja, todos menos RR e SE, cujas estações estão todas em pane. Para acrescentar uma delas quando voltarem, rode `python ferramentas/simplificar_municipios.py --uf SIGLA` (veja [Shapefiles](#shapefiles)). Trocar de estado troca junto o fuso (é ele que decide onde o dia começa), as estações e os shapefiles, e cada estado tem o seu lugar no cache: duas pessoas no mesmo painel, em estados diferentes, não veem o mapa uma da outra. Cada grandeza ganha o seu gráfico — escalas diferentes nunca se misturam num eixo só —, com as séries que a equipe de meteorologia definiu: no gráfico horário, a máxima, a mínima e a média da hora; no diário, as do dia mais a compensada. **Cor separa a estação, traço separa a série**, e clicar numa série da legenda deixa só ela no gráfico **e no balão** — Shift+clique na série destacada traz todas de volta. Zoom com Shift + roda, e tudo baixável em CSV. O cursor em **qualquer ponto** do gráfico marca a hora mais próxima com uma régua vertical e abre um balão só com **todas as estações daquele instante** — antes era preciso acertar o mouse em cima de um ponto, e o balão trazia uma linha de cada vez, que é justamente a comparação que não se queria fazer.
+O navegador abre em `http://localhost:8501`, na página **Observado (INMET)**. No topo da barra lateral ficam as páginas da **Previsão (MS)**: **Estações**, **Mapas** e **Semanas** (veja [Previsão (MS)](#previsão-ms)). Abaixo dela ficam o **estado**, o período, as estações e as **grandezas**. O seletor de estado só oferece as UFs que têm shapefile em `shp/` — hoje **os 25 que têm estação automática operante**, ou seja, todos menos RR e SE, cujas estações estão todas em pane. Para acrescentar uma delas quando voltarem, rode `python ferramentas/simplificar_municipios.py --uf SIGLA` (veja [Shapefiles](#shapefiles)). Trocar de estado troca junto o fuso (é ele que decide onde o dia começa), as estações e os shapefiles, e cada estado tem o seu lugar no cache: duas pessoas no mesmo painel, em estados diferentes, não veem o mapa uma da outra. Cada grandeza ganha o seu gráfico — escalas diferentes nunca se misturam num eixo só —, com as séries que a equipe de meteorologia definiu: no gráfico horário, a máxima, a mínima e a média da hora; no diário, as do dia mais a compensada. **Cor separa a estação, traço separa a série**, e clicar numa série da legenda deixa só ela no gráfico **e no balão** — Shift+clique na série destacada traz todas de volta. Zoom com Shift + roda, e tudo baixável em CSV. O cursor em **qualquer ponto** do gráfico marca a hora mais próxima com uma régua vertical e abre um balão só com **todas as estações daquele instante** — antes era preciso acertar o mouse em cima de um ponto, e o balão trazia uma linha de cada vez, que é justamente a comparação que não se queria fazer.
 
 | | |
 |---|---|
@@ -670,6 +670,24 @@ Radiação levemente negativa à noite é ruído conhecido do sensor, não defei
 
 > Para o dia em curso, as horas mais recentes podem não estar no cache. Se precisar do dado de agora, limpe o cache ou consulte de novo mais tarde.
 
+### Previsão (MS)
+
+A previsão do tempo para Mato Grosso do Sul, do [Open-Meteo](https://open-meteo.com/), com três modelos: **ECMWF**, **GFS** e **ICON**. O ECMWF e o GFS vão até o dia 14; o ICON, até o dia 7. São páginas à parte porque não usam nenhum filtro do observado, e só consultam o Open-Meteo quando alguém as abre.
+
+| | |
+|---|---|
+| **Estações** (`…/previsao`) | Os gráficos de uma estação de MS (abre em Campo Grande), com os modelos lado a lado: temperatura, umidade, ponto de orvalho, vento e rajada, direção e chuva, por hora ou por dia. Cor separa o modelo, traço separa a série. Por dia, a chuva sai em barras, com o total previsto de cada modelo. Em "Risco de fogo", um calendário com o pior nível de cada dia em cada modelo. A tabela diária, com o risco, baixa em CSV |
+| **Mapas** (`…/previsao-mapas`) | Os mapas dos dias, um modelo por vez, com um deslizante de hoje até o último dia inteiro do modelo: temperatura máxima, mínima e média, umidade mínima, chuva do dia, chuva acumulada de hoje até o dia escolhido, rajada e vento máximos com a seta da direção, e o risco de fogo (o pior nível do dia e as horas em risco alto). As cores e as escalas são as dos mapas do observado, e cada mapa tem o botão do PNG do boletim |
+| **O risco de fogo** | A regra 30-30-30 do produto `risco_fogo`, sem reescrever, aplicada a cada hora prevista: no mapa, as três variáveis viram superfície e a regra é aplicada em cada célula, como o produto faz com as estações. O modelo dá o valor da hora cheia, e a estação mede a máxima e a mínima dentro da hora: o risco previsto tende a sair um pouco abaixo do medido |
+| **Semanas** (`…/previsao-semanas`) | A anomalia semanal do **EC46**, a previsão estendida do ECMWF (média dos membros, uma rodada por dia): quanto cada semana, de segunda a domingo, deve ficar acima ou abaixo do normal do próprio modelo, na temperatura média, na máxima e na mínima de 6 em 6 horas (quatro por dia, na média da semana: não são a máxima e a mínima do dia) e na chuva. Os números são desvios, com sinal, e não temperaturas. No topo, os gráficos da estação escolhida mostram a previsão de cada semana contra a **normal da época** (temperatura média e chuva), com a anomalia como a distância entre as duas linhas: é o que explica os mapas. Entram as semanas inteiras depois da rodada, cinco na prática. Uma semana com vários mapas, ou um mapa com todas as semanas lado a lado. Branco é o normal; azul e vermelho, mais frio e mais quente; marrom e verde, menos e mais chuva. Dá a tendência da semana, e não o tempo de um dia |
+| **A superfície** | É a do próprio modelo, nos 178 pontos da grade de 0,5° que cobrem o estado, levada à resolução do mapa por interpolação bilinear. **Não é IDW de estação**: a previsão já vem em grade, e o IDW só mostraria um núcleo de chuva onde houvesse estação. Os números sobre as estações são a previsão do mesmo modelo no ponto de cada uma, e são eles que entram no ranking do boletim |
+| **O dia** | O mesmo do observado: da hora das 01:00 à das 00:00 do dia seguinte, no horário de MS. No modo por dia entram só os dias inteiros |
+| **A rodada** | A página diz de que rodada é cada modelo. Cada um é buscado de novo quando sai uma rodada dele, de 6 em 6 horas, e a busca fica guardada para todos que abrem o painel: só a primeira pessoa depois da rodada espera, alguns segundos. Se o Open-Meteo falhar, fica a última rodada guardada, com aviso |
+| **A cota** | O Open-Meteo gratuito aceita 10 mil chamadas por dia. As estações custam 58 por modelo e rodada, e a grade dos mapas, 178: no pior caso, alguém abrindo tudo depois de cada rodada, umas 2.800 por dia. As semanas, no máximo umas 780, uma vez por dia |
+| **Crédito** | Os dados são do Open-Meteo, com ECMWF, NOAA e DWD, sob CC BY 4.0. O crédito vai nas páginas e no subtítulo do PNG do boletim, no lugar do "INMET/SEMADESC" |
+
+As decisões estão em [`docs/escopo_v0.3.1.md`](docs/escopo_v0.3.1.md), e o que vem depois (o banco, os coletores e o servidor da unidade), em [`docs/plano_arquitetura.md`](docs/plano_arquitetura.md).
+
 ## Novos produtos
 
 Os scripts da equipe estão sendo migrados aos poucos. Cada um vira um produto em `modulos/produtos/`, reaproveitando as peças compartilhadas (API do INMET, períodos, cálculos, mapas e Excel). O passo a passo está em [`docs/como_migrar_um_script.md`](docs/como_migrar_um_script.md).
@@ -685,7 +703,9 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 ├── main.py               # Ponto de entrada: escolha do produto e das datas
 ├── modulos/              # Peças compartilhadas por todos os produtos
 │   ├── config.py         # Configurações, o Recorte (o estado mapeado) e o Periodo (janelas de tempo)
+│   ├── fonte.py          # De onde vêm os dados: é a ele que os produtos e o painel pedem (hoje, as APIs)
 │   ├── inmet.py          # Acesso à API do INMET (estações e dados horários)
+│   ├── openmeteo.py      # Previsão do Open-Meteo (ECMWF, GFS e ICON), hora a hora, e o dia tirado das horas
 │   ├── calculos.py       # Recorte no tempo, extremos, acumulados e interpolação IDW
 │   ├── mapas.py          # Mapas pontuais, interpolados e de classes (níveis de risco)
 │   ├── graficos.py       # Gráficos de barras e calendário, com o estilo comum aos produtos
@@ -694,7 +714,8 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │       ├── relatorio_inmet.py  # Extremos e chuva das estações automáticas
 │       └── risco_fogo.py       # Risco de fogo pela regra 30-30-30, hora a hora
 ├── app/                  # Explorador em Streamlit (análise), com o seu cache local em cache/
-│   ├── explorador.py     # A tela: filtros, gráficos, mapa e verificações de qualidade
+│   ├── explorador.py     # A tela: as páginas do observado e da previsão, filtros, gráficos, mapas e qualidade
+│   ├── previsao.py       # Previsão na tela: a rodada guardada de cada modelo, as séries e os mapas dos dias
 │   ├── dados.py          # Coleta com cache, usada só pelo explorador
 │   ├── variaveis.py      # Catálogo do que se pode mapear e traçar, com a regra de cada um
 │   ├── animacao.py       # GIF do mapa no tempo: quais quadros entram e o carimbo de cada um
@@ -705,6 +726,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │   ├── qualidade.py      # Regras de qualidade das leituras (sem tela, por isso testáveis)
 │   └── requirements.txt  # Dependências só do explorador
 ├── ferramentas/          # Scripts auxiliares (ex.: preparar os shapefiles de um estado)
+├── servidor/             # Para o servidor Windows da unidade: iniciar_painel.bat (logs em logs/)
 ├── tests/                # Testes automatizados (pytest), com a API do INMET simulada
 ├── .github/workflows/    # Execução automática dos testes no GitHub (GitHub Actions)
 ├── docs/                 # Documentos da equipe (ex.: questões para a meteorologia, guias de migração e de manutenção)

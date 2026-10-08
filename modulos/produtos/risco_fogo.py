@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .. import calculos, config, excel, graficos, inmet, mapas
+from .. import calculos, config, excel, fonte, graficos, mapas
 from ..config import Periodo
 from ..mapas import BaseCartografica, EspecClasses, EspecMapa, Indicadores
 
@@ -406,8 +406,8 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
     print("=" * 60)
 
     try:
-        coletados = inmet.baixar_estacoes(*periodo.janela, uf=recorte.uf, fuso=periodo.fuso)
-    except inmet.ErroINMET as erro:
+        coletados = fonte.leituras_do_estado(*periodo.janela, uf=recorte.uf, fuso=periodo.fuso)
+    except fonte.ErroFonte as erro:
         print(f"❌ Erro ao listar estações: {erro}")
         return 1
 
@@ -439,9 +439,9 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
         print(f"⚠️ Não foi possível carregar os shapefiles: {erro}")
         return 1
     apoio = []
-    for estacao, dados in inmet.baixar_apoio(recorte, base.lon_grade[base.dentro_uf],
-                                             base.lat_grade[base.dentro_uf], *periodo.janela,
-                                             fuso=periodo.fuso):
+    for estacao, dados in fonte.leituras_de_apoio(recorte, base.lon_grade[base.dentro_uf],
+                                                  base.lat_grade[base.dentro_uf], *periodo.janela,
+                                                  fuso=periodo.fuso):
         leituras = leituras_validas(dados, periodo)
         if not leituras.empty:
             apoio.append((estacao, leituras))
