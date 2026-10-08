@@ -13,6 +13,13 @@ Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
 Ainda não está na `main`. O plano desta versão está em `docs/escopo_v0.3.1.md` e `docs/plano_arquitetura.md`.
 
+### Novo
+
+- **Painel: página "Previsão (MS)"**, ao lado do painel de sempre, que passa a se chamar "Observado (INMET)". A troca fica no topo da barra lateral.
+  - Mostra a previsão do Open-Meteo para as estações de MS, com os modelos ECMWF, GFS e ICON lado a lado, por hora ou por dia, até 14 dias (o ICON vai até o dia 7). Os mapas vêm depois.
+  - A página diz de que rodada é cada modelo, e a tabela diária baixa em CSV.
+  - O que se escolhe na barra lateral de cada página (estado, período, estações, grandezas) continua lá quando se volta a ela.
+
 ### Corrigido
 
 - **Painel: quando o INMET não devolve a lista de estações, aparece um aviso em vez do erro do Python.** O INMET às vezes responde vazio por alguns minutos. Antes, quem abria o painel via um traceback ("ErroINMET: Expecting value…") e não sabia se o problema era com ele. Agora aparece "O INMET não respondeu à lista de estações agora", com um botão para tentar de novo.

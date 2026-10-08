@@ -32,7 +32,7 @@ As duas usam o mesmo código de `modulos/`: a mesma API, as mesmas contas e o me
 flowchart TD
     main["main.py<br/>linha de comando"] --> rel["produtos/relatorio_inmet.py"]
     main --> fogo["produtos/risco_fogo.py"]
-    painel["app/explorador.py<br/>painel Streamlit"] --> appmods["app/*.py<br/>variaveis, chuva, risco, dados,<br/>boletim, superficie, animacao, qualidade"]
+    painel["app/explorador.py<br/>painel Streamlit"] --> appmods["app/*.py<br/>variaveis, chuva, risco, dados, previsao,<br/>boletim, superficie, animacao, qualidade"]
     appmods -->|"a regra 30-30-30 é importada, não reescrita"| fogo
     rel --> base
     fogo --> base
@@ -57,7 +57,7 @@ Tamanho de cada parte, para ter noção do que se está mantendo:
 | Parte | Linhas | O que tem |
 |---|---|---|
 | `modulos/` (base e produtos) | ~2.100 | `config`, `inmet`, `calculos`, `mapas`, `excel`, `graficos` e os dois produtos |
-| `app/explorador.py` | ~1.700 | a tela inteira do painel, aba por aba |
+| `app/explorador.py` | ~2.000 | a tela inteira do painel: as duas páginas, e o observado aba por aba |
 | `app/*.py` (os outros) | ~1.300 | as contas do painel, sem tela, por isso testáveis |
 | `tests/` | ~3.300 | 299 testes, que rodam em ~50 s |
 
@@ -159,8 +159,8 @@ O Streamlit **executa o `explorador.py` inteiro, de cima a baixo, a cada clique*
 | Mecanismo | Onde | Para quê |
 |---|---|---|
 | `@st.cache_data` | `carregar_leituras`, `mapa_do_instante`, `risco_avaliado`… | Guarda o **resultado** pela combinação de argumentos, e devolve uma cópia. Argumentos com `_` na frente não entram na chave. |
-| `@st.cache_resource` | `base_cartografica`, `malha_fina` | Guarda o **mesmo objeto**, sem copiar: os shapefiles, que são pesados. Tem `max_entries=3` porque esse cache é **do processo**, compartilhado por todo mundo na nuvem. Um teste exige o teto. |
-| `st.session_state` | botões "Gerar GIF", "Carregar todas as estações" | Lembra que um botão já foi apertado, entre uma execução e outra. |
+| `@st.cache_resource` | `base_cartografica`, `malha_fina`, `guarda_da_previsao` | Guarda o **mesmo objeto**, sem copiar: os shapefiles, que são pesados, e a previsão guardada por rodada, que é uma só para todos. Tem `max_entries=3` porque esse cache é **do processo**, compartilhado por todo mundo na nuvem. Um teste exige o teto. |
+| `st.session_state` | botões "Gerar GIF", "Carregar todas as estações"; os filtros da barra lateral | Lembra que um botão já foi apertado, entre uma execução e outra, e o que se escolheu nos filtros quando se troca de página (`lembrar_filtros`). |
 
 Além disso, há o **cache em disco** de `app/dados.py`: um `cache/<código da estação>.pkl` por estação, fora do git. Alargar o período baixa só os dias que faltam. As horas recentes que chegaram sem medida são consultadas de novo, porque o INMET publica a linha da hora antes de preenchê-la.
 
@@ -171,17 +171,21 @@ Além disso, há o **cache em disco** de `app/dados.py`: um `cache/<código da e
 | Linhas (aprox.) | O que tem |
 |---|---|
 | 1–120 | imports e constantes da tela (`DPI_MAPA`, `MAPAS_POR_LINHA`, `CONVERSOES`, `ESTADOS_NA_MEMORIA`…) |
-| 120–900 | funções: as carregadas em cache (`carregar_*`, `mapa_do_*`, `gif_*`) e os pedaços de tela reutilizados (`painel_do_mapa`, `painel_da_chuva`, `botao_do_boletim`…) |
-| ~910 | **FILTROS**: a barra lateral (estado, período, estações, grandezas, cache) |
-| ~965 | **DADOS**: converte as datas do estado em UTC e carrega as estações escolhidas |
-| ~993 | `with aba_series:` — Séries Temporais |
-| ~1067 | `with aba_mapa:` — Mapas Boletim. O botão carrega **todas** as estações do estado mais as vizinhas. |
-| ~1166 | `with aba_chuva:` — Chuva. Tem carga própria, porque os acumulados olham para trás do período. |
-| ~1353 | `with aba_risco:` — Risco de Fogo. Usa o mesmo dado da aba de mapas. |
-| ~1551 | `with aba_navegavel:` — Mapa Navegação (pydeck), em avaliação |
-| ~1650 | `with aba_qualidade:` — Qualidade dos dados |
+| 120–945 | funções: as carregadas em cache (`carregar_*`, `mapa_do_*`, `gif_*`) e os pedaços de tela reutilizados (`painel_do_mapa`, `painel_da_chuva`, `botao_do_boletim`…) |
+| ~947 | **PREVISÃO**: a página inteira da previsão (`pagina_previsao`), as funções dela e `lembrar_filtros` |
+| ~1144 | **PÁGINAS**: `st.navigation`, com as duas páginas. Na previsão, o script para aqui; o observado é o resto do arquivo. |
+| ~1161 | **FILTROS**: a barra lateral do observado (estado, período, estações, grandezas, cache) |
+| ~1229 | **DADOS**: converte as datas do estado em UTC e carrega as estações escolhidas |
+| ~1259 | `with aba_series:` — Séries Temporais |
+| ~1333 | `with aba_mapa:` — Mapas Boletim. O botão carrega **todas** as estações do estado mais as vizinhas. |
+| ~1432 | `with aba_chuva:` — Chuva. Tem carga própria, porque os acumulados olham para trás do período. |
+| ~1619 | `with aba_risco:` — Risco de Fogo. Usa o mesmo dado da aba de mapas. |
+| ~1817 | `with aba_navegavel:` — Mapa Navegação (pydeck), em avaliação |
+| ~1916 | `with aba_qualidade:` — Qualidade dos dados |
 
-A regra de organização: **conta vai para um módulo de `app/` sem Streamlit; tela fica no `explorador.py`**. `variaveis`, `chuva`, `risco`, `dados`, `boletim`, `animacao`, `superficie` e `qualidade` não importam `streamlit`, e é por isso que têm testes. O `explorador.py` não tem teste direto: ele é verificado abrindo o painel.
+**As duas páginas.** O painel tem o "Observado (INMET)" e a "Previsão (MS)", trocadas no topo da barra lateral. O Streamlit apaga o valor de um widget que não aparece numa execução, e cada página aparece sozinha: sem cuidado, ir à previsão e voltar perderia as estações escolhidas. Um filtro novo da barra lateral que deva sobreviver à troca precisa de três coisas: uma `key`, entrar em `CHAVES_DOS_FILTROS`, e receber o valor inicial com `st.session_state.setdefault` antes do widget, **e não** pelo parâmetro (`default=`, `index=`). Com o valor nos dois lugares, o widget volta vazio na tela enquanto o painel usa o valor guardado. O período é a exceção, explicada em `lembrar_filtros`.
+
+A regra de organização: **conta vai para um módulo de `app/` sem Streamlit; tela fica no `explorador.py`**. `variaveis`, `chuva`, `risco`, `dados`, `previsao`, `boletim`, `animacao`, `superficie` e `qualidade` não importam `streamlit`, e é por isso que têm testes. O `explorador.py` não tem teste direto: ele é verificado abrindo o painel.
 
 ---
 
@@ -215,6 +219,7 @@ A regra de organização: **conta vai para um módulo de `app/` sem Streamlit; t
 | `animacao.py` | os GIFs: quais quadros entram e o carimbo de cada um |
 | `superficie.py` | a superfície como imagem transparente, para o mapa navegável |
 | `qualidade.py` | as conferências da aba de qualidade: completude, valores impossíveis, sensores travados |
+| `previsao.py` | as contas da página de previsão: a cópia guardada de cada modelo até a rodada seguinte (`Guarda`), o catálogo dos gráficos (`GRANDEZAS`) e as séries de cada estação, um modelo ao lado do outro. A busca é do `modulos/openmeteo.py`. |
 | `requirements.txt` | as dependências **do painel**. É este arquivo que o Streamlit Cloud instala. |
 
 ### O resto

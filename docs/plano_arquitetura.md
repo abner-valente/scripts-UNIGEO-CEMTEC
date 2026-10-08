@@ -159,22 +159,23 @@ enquanto só dentro da rede.
 regra no firewall ou no proxy. Feita ela, o app do Streamlit Cloud troca de fonte só nos Secrets,
 sem mexer no código. **Até lá, a nuvem segue indo direto às APIs.**
 
-## Onde entra a aba de previsão
+## Onde entra a página de previsão
 
-**Logo depois do passo 2, sem esperar o banco.** Na v0.3.x a aba busca no Open-Meteo sob demanda,
-com a cópia guardada por rodada e compartilhada (decisão 7 do escopo), em qualquer instalação.
-Assim a equipe vê resultado novo enquanto a infraestrutura segue.
+**Logo depois do passo 2, sem esperar o banco.** Na v0.3.x a página busca no Open-Meteo sob
+demanda, com a cópia guardada por rodada e compartilhada (decisões 7 e 11 do escopo), em qualquer
+instalação. Assim a equipe vê resultado novo enquanto a infraestrutura segue. **Os gráficos por
+estação estão prontos desde 08/10**; os mapas vêm em seguida.
 
 Quando o coletor do Open-Meteo estiver gravando (passo 5) e o `fonte.py` souber ler do banco
-(passo 7), a aba **no servidor interno** passa a ler do banco, com a grade de 0,25°. **Na nuvem**
+(passo 7), a página **no servidor interno** passa a ler do banco, com a grade de 0,25°. **Na nuvem**
 ela continua sob demanda, a 0,5°, até a publicação da API (passo 11).
 
 ## Em versões
 
 | Versão | O que entra |
 |---|---|
-| **v0.3.x** | a fase 1 e a aba de previsão sob demanda |
-| **v0.4.x** | o banco, os dois coletores e o servidor interno no Windows (fases 2 e 3); a aba de previsão passa a ler do banco no servidor |
+| **v0.3.x** | a fase 1 e a página de previsão sob demanda |
+| **v0.4.x** | o banco, os dois coletores e o servidor interno no Windows (fases 2 e 3); a página de previsão passa a ler do banco no servidor |
 | **v0.5.x** | a API de leitura e a versão externa (fase 4) |
 
 Cada versão entra na `main` por PR, como de costume. O Streamlit Cloud acompanha a `main`; o
