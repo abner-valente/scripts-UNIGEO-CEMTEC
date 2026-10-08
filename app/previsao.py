@@ -2,14 +2,15 @@
 
 A busca é do `modulos/openmeteo.py`. Aqui fica o que as páginas fazem com o que voltou: guardar
 a previsão de cada modelo até sair a rodada seguinte, para todos os que abrem o painel; montar as
-séries dos gráficos de cada estação, um modelo ao lado do outro; e preparar os mapas dos dias.
+séries dos gráficos de cada estação, um modelo ao lado do outro; e preparar os mapas dos dias e
+os das semanas.
 
 As decisões que desenham a página estão em docs/escopo_v0.3.1.md.
 """
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -357,17 +358,25 @@ def nas_estacoes(diaria: pd.DataFrame, estacoes: pd.DataFrame, mapa: MapaPrevist
     estação, que é a que se compara depois com o que ela mediu. A coluna do valor leva o nome do
     mapa, como os pontos do observado.
     """
+    if diaria.empty:
+        return _estacoes_com(pd.Series(dtype=float), estacoes, mapa.nome)
+    direcoes = None
+    if mapa.setas:
+        direcoes = valores_do_dia(diaria, replace(mapa, coluna="direcao_dominante", acumulado=False), dia, hoje)
+    return _estacoes_com(valores_do_dia(diaria, mapa, dia, hoje), estacoes, mapa.nome, direcoes)
+
+
+def _estacoes_com(valores: pd.Series, estacoes: pd.DataFrame, nome: str,
+                  direcoes: pd.Series | None = None) -> pd.DataFrame:
+    """As estações com o valor de cada uma (indexado pelo código), prontas para o mapa."""
     tabela = pd.DataFrame({"Estação": estacoes["Estação"].to_numpy(),
                            "Latitude": pd.to_numeric(estacoes["VL_LATITUDE"]).to_numpy(),
                            "Longitude": pd.to_numeric(estacoes["VL_LONGITUDE"]).to_numpy()},
                           index=estacoes["CD_ESTACAO"].astype(str).to_numpy())
-    if diaria.empty:
-        return tabela.iloc[0:0].assign(**{mapa.nome: pd.Series(dtype=float)})
-    tabela[mapa.nome] = valores_do_dia(diaria, mapa, dia, hoje)
-    if mapa.setas:
-        direcao = replace(mapa, coluna="direcao_dominante", acumulado=False)
-        tabela["Direção (°)"] = valores_do_dia(diaria, direcao, dia, hoje)
-    return tabela.dropna(subset=[mapa.nome]).reset_index(drop=True)
+    tabela[nome] = valores
+    if direcoes is not None:
+        tabela["Direção (°)"] = direcoes
+    return tabela.dropna(subset=[nome]).reset_index(drop=True)
 
 
 def subtitulo(modelo: str, rodada: datetime, mapa: MapaPrevisto, dia: date, hoje: date) -> str:
@@ -381,3 +390,90 @@ def carimbo(modelo: str, rodada: datetime, mapa: MapaPrevisto, dia: date, hoje: 
     """O fim do nome do arquivo: o modelo, o dia (ou a janela) e a rodada."""
     quando = f"{hoje:%Y%m%d}_a_{dia:%Y%m%d}" if mapa.acumulado and dia > hoje else f"{dia:%Y%m%d}"
     return f"{openmeteo.NOMES[modelo]}_{quando}_rodada_{rodada:%Y%m%d_%H}UTC"
+
+
+# =====================================================
+# AS SEMANAS
+# =====================================================
+# Escalas divergentes, fixas e simétricas (decisão 9 do escopo): a faixa do meio é o normal e sai
+# branca, o frio azul e o calor vermelho; na chuva, o seco marrom e o úmido verde. Fixas pelo mesmo
+# motivo das do observado: a mesma cor quer dizer o mesmo desvio em qualquer semana.
+NIVEIS_ANOMALIA_TEMPERATURA = (-5, -4, -3, -2, -1, -0.5, 0.5, 1, 2, 3, 4, 5)
+# Na chuva, o lado seco não passa da normal da semana (uns 30 a 50 mm em MS), e o chuvoso passa
+# de 80 mm: a primeira semana medida (12/10/2026) saturava metade do estado numa escala até 50.
+# Quatro classes de cada lado, para o branco continuar no meio da paleta.
+NIVEIS_ANOMALIA_CHUVA = (-50, -30, -20, -10, -5, 5, 10, 25, 50, 100)   # mm na semana
+# O ranking é pelo tamanho do desvio, para cima ou para baixo: "maiores anomalias", numa semana
+# fria, listaria as estações menos frias
+RANKING_SEMANAS = "5 MAIORES DESVIOS DO NORMAL"
+
+
+@dataclass(frozen=True)
+class MapaSemanal:
+    """Um mapa da página das semanas: uma anomalia do EC46, com a escala e o texto dela."""
+
+    nome: str
+    titulo: str        # no PNG do boletim
+    coluna: str        # da tabela de `openmeteo.buscar_semanas`
+    unidade: str
+    paleta: str
+    niveis: tuple
+    regra: str
+    decimais: int = 1
+
+
+MAPAS_SEMANAIS = {mapa.nome: mapa for mapa in (
+    MapaSemanal("Temperatura média", "Anomalia da temperatura média", "anom_temperatura", "°C", "RdBu_r",
+                NIVEIS_ANOMALIA_TEMPERATURA, "a média da semana menos a normal do modelo para a mesma semana"),
+    MapaSemanal("Temperatura máxima", "Anomalia da temperatura máxima", "anom_temp_max", "°C", "RdBu_r",
+                NIVEIS_ANOMALIA_TEMPERATURA,
+                "a máxima de cada 6 horas, na média da semana, menos a normal do modelo"),
+    MapaSemanal("Temperatura mínima", "Anomalia da temperatura mínima", "anom_temp_min", "°C", "RdBu_r",
+                NIVEIS_ANOMALIA_TEMPERATURA,
+                "a mínima de cada 6 horas, na média da semana, menos a normal do modelo"),
+    MapaSemanal("Chuva", "Anomalia da chuva", "anom_chuva", "mm", "BrBG", NIVEIS_ANOMALIA_CHUVA,
+                "a chuva da semana menos a normal do modelo para a mesma semana"),
+)}
+PADRAO_SEMANAIS = ("Temperatura média", "Chuva")
+
+
+def semanas_inteiras(semanal: pd.DataFrame, rodada: datetime) -> list[date]:
+    """As semanas que o EC46 cobre inteiras: as que começam no dia da rodada ou depois.
+
+    A semana vai de segunda a domingo. A que já tinha começado quando a rodada saiu só tem os dias
+    que faltavam, e a média de três dias passaria por média de semana. A que passa do dia 46 o
+    Open-Meteo já devolve vazia.
+    """
+    return sorted(semana for semana in semanal["semana"].unique() if semana >= rodada.date())
+
+
+def nome_da_semana(semana: date) -> str:
+    """Como o deslizante e o título escrevem a semana: "12/10 a 18/10"."""
+    return f"{semana:%d/%m} a {semana + timedelta(days=6):%d/%m}"
+
+
+def valores_da_semana(semanal: pd.DataFrame, mapa: MapaSemanal, semana: date) -> pd.Series:
+    """A anomalia de cada ponto na semana, indexada pelo ponto."""
+    return semanal[semanal["semana"] == semana].set_index("ponto")[mapa.coluna]
+
+
+def nas_estacoes_na_semana(semanal: pd.DataFrame, estacoes: pd.DataFrame, mapa: MapaSemanal,
+                           semana: date) -> pd.DataFrame:
+    """A anomalia do EC46 no ponto de cada estação, para os números e o ranking do mapa.
+
+    A coluna do valor leva o título ("Anomalia da temperatura média"), e não o nome curto, que é o
+    mesmo de um mapa dos dias.
+    """
+    valores = pd.Series(dtype=float) if semanal.empty else valores_da_semana(semanal, mapa, semana)
+    return _estacoes_com(valores, estacoes, mapa.titulo)
+
+
+def subtitulo_da_semana(rodada: datetime, semana: date) -> str:
+    """A semana e a rodada no subtítulo do PNG do boletim."""
+    return (f"Semana de {semana:%d/%m} a {semana + timedelta(days=6):%d/%m/%Y} · "
+            f"EC46 (média dos membros), rodada de {rodada:%d/%m %H} UTC")
+
+
+def carimbo_da_semana(rodada: datetime, semana: date) -> str:
+    """O fim do nome do arquivo: a semana e a rodada."""
+    return f"EC46_semana_{semana:%Y%m%d}_rodada_{rodada:%Y%m%d_%H}UTC"

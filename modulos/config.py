@@ -199,6 +199,11 @@ MODELOS_PREVISAO = ("ecmwf_ifs025", "gfs_seamless", "icon_seamless")
 DIAS_PREVISAO = 14             # o 15º dia faria cada ponto pesar 15/14 na cota
 GRADE_PREVISAO = 0.5           # graus entre os pontos da grade; 0,25 quando a busca for agendada
 OPENMETEO_POR_MINUTO = 600     # limite gratuito de chamadas por minuto
+# As semanas: a anomalia semanal do EC46, a previsão estendida do ECMWF, na média dos membros
+URL_OPENMETEO_SAZONAL = "https://seasonal-api.open-meteo.com/v1/seasonal"
+URL_OPENMETEO_SAZONAL_RODADA = "https://seasonal-api.open-meteo.com/data/{modelo}/static/meta.json"
+MODELO_SEMANAS = "ecmwf_ec46_ensemble_mean"
+DIAS_SEMANAS = 46              # o alcance do EC46; sem isto a API devolve 27 semanas e cobra por elas
 
 # =====================================================
 # MAPAS

@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import shapely
+from matplotlib import colormaps
+from matplotlib.colors import BoundaryNorm
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patheffects import withStroke
@@ -43,6 +45,7 @@ class EspecMapa:
     direcao_vento: bool = False  # desenha as setas de direção do vento
     decimais: int = 1            # casas decimais dos rótulos e do ranking (0 para contagens, como horas)
     credito: str = CREDITO
+    ranking_absoluto: bool = False  # ranqueia pelo tamanho do valor, para cima ou para baixo (anomalias)
 
 
 @dataclass(frozen=True)
@@ -238,8 +241,15 @@ def mapa_de_grade(grade, gdf, espec: EspecMapa, base: BaseCartografica, caminho:
     # `extend` pinta o que passa das pontas com a cor do extremo. Sem isso, numa escala fixa, um
     # valor acima do teto sairia branco no mapa — como se não houvesse medição ali.
     extremos = "max" if _so_acima(niveis) else "both"
+    # Classes desiguais (a chuva, as anomalias) levam uma cor por classe, pela ordem: pela régua do
+    # valor, que é o padrão do contourf, as de 1 a 50 mm da chuva saíam quase brancas, enquanto a
+    # barra da tela e o mapa navegável as pintam por classe, e o 0 das anomalias assimétricas não
+    # caía no branco. Com níveis igualmente espaçados, os dois jeitos dão as mesmas cores, e os
+    # mapas do main.py ficam como sempre foram.
+    norma = (BoundaryNorm(niveis, ncolors=colormaps[espec.cmap].N, extend=extremos)
+             if _classes_desiguais(niveis) else None)
     superficie = ax.contourf(base.lon_grade, base.lat_grade, _recortar(grade, base),
-                             levels=niveis, cmap=espec.cmap, alpha=0.8,
+                             levels=niveis, cmap=espec.cmap, norm=norma, alpha=0.8,
                              extend=extremos if np.ndim(niveis) else "neither")
     superficie.set_clip_path(base.contorno_uf, transform=ax.transData)
     if tela is None or tela.barra_de_cores:
@@ -251,10 +261,18 @@ def mapa_de_grade(grade, gdf, espec: EspecMapa, base: BaseCartografica, caminho:
             # faixa: a barra prende as de fora na ponta, e o vento (0 a 130) ganhava um 140 no topo.
             marcas = MaxNLocator(nbins=10, steps=[1, 2, 2.5, 5, 10]).tick_values(niveis[0], niveis[-1])
             barra.set_ticks([marca for marca in marcas if niveis[0] <= marca <= niveis[-1]])
+        elif _classes_desiguais(niveis):
+            # Classes: uma marca em cada fronteira. Sozinho, o matplotlib pulava algumas das 12 da
+            # anomalia de temperatura, e a barra marcava 4, 2, 0,5, -1: o 0,5 sem o -0,5. Níveis
+            # iguais (os do main.py) seguem com as marcas que o matplotlib escolhe.
+            barra.set_ticks(list(niveis))
         barra.set_label(espec.unidade, size=_corpo(tela))
         barra.ax.tick_params(labelsize=_corpo(tela))
     _desenhar_limites(ax, base)
-    gdf.plot(ax=ax, color="black", markersize=50, alpha=0.7, edgecolor="white", linewidth=1.5)
+    # A superfície da previsão vem do modelo, e não das estações: se a previsão delas falhar, o
+    # mapa sai sem os pontos. O geopandas recusa desenhar uma tabela vazia.
+    if len(gdf):
+        gdf.plot(ax=ax, color="black", markersize=50, alpha=0.7, edgecolor="white", linewidth=1.5)
 
     rotulos = gdf[espec.coluna].map(_formato(espec))
     sufixos_ranking = None
@@ -381,6 +399,14 @@ def _formato(espec: EspecMapa):
     return f"{{:.{espec.decimais}f}}".format
 
 
+def _classes_desiguais(niveis) -> bool:
+    """Se os níveis são classes (poucos, dados um a um) de larguras diferentes, como os da chuva."""
+    if not np.ndim(niveis) or len(niveis) > MAX_CLASSES:
+        return False
+    larguras = np.diff(np.asarray(niveis, dtype=float))
+    return not np.allclose(larguras, larguras[0])
+
+
 def _so_acima(niveis) -> bool:
     """Se a escala só estende para cima — é o caso da chuva, onde abaixo da primeira classe não
     choveu, e pintar isso de azul claro inventaria chuva que não houve."""
@@ -435,8 +461,11 @@ def _rotular(ax, gdf, textos, tamanho_fonte, cor, fundo, borda, opacidade, halo=
 
 
 def _ranking(ax, gdf, espec: EspecMapa, tamanho_fonte, sufixos=None) -> None:
-    """Caixa com as 5 estações de maiores (ou menores) valores."""
-    extremos = gdf.nlargest(5, espec.coluna) if espec.maiores else gdf.nsmallest(5, espec.coluna)
+    """Caixa com as 5 estações de maiores (ou menores) valores, ou de maiores desvios, nas anomalias."""
+    if getattr(espec, "ranking_absoluto", False):
+        extremos = gdf.loc[gdf[espec.coluna].abs().nlargest(5).index]
+    else:
+        extremos = gdf.nlargest(5, espec.coluna) if espec.maiores else gdf.nsmallest(5, espec.coluna)
     texto = f"{espec.ranking}:\n"
     for indice, linha in extremos.iterrows():
         sufixo = sufixos[indice] if sufixos is not None else ""

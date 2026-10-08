@@ -232,8 +232,8 @@ Para MS, com 3 modelos, 7 variáveis horárias e 14 dias, cada ponto custa 2,1:
 |---|---|---|
 | Grade de 0,5° dos mapas: cada modelo, a cada rodada dele | até ~2.100 | ~2.550 |
 | Gráficos de linha nas 58 estações: cada modelo, a cada rodada dele | até ~700 | ~250 |
-| Anomalia semanal do EC46, 46 dias, a 0,5°, 1 por dia | ~590 | ~590 |
-| **Total por dia, no pior caso** | **~3.400 (34% da cota)** | **~3.400 (34% da cota)** |
+| Anomalia semanal do EC46, grade e estações, 1 rodada por dia | até ~780 | ~780 |
+| **Total por dia, no pior caso** | **~3.600 (36% da cota)** | **~3.600 (36% da cota)** |
 
 As duas primeiras linhas mudaram em 08/10, com a decisão 11: são 178 (grade) e 58 (estações)
 chamadas por modelo e rodada, e cada modelo tem até 4 rodadas por dia. É o pior caso: só gasta
@@ -266,7 +266,23 @@ decide de quais rodadas precisa.
      cúbica inventava bolhas entre os pontos;
    - os números e o ranking são a previsão do mesmo modelo **no ponto de cada estação**;
    - o PNG do boletim leva "Open-Meteo (CC BY 4.0)/SEMADESC" no lugar do "INMET/SEMADESC".
-5. **Mapas de anomalia semanal** do EC46.
+5. **Mapas de anomalia semanal** do EC46. **Feito em 08/10**, numa página "Semanas":
+   - a API sazonal, com `models=ecmwf_ec46_ensemble_mean` e `forecast_days=46` (sem ele, a API
+     devolve 27 semanas e cobra por elas). As quatro anomalias: `temperature_2m_anomaly`,
+     `temperature_max6h_2m_anomaly`, `temperature_min6h_2m_anomaly` e `precipitation_anomaly`
+     (mm na semana). Os nomes foram achados por teste: a documentação só traz os rótulos;
+   - a semana vai de segunda a domingo. Entram só as que começam no dia da rodada ou depois: a
+     que já tinha começado só teria os dias que faltavam, e a que passa do dia 46 vem vazia. Na
+     prática, cinco semanas;
+   - a rodada vem dos metadados do `ecmwf_ec46` (uma por dia, pronta por volta das 20:30 UTC); os
+     da média dos membros dizem 744 h de intervalo;
+   - **custo:** a regra dá 3,3 chamadas por ponto (46/14), mas 190 pontos (624 pela regra) não
+     esgotaram o minuto em 08/10, nem na API sazonal nem na de previsão. A regra fica como teto: os
+     lotes de até 182 pontos têm folga, e o custo do dia fica abaixo das ~780 da tabela;
+   - escalas divergentes e fixas: de −5 a 5 °C na temperatura (azul e vermelho) e de −50 a 100 mm
+     na chuva (marrom e verde), com o normal (−0,5 a 0,5 °C; −5 a 5 mm) em branco. O lado chuvoso
+     vai mais longe porque o seco não passa da normal da semana; a primeira semana medida passou de
+     80 mm. O ranking do boletim é o dos **maiores desvios do normal**, para cima ou para baixo.
 6. **Risco de fogo previsto.**
 
 ## Encaixe com a ida para o servidor da UNIGEO

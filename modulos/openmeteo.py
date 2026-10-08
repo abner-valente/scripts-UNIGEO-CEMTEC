@@ -19,6 +19,7 @@ INMET: a chuva das 15:00 é a que caiu entre 14:00 e 15:00. O dia se monta pela 
 projeto, em `diario`.
 """
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from zoneinfo import ZoneInfo
@@ -45,13 +46,30 @@ VARIAVEIS = {
 COLUNAS_HORARIAS = ["modelo", "rodada_utc", "ponto", "latitude", "longitude", "hora_prevista_utc",
                     *VARIAVEIS.values()]
 
+# As quatro anomalias semanais do EC46, contra a normal do próprio modelo para a mesma semana. A
+# máxima e a mínima são as de cada 6 horas, na média da semana. Nomes medidos em 08/10/2026 (a
+# documentação só traz os rótulos).
+VARIAVEIS_SEMANAIS = {
+    "temperature_2m_anomaly": "anom_temperatura",
+    "temperature_max6h_2m_anomaly": "anom_temp_max",
+    "temperature_min6h_2m_anomaly": "anom_temp_min",
+    "precipitation_anomaly": "anom_chuva",
+}
+COLUNAS_SEMANAIS = ["modelo", "rodada_utc", "ponto", "latitude", "longitude", "semana",
+                    *VARIAVEIS_SEMANAIS.values()]
+
 # Como cada modelo aparece para quem lê
-NOMES = {"ecmwf_ifs025": "ECMWF", "gfs_seamless": "GFS", "icon_seamless": "ICON"}
+NOMES = {"ecmwf_ifs025": "ECMWF", "gfs_seamless": "GFS", "icon_seamless": "ICON",
+         "ecmwf_ec46_ensemble_mean": "EC46"}
 
 # De onde sai a hora da rodada de cada modelo. O Open-Meteo só publica os metadados das peças, e
 # não das combinações "seamless". No Brasil, o GFS de superfície vem da grade de 0,11°
 # (ncep_gfs013), e o ICON é só o global (dwd_icon), porque as grades finas dele são da Europa.
-METADADOS = {"ecmwf_ifs025": "ecmwf_ifs025", "gfs_seamless": "ncep_gfs013", "icon_seamless": "dwd_icon"}
+# A média dos membros do EC46 tem metadados próprios, mas com um intervalo de 744 h; os do EC46
+# com os membros dizem a verdade (uma rodada por dia) e são da mesma rodada.
+METADADOS = {"ecmwf_ifs025": "ecmwf_ifs025", "gfs_seamless": "ncep_gfs013", "icon_seamless": "dwd_icon",
+             "ecmwf_ec46_ensemble_mean": "ecmwf_ec46"}
+SAZONAIS = {"ecmwf_ec46_ensemble_mean"}   # os que moram na API sazonal, com outro endereço
 
 # O Open-Meteo recomenda esperar 10 minutos depois de a rodada ficar disponível antes de usá-la
 MARGEM_RODADA = timedelta(minutes=10)
@@ -169,7 +187,8 @@ def rodadas(modelos: tuple[str, ...] = config.MODELOS_PREVISAO,
     agora = agora or datetime.now(timezone.utc)
     resultado = {}
     for modelo in modelos:
-        meta = _pedir("GET", config.URL_OPENMETEO_RODADA.format(modelo=METADADOS[modelo]))
+        endereco = config.URL_OPENMETEO_SAZONAL_RODADA if modelo in SAZONAIS else config.URL_OPENMETEO_RODADA
+        meta = _pedir("GET", endereco.format(modelo=METADADOS[modelo]))
         inicio = datetime.fromtimestamp(meta["last_run_initialisation_time"], timezone.utc)
         pronta = datetime.fromtimestamp(meta["last_run_availability_time"], timezone.utc) + MARGEM_RODADA
         if agora < pronta:
@@ -234,9 +253,9 @@ def previsao_horaria(pontos: pd.DataFrame, modelos: tuple[str, ...] = config.MOD
     return pd.concat(partes, ignore_index=True)
 
 
-def buscar(pontos: pd.DataFrame, modelos: tuple[str, ...] = config.MODELOS_PREVISAO,
-           dias: int = config.DIAS_PREVISAO) -> pd.DataFrame:
-    """A previsão hora a hora dos pontos, com a rodada de cada modelo carimbada em cada linha.
+def _na_mesma_rodada(modelos: tuple[str, ...], buscar_tabela: Callable[[], pd.DataFrame],
+                     colunas: list[str]) -> pd.DataFrame:
+    """A tabela que `buscar_tabela` trouxer, com a rodada de cada modelo carimbada em cada linha.
 
     A rodada é conferida antes e depois da busca. Se ela mudou no meio, parte dos números pode ser
     da rodada nova e parte da velha, e carimbar uma das duas seria mentir: busca de novo. Se mudar
@@ -244,12 +263,76 @@ def buscar(pontos: pd.DataFrame, modelos: tuple[str, ...] = config.MODELOS_PREVI
     """
     for _ in range(2):
         antes = rodadas(modelos)
-        tabela = previsao_horaria(pontos, modelos, dias)
+        tabela = buscar_tabela()
         if rodadas(modelos) == antes:
             tabela.insert(1, "rodada_utc", tabela["modelo"].map(antes))
-            return tabela[COLUNAS_HORARIAS]
+            return tabela[colunas]
     raise ErroOpenMeteo("a rodada dos modelos mudou durante a busca, duas vezes seguidas; "
                         "tente de novo em alguns minutos")
+
+
+def buscar(pontos: pd.DataFrame, modelos: tuple[str, ...] = config.MODELOS_PREVISAO,
+           dias: int = config.DIAS_PREVISAO) -> pd.DataFrame:
+    """A previsão hora a hora dos pontos, com a rodada de cada modelo carimbada em cada linha."""
+    return _na_mesma_rodada(modelos, lambda: previsao_horaria(pontos, modelos, dias), COLUNAS_HORARIAS)
+
+
+# =====================================================
+# AS SEMANAS
+# =====================================================
+def _buscar_lote_semanal(lote: pd.DataFrame, modelo: str, dias: int) -> pd.DataFrame:
+    """Um pedido à API sazonal, para os pontos do lote: uma linha por ponto e semana."""
+    resposta = _pedir("POST", config.URL_OPENMETEO_SAZONAL, data={
+        "latitude": ",".join(f"{valor:.4f}" for valor in lote["latitude"]),
+        "longitude": ",".join(f"{valor:.4f}" for valor in lote["longitude"]),
+        "weekly": ",".join(VARIAVEIS_SEMANAIS),
+        "models": modelo,
+        "forecast_days": dias,
+        "timezone": "GMT",
+    })
+    locais = resposta if isinstance(resposta, list) else [resposta]
+    if len(locais) != len(lote):
+        raise ErroOpenMeteo(f"o Open-Meteo devolveu {len(locais)} pontos para {len(lote)} pedidos")
+
+    partes = []
+    for ponto, local in zip(lote.itertuples(index=False), locais):
+        semanal = local["weekly"]
+        colunas = {coluna: np.asarray([np.nan if valor is None else valor for valor in
+                                       semanal.get(nome) or [None] * len(semanal["time"])], dtype=float)
+                   for nome, coluna in VARIAVEIS_SEMANAIS.items()}
+        tabela = pd.DataFrame({"modelo": modelo, "ponto": ponto.ponto, "latitude": ponto.latitude,
+                               "longitude": ponto.longitude,
+                               "semana": pd.to_datetime(semanal["time"]).date, **colunas})
+        # A semana que o EC46 não fecha (a última, que passa do dia 46) vem toda vazia
+        partes.append(tabela.dropna(subset=list(VARIAVEIS_SEMANAIS.values()), how="all"))
+    return pd.concat(partes, ignore_index=True)
+
+
+def anomalias_semanais(pontos: pd.DataFrame, modelo: str = config.MODELO_SEMANAS,
+                       dias: int = config.DIAS_SEMANAS) -> pd.DataFrame:
+    """As anomalias semanais dos pontos, sem a rodada, em lotes que cabem no limite por minuto.
+
+    A semana começa na segunda-feira, em UTC, e o valor vem pronto do Open-Meteo: a média da semana
+    (ou a soma, na chuva) menos a normal do modelo para a mesma semana, tirada das reprevisões do
+    ECMWF. Cada ponto custa 3,3 chamadas pela regra (46 dias pesam 46/14), e os 178 da grade de
+    0,5° cabem num lote.
+    """
+    por_lote = max(1, int(config.OPENMETEO_POR_MINUTO
+                          // custo(1, variaveis=len(VARIAVEIS_SEMANAIS), modelos=1, dias=dias)))
+    partes = []
+    for inicio in range(0, len(pontos), por_lote):
+        if inicio:
+            _dormir(ESPERA_ENTRE_LOTES)
+        partes.append(_buscar_lote_semanal(pontos.iloc[inicio:inicio + por_lote], modelo, dias))
+    if not partes:
+        return pd.DataFrame(columns=[coluna for coluna in COLUNAS_SEMANAIS if coluna != "rodada_utc"])
+    return pd.concat(partes, ignore_index=True)
+
+
+def buscar_semanas(pontos: pd.DataFrame, modelo: str = config.MODELO_SEMANAS,
+                   dias: int = config.DIAS_SEMANAS) -> pd.DataFrame:
+    """As anomalias semanais dos pontos, com a rodada do EC46 carimbada em cada linha."""
+    return _na_mesma_rodada((modelo,), lambda: anomalias_semanais(pontos, modelo, dias), COLUNAS_SEMANAIS)
 
 
 # =====================================================

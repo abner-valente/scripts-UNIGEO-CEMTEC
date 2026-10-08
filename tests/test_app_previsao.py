@@ -393,3 +393,66 @@ def test_o_png_do_boletim_da_previsao_leva_o_credito_do_open_meteo():
     assert figura.axes[0].get_title() == ("Temperatura máxima prevista em MS\n"
                                           "Previsão para 08/10/2026 — Open-Meteo (CC BY 4.0)/SEMADESC")
     assert mapas.EspecMapa("", "", "", "", "", "", "", "").credito == "INMET/SEMADESC"
+
+
+# =====================================================
+# AS SEMANAS
+# =====================================================
+RODADA_EC46 = datetime(2026, 10, 7, 0, tzinfo=timezone.utc)
+
+
+def semanal(semanas: dict, pontos=("A", "B")) -> pd.DataFrame:
+    """Uma tabela como a de `openmeteo.buscar_semanas`: uma anomalia por ponto e semana."""
+    return pd.DataFrame([{"modelo": "ecmwf_ec46_ensemble_mean", "rodada_utc": RODADA_EC46, "ponto": ponto,
+                          "semana": semana, "anom_temperatura": valor, "anom_chuva": valor * 10}
+                         for semana, valor in semanas.items() for ponto in pontos])
+
+
+def test_so_entram_as_semanas_que_comecam_depois_da_rodada():
+    """A semana de 05/10 já tinha começado quando a rodada de 07/10 saiu: só teria cinco dias."""
+    tabela = semanal({date(2026, 10, 5): 1.0, date(2026, 10, 12): 2.0, date(2026, 10, 19): 3.0})
+
+    assert previsao.semanas_inteiras(tabela, RODADA_EC46) == [date(2026, 10, 12), date(2026, 10, 19)]
+
+
+def test_numa_segunda_a_semana_da_rodada_entra_inteira():
+    tabela = semanal({date(2026, 10, 12): 2.0})
+
+    assert previsao.semanas_inteiras(tabela, datetime(2026, 10, 12, tzinfo=timezone.utc)) == [date(2026, 10, 12)]
+
+
+def test_a_semana_se_escreve_de_segunda_a_domingo():
+    assert previsao.nome_da_semana(date(2026, 10, 12)) == "12/10 a 18/10"
+
+
+def test_o_mapa_da_semana_e_a_anomalia_de_cada_ponto():
+    tabela = semanal({date(2026, 10, 12): -1.8, date(2026, 10, 19): -1.0})
+
+    valores = previsao.valores_da_semana(tabela, previsao.MAPAS_SEMANAIS["Chuva"], date(2026, 10, 12))
+
+    assert valores.to_dict() == {"A": -18.0, "B": -18.0}
+
+
+def test_nas_estacoes_a_coluna_leva_o_titulo_que_nao_se_confunde_com_os_dias():
+    tabela = semanal({date(2026, 10, 12): -1.8}, pontos=("A702", "A721"))
+    mapa = previsao.MAPAS_SEMANAIS["Temperatura média"]
+
+    pontos = previsao.nas_estacoes_na_semana(tabela, ESTACOES, mapa, date(2026, 10, 12))
+
+    assert list(pontos["Anomalia da temperatura média"]) == [-1.8, -1.8]
+    assert "Temperatura média" not in pontos
+
+
+@pytest.mark.parametrize("niveis", [previsao.NIVEIS_ANOMALIA_TEMPERATURA, previsao.NIVEIS_ANOMALIA_CHUVA])
+def test_a_escala_da_anomalia_tem_o_normal_no_meio(niveis):
+    """Tantas classes abaixo quanto acima da faixa do normal: é ela que sai branca."""
+    abaixo = sum(1 for nivel in niveis if nivel < 0)
+    acima = sum(1 for nivel in niveis if nivel > 0)
+    assert abaixo == acima
+    assert -niveis[abaixo - 1] == niveis[abaixo]                  # a faixa do normal é simétrica
+
+
+def test_subtitulo_e_carimbo_da_semana():
+    assert (previsao.subtitulo_da_semana(RODADA_EC46, date(2026, 10, 12))
+            == "Semana de 12/10 a 18/10/2026 · EC46 (média dos membros), rodada de 07/10 00 UTC")
+    assert previsao.carimbo_da_semana(RODADA_EC46, date(2026, 10, 12)) == "EC46_semana_20261012_rodada_20261007_00UTC"

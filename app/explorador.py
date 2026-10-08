@@ -979,32 +979,57 @@ def previsao_dos_pontos(conjunto: str, pontos: pd.DataFrame,
     `conjunto` nomeia os pontos na guarda: "estações" ou "grade".
     """
     rodadas, falha = rodadas_atuais()
-    guarda = guarda_da_previsao()
     tabelas, avisos = [], []
     for modelo in modelos:
-        nome = openmeteo.NOMES[modelo]
-        rodada = rodadas[modelo] if rodadas else None
-        buscar = lambda modelo=modelo: openmeteo.buscar(pontos, (modelo,))  # noqa: E731
-        try:
-            if not guarda.precisa_buscar(conjunto, modelo, rodada):
-                obtida = guarda.obter(conjunto, modelo, rodada, buscar)
-            elif rodada is None:
-                # Nada guardado e nem os metadados responderam: a busca falharia do mesmo jeito,
-                # depois de esperar as tentativas
-                avisos.append(f"**{nome}** ficou de fora: o Open-Meteo não respondeu ({falha}).")
-                continue
-            else:
-                with st.spinner(f"Buscando a previsão do {nome} ({conjunto}) no Open-Meteo…"):
-                    obtida = guarda.obter(conjunto, modelo, rodada, buscar)
-        except openmeteo.ErroOpenMeteo as erro:
-            avisos.append(f"**{nome}** ficou de fora: o Open-Meteo não respondeu ({erro}).")
-            continue
-        guardada = previsao.rodada_da(obtida.tabela)
-        if obtida.aviso and guardada is not None:
-            avisos.append(f"**{nome}**: mostrando a rodada de {guardada:%d/%m %H} UTC, a última guardada, "
-                          f"porque {obtida.aviso}.")
-        tabelas.append(obtida.tabela)
+        tabela = _obter_previsao(conjunto, modelo, rodadas[modelo] if rodadas else None, falha,
+                                 lambda modelo=modelo: openmeteo.buscar(pontos, (modelo,)), avisos)
+        if tabela is not None:
+            tabelas.append(tabela)
     return tabelas, avisos
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def rodada_semanal_atual() -> tuple[datetime | None, str | None]:
+    """A rodada do EC46 que o Open-Meteo está servindo, conferida no máximo a cada 5 minutos."""
+    try:
+        return openmeteo.rodadas((config.MODELO_SEMANAS,))[config.MODELO_SEMANAS], None
+    except openmeteo.ErroOpenMeteo as erro:
+        return None, str(erro)
+
+
+def semanas_dos_pontos(conjunto: str, pontos: pd.DataFrame) -> tuple[pd.DataFrame | None, list[str]]:
+    """As anomalias semanais do EC46 nos pontos, guardadas como as dos outros modelos."""
+    rodada, falha = rodada_semanal_atual()
+    avisos = []
+    tabela = _obter_previsao(conjunto, config.MODELO_SEMANAS, rodada, falha,
+                             lambda: openmeteo.buscar_semanas(pontos), avisos)
+    return tabela, avisos
+
+
+def _obter_previsao(conjunto: str, modelo: str, rodada: datetime | None, falha: str | None, buscar,
+                    avisos: list[str]) -> pd.DataFrame | None:
+    """A previsão de um modelo, da guarda ou do Open-Meteo, com os avisos acrescentados à lista."""
+    nome = openmeteo.NOMES[modelo]
+    guarda = guarda_da_previsao()
+    try:
+        if not guarda.precisa_buscar(conjunto, modelo, rodada):
+            obtida = guarda.obter(conjunto, modelo, rodada, buscar)
+        elif rodada is None:
+            # Nada guardado e nem os metadados responderam: a busca falharia do mesmo jeito,
+            # depois de esperar as tentativas
+            avisos.append(f"**{nome}** ficou de fora: o Open-Meteo não respondeu ({falha}).")
+            return None
+        else:
+            with st.spinner(f"Buscando a previsão do {nome} ({conjunto}) no Open-Meteo…"):
+                obtida = guarda.obter(conjunto, modelo, rodada, buscar)
+    except openmeteo.ErroOpenMeteo as erro:
+        avisos.append(f"**{nome}** ficou de fora: o Open-Meteo não respondeu ({erro}).")
+        return None
+    guardada = previsao.rodada_da(obtida.tabela)
+    if obtida.aviso and guardada is not None:
+        avisos.append(f"**{nome}**: mostrando a rodada de {guardada:%d/%m %H} UTC, a última guardada, "
+                      f"porque {obtida.aviso}.")
+    return obtida.tabela
 
 
 def barras_da_chuva_prevista(longo: pd.DataFrame) -> alt.Chart:
@@ -1029,7 +1054,7 @@ def barras_da_chuva_prevista(longo: pd.DataFrame) -> alt.Chart:
 # observado. Ficam só os filtros da barra lateral: as escolhas dentro das abas voltam ao padrão.
 CHAVES_DOS_FILTROS = ("uf", "estacoes", "grandezas",
                       "previsao_estacao", "previsao_modelos", "previsao_grandezas", "previsao_modo",
-                      "mapas_previstos_modelo", "mapas_previstos")
+                      "mapas_previstos_modelo", "mapas_previstos", "semanas_mapas")
 
 
 def lembrar_filtros() -> None:
@@ -1153,18 +1178,18 @@ def diario_previsto(conjunto: str, modelo: str, rodada: datetime, _horaria: pd.D
     return openmeteo.diario(_horaria, config.FUSO_MS)
 
 
-@st.cache_data(show_spinner=False, max_entries=30)
-def mapa_previsto(nome: str, modelo: str, rodada: datetime, dia: date, hoje: date, rotulos: bool,
-                  niveis: tuple | None, _grade: np.ndarray, _estacoes: pd.DataFrame) -> bytes:
+@st.cache_data(show_spinner=False, max_entries=40)
+def mapa_previsto(origem: tuple, nome: str, paleta: str, unidade: str, decimais: int, setas: bool,
+                  rotulos: bool, niveis: tuple | None, _grade: np.ndarray, _estacoes: pd.DataFrame) -> bytes:
     """PNG de um mapa da previsão para a tela, sem a moldura.
 
-    A chave é o que define o desenho (mapa, modelo, rodada, dia, escala); a superfície e as
-    estações vêm deles e ficam fora da chave, que não precisa comparar 10 mil números a cada clique.
+    `origem` diz de que previsão é o desenho: o modelo, a rodada e o dia (ou a semana). Com o
+    mapa e a escala, é a chave; a superfície e as estações vêm deles e ficam fora dela, que não
+    precisa comparar 10 mil números a cada clique.
     """
-    mapa = previsao.MAPAS[nome]
     espec = mapas.EspecMapa(tabela="", coluna=nome, titulo=nome, subtitulo="", arquivo="",
-                            cmap=mapa.paleta, unidade=f"{nome} ({mapa.unidade})", ranking="",
-                            decimais=mapa.decimais, direcao_vento=mapa.setas)
+                            cmap=paleta, unidade=f"{nome} ({unidade})", ranking="",
+                            decimais=decimais, direcao_vento=setas)
     figura = mapas.mapa_de_grade(_grade, _pontos_previstos(_estacoes, nome), espec,
                                  base_cartografica(previsao.UF), niveis=list(niveis) if niveis else 20,
                                  tela=mapas.Tela(rotulos=rotulos))
@@ -1199,7 +1224,8 @@ def painel_do_mapa_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: da
     niveis = previsao.niveis(mapa, previsao.dias_somados(mapa, dia, hoje), ajustar)
     escala = None if niveis is None else tuple(float(nivel) for nivel in niveis)
 
-    png = mapa_previsto(mapa.nome, modelo, rodada, dia, hoje, rotulos, escala, _grade=grade, _estacoes=pontos)
+    png = mapa_previsto(("dias", modelo, rodada, dia, hoje), mapa.nome, mapa.paleta, mapa.unidade,
+                        mapa.decimais, mapa.setas, rotulos, escala, _grade=grade, _estacoes=pontos)
     st.image(png, width="stretch")
     if escala is not None:
         st.image(barra_de_escala(mapa.paleta, escala, mapa.unidade), width="stretch")
@@ -1300,6 +1326,122 @@ def pagina_mapas_previstos() -> None:
                "de cada uma, e são eles que entram no ranking do PNG do boletim.")
 
 
+def painel_do_mapa_semanal(mapa: previsao.MapaSemanal, rodada: datetime, semana: date, rotulos: bool,
+                           semanal_grade: pd.DataFrame, pontos_grade: pd.DataFrame,
+                           semanal_estacoes: pd.DataFrame, estacoes: pd.DataFrame, titulo: str) -> None:
+    """Uma coluna de mapas das semanas: o desenho, a escala divergente, a regra e os botões."""
+    st.markdown(f"**{titulo}**")
+    base = base_cartografica(previsao.UF)
+    grade = previsao.superficie(previsao.valores_da_semana(semanal_grade, mapa, semana), pontos_grade,
+                                base.lon_grade, base.lat_grade)
+    if grade is None:
+        st.info(f"O EC46 não traz {mapa.nome.lower()} para a semana de {previsao.nome_da_semana(semana)}.")
+        return
+    pontos = previsao.nas_estacoes_na_semana(semanal_estacoes, estacoes, mapa, semana)
+    escala = tuple(float(nivel) for nivel in mapa.niveis)
+
+    png = mapa_previsto(("semanas", rodada, semana), mapa.titulo, mapa.paleta, mapa.unidade, mapa.decimais,
+                        False, rotulos, escala, _grade=grade, _estacoes=pontos)
+    st.image(png, width="stretch")
+    st.image(barra_de_escala(mapa.paleta, escala, mapa.unidade), width="stretch")
+    no_estado = grade[base.dentro_uf]
+    st.caption(f"{np.nanmin(no_estado):+.{mapa.decimais}f} a {np.nanmax(no_estado):+.{mapa.decimais}f} "
+               f"{mapa.unidade} · {mapa.regra}.")
+
+    carimbo = previsao.carimbo_da_semana(rodada, semana)
+    chave = f"{mapa.nome}_{semana:%Y%m%d}"
+    st.download_button(f"Baixar PNG — {mapa.titulo.lower()}", png, mime="image/png",
+                       key=f"baixar_semana_{chave}",
+                       file_name=f"Mapa_{mapa.titulo.replace(' ', '_')}_{carimbo}.png")
+    # O ranking é o dos maiores desvios, para cima ou para baixo, em qualquer mapa: o "mínima" do
+    # nome, que nos outros mapas pede as menores, aqui não muda o que se procura
+    espec = mapas.EspecMapa(tabela="", coluna=mapa.titulo, titulo=boletim.titulo(mapa.titulo, previsao.UF),
+                            subtitulo=previsao.subtitulo_da_semana(rodada, semana), arquivo="",
+                            cmap=mapa.paleta, unidade=f"Anomalia ({mapa.unidade})",
+                            ranking=previsao.RANKING_SEMANAS, decimais=mapa.decimais,
+                            credito=previsao.CREDITO, ranking_absoluto=True)
+    gdf = _pontos_previstos(pontos, mapa.titulo)
+    botao_do_boletim(mapa.titulo.lower(), f"semana_{chave}",
+                     boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo),
+                     lambda: mapas.mapa_de_grade(grade, gdf, espec, base, niveis=list(escala)))
+
+
+def pagina_semanas() -> None:
+    """A anomalia semanal do EC46 em MS, até 6 semanas à frente (passo 5 do escopo)."""
+    st.title("Previsão por semana — Mato Grosso do Sul")
+    aviso = st.container()
+    # A superfície é do Open-Meteo; os números sobre as estações precisam da lista do INMET
+    if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
+        st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
+        st.stop()
+
+    with st.sidebar:
+        st.header("Filtros")
+        st.session_state.setdefault("semanas_mapas", list(previsao.PADRAO_SEMANAIS))
+        escolhidos = st.multiselect("Mapas", list(previsao.MAPAS_SEMANAIS), key="semanas_mapas",
+                                    help="A anomalia de cada grandeza: quanto a semana deve ficar acima ou "
+                                         "abaixo do normal.")
+    try:
+        estacoes = carregar_estacoes(previsao.UF).sort_values("Estação")
+    except fonte.ErroFonte:
+        sem_lista_de_estacoes(aviso, previsao.UF)
+    if not escolhidos:
+        st.info("Escolha ao menos um mapa na barra lateral.")
+        st.stop()
+
+    pontos_grade = openmeteo.pontos_da_grade()
+    semanal_grade, avisos = semanas_dos_pontos("grade-semanas", pontos_grade)
+    semanal_estacoes, avisos_estacoes = semanas_dos_pontos("estações-semanas",
+                                                           openmeteo.pontos_das_estacoes(estacoes))
+    for texto in avisos + avisos_estacoes:
+        aviso.warning(texto)
+    if semanal_grade is None:
+        st.stop()
+    semanal_estacoes = pd.DataFrame() if semanal_estacoes is None else semanal_estacoes
+    rodada = previsao.rodada_da(semanal_grade)
+    semanas = previsao.semanas_inteiras(semanal_grade, rodada)
+    if not semanas:
+        st.warning("O EC46 não trouxe nenhuma semana inteira nesta rodada.")
+        st.stop()
+
+    ordem = [nome for nome in previsao.MAPAS_SEMANAIS if nome in escolhidos]
+    ver = st.radio("Ver", ["Uma semana", "Todas as semanas"], horizontal=True, key="semanas_ver",
+                   help="Todas as semanas mostra o primeiro mapa escolhido, uma semana em cada mapa: é "
+                        "como se vê a tendência mudar.")
+    if ver == "Uma semana":
+        if st.session_state.get("semanas_semana") not in semanas:
+            st.session_state["semanas_semana"] = semanas[0]
+        semana = st.select_slider("Semana", options=semanas, format_func=previsao.nome_da_semana,
+                                  key="semanas_semana")
+        paineis = [(previsao.MAPAS_SEMANAIS[nome], semana, nome) for nome in ordem]
+    else:
+        mapa = previsao.MAPAS_SEMANAIS[ordem[0]]
+        paineis = [(mapa, semana, f"{mapa.nome}, {previsao.nome_da_semana(semana)}") for semana in semanas]
+    rotulos = st.checkbox("Mostrar o valor de cada estação", value=True, key="semanas_rotulos",
+                          help="A anomalia do EC46 no ponto de cada estação.")
+    st.caption(f"**EC46**, a previsão estendida do ECMWF, na média dos membros; rodada de {rodada:%d/%m %H} UTC "
+               "(sai uma por dia). **Anomalia** é a previsão da semana menos a normal do próprio modelo para a "
+               "mesma época, tirada das reprevisões do ECMWF dos últimos anos: branco é o normal; azul, mais "
+               "frio, e vermelho, mais quente; marrom, menos chuva, e verde, mais. Dá a tendência da semana, e "
+               "não o tempo de um dia. A semana vai de segunda a domingo. Previsão: "
+               "[Open-Meteo.com](https://open-meteo.com/), com dados do ECMWF "
+               "([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)).")
+
+    por_linha = min(len(paineis), MAPAS_POR_LINHA)
+    with st.spinner("Desenhando os mapas..."):
+        for primeiro in range(0, len(paineis), por_linha):
+            for coluna_tela, (mapa, semana, titulo) in zip(st.columns(por_linha),
+                                                            paineis[primeiro:primeiro + por_linha]):
+                with coluna_tela:
+                    painel_do_mapa_semanal(mapa, rodada, semana, rotulos, semanal_grade, pontos_grade,
+                                           semanal_estacoes, estacoes, titulo)
+    espacamento = f"{config.GRADE_PREVISAO:g}".replace(".", ",")
+    st.caption(f"A superfície é a do EC46 nos {len(pontos_grade)} pontos da grade de {espacamento}°, levada à "
+               "resolução do mapa por interpolação bilinear, como nos mapas dos dias. Os números sobre as "
+               "estações são a anomalia no ponto de cada uma, e são eles que entram no ranking do PNG do "
+               "boletim.")
+
+
 # =====================================================
 # PÁGINAS
 # =====================================================
@@ -1317,6 +1459,7 @@ pagina = st.navigation({
     "Previsão (MS)": [
         st.Page(pagina_previsao, title="Estações", icon=":material/show_chart:", url_path="previsao"),
         st.Page(pagina_mapas_previstos, title="Mapas", icon=":material/map:", url_path="previsao-mapas"),
+        st.Page(pagina_semanas, title="Semanas", icon=":material/date_range:", url_path="previsao-semanas"),
     ],
 })
 pagina.run()

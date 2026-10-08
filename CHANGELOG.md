@@ -18,11 +18,13 @@ Ainda não está na `main`. O plano desta versão está em `docs/escopo_v0.3.1.m
 - **Painel: previsão do tempo para MS**, do Open-Meteo, com os modelos ECMWF, GFS e ICON, até 14 dias (o ICON vai até o dia 7). Fica num grupo "Previsão (MS)" no topo da barra lateral, com duas páginas, ao lado do painel de sempre, que passa a se chamar "Observado (INMET)".
   - **Estações**: os gráficos de uma estação, com os três modelos lado a lado, por hora ou por dia. A tabela diária baixa em CSV.
   - **Mapas**: os mapas dos dias, um modelo por vez. Temperatura máxima, mínima e média, umidade mínima, chuva do dia, chuva acumulada de hoje até o dia escolhido, rajada e vento máximos com a direção. As cores e as escalas são as dos mapas do observado, e cada mapa tem o botão do PNG do boletim, com o crédito do Open-Meteo no lugar do INMET.
+  - **Semanas**: a anomalia semanal do EC46, a previsão estendida do ECMWF: quanto cada uma das próximas semanas deve ficar acima ou abaixo do normal, na temperatura média, máxima e mínima e na chuva. Uma semana com vários mapas, ou um mapa com todas as semanas lado a lado. Branco é o normal; azul e vermelho, mais frio e mais quente; marrom e verde, menos e mais chuva.
   - As páginas dizem de que rodada é cada modelo.
   - O que se escolhe na barra lateral de cada página (estado, período, estações, grandezas, modelo, mapas) continua lá quando se volta a ela.
 
 ### Corrigido
 
+- **Painel: nos mapas de chuva e de radiação, as cores do mapa não batiam com a barra de cores embaixo dele.** O mapa pintava pela régua do valor, e a barra, uma cor por classe: as classes de 1 a 50 mm saíam quase brancas no mapa e em azuis bem mais fortes na barra, e quem lia o valor pela barra subestimava a chuva. Agora o mapa também pinta uma cor por classe, como a barra e o mapa navegável, e as chuvas baixas ganham cor. O PNG do boletim desses mapas muda junto. Os mapas do `main.py` não mudam (conferido pixel a pixel).
 - **Painel: quando o INMET não devolve a lista de estações, aparece um aviso em vez do erro do Python.** O INMET às vezes responde vazio por alguns minutos. Antes, quem abria o painel via um traceback ("ErroINMET: Expecting value…") e não sabia se o problema era com ele. Agora aparece "O INMET não respondeu à lista de estações agora", com um botão para tentar de novo.
 - **Painel: sem a lista das estações vizinhas, os mapas saem só com as do estado**, com um aviso. Antes, o painel caía nas abas de mapas. É o mesmo que os produtos já faziam.
 

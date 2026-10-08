@@ -41,6 +41,21 @@ def corpo_da_previsao(dados: dict) -> list:
     return locais
 
 
+SEGUNDAS = ["2026-10-05", "2026-10-12", "2026-10-19", "2026-10-26", "2026-11-02", "2026-11-09", "2026-11-16"]
+
+
+def corpo_das_semanas(dados: dict) -> list:
+    """O que a API sazonal devolve: uma lista por variável, com a última semana vazia (passa do dia 46)."""
+    latitudes = [float(v) for v in dados["latitude"].split(",")]
+    locais = []
+    for latitude in latitudes:
+        semanal = {"time": SEGUNDAS}
+        for indice, nome in enumerate(dados["weekly"].split(",")):
+            semanal[nome] = [round(-latitude / 10 + indice + semana, 1) for semana in range(6)] + [None]
+        locais.append({"weekly": semanal})
+    return locais
+
+
 @pytest.fixture
 def open_meteo(monkeypatch):
     """Troca o Open-Meteo por respostas sintéticas e anota cada pedido."""
@@ -52,6 +67,8 @@ def open_meteo(monkeypatch):
             return Resposta(200, {"last_run_initialisation_time": 1791374400,     # 07/10 12:00 UTC
                                   "last_run_availability_time": 1791381600,       # 07/10 14:00 UTC
                                   "update_interval_seconds": 21600})
+        if url == config.URL_OPENMETEO_SAZONAL:
+            return Resposta(200, corpo_das_semanas(data))
         return Resposta(200, corpo_da_previsao(data))
 
     monkeypatch.setattr(openmeteo.requests, "request", falso)
@@ -250,3 +267,51 @@ def test_a_direcao_do_dia_e_a_resultante_das_horas(direcoes, esperada):
         assert np.isnan(obtida)
     else:
         assert obtida == pytest.approx(esperada, abs=1e-6)
+
+
+# =====================================================
+# AS SEMANAS
+# =====================================================
+def test_as_semanas_vem_uma_linha_por_ponto_e_semana_com_a_rodada(open_meteo):
+    tabela = openmeteo.buscar_semanas(pontos(2))
+
+    assert list(tabela.columns) == openmeteo.COLUNAS_SEMANAIS
+    assert len(tabela) == 2 * 6                                  # a sétima semana, vazia, sai
+    assert str(tabela["semana"].min()) == "2026-10-05" and str(tabela["semana"].max()) == "2026-11-09"
+    assert (tabela["rodada_utc"] == datetime(2026, 10, 7, 12, tzinfo=timezone.utc)).all()
+    assert (tabela["modelo"] == config.MODELO_SEMANAS).all()
+
+
+def test_o_pedido_semanal_leva_as_quatro_anomalias_e_os_46_dias(open_meteo):
+    pedidos, _ = open_meteo
+
+    openmeteo.buscar_semanas(pontos(1))
+
+    semanais = [dados for _, url, dados in pedidos if url == config.URL_OPENMETEO_SAZONAL]
+    assert len(semanais) == 1
+    assert semanais[0]["weekly"].split(",") == list(openmeteo.VARIAVEIS_SEMANAIS)
+    assert semanais[0]["forecast_days"] == 46                    # sem isto, a API devolve 27 semanas
+    assert semanais[0]["models"] == "ecmwf_ec46_ensemble_mean"
+
+
+def test_a_rodada_do_ec46_vem_dos_metadados_da_api_sazonal(open_meteo):
+    """A média dos membros tem metadados com intervalo de 744 h; vale o do EC46 com os membros."""
+    pedidos, _ = open_meteo
+
+    openmeteo.rodadas((config.MODELO_SEMANAS,))
+
+    assert pedidos[-1][1] == "https://seasonal-api.open-meteo.com/data/ecmwf_ec46/static/meta.json"
+
+
+def test_muitos_pontos_nas_semanas_vao_em_lotes_que_cabem_no_minuto(open_meteo):
+    """Cada ponto custa 3,3 pela regra (46 dias pesam 46/14): 400 pontos viram três lotes."""
+    pedidos, esperas = open_meteo
+
+    tabela = openmeteo.anomalias_semanais(pontos(400))
+
+    lotes = [len(dados["latitude"].split(",")) for _, url, dados in pedidos if url == config.URL_OPENMETEO_SAZONAL]
+    assert sum(lotes) == 400 and len(lotes) == 3
+    assert all(openmeteo.custo(tamanho, variaveis=4, modelos=1, dias=46) <= config.OPENMETEO_POR_MINUTO
+               for tamanho in lotes)
+    assert esperas == [openmeteo.ESPERA_ENTRE_LOTES] * 2
+    assert tabela["ponto"].nunique() == 400

@@ -164,7 +164,7 @@ sem mexer no código. **Até lá, a nuvem segue indo direto às APIs.**
 **Logo depois do passo 2, sem esperar o banco.** Na v0.3.x a página busca no Open-Meteo sob
 demanda, com a cópia guardada por rodada e compartilhada (decisões 7 e 11 do escopo), em qualquer
 instalação. Assim a equipe vê resultado novo enquanto a infraestrutura segue. **Os gráficos por
-estação e os mapas dos dias estão prontos desde 08/10**.
+estação, os mapas dos dias e os das semanas estão prontos desde 08/10**.
 
 Quando o coletor do Open-Meteo estiver gravando (passo 5) e o `fonte.py` souber ler do banco
 (passo 7), a página **no servidor interno** passa a ler do banco, com a grade de 0,25°. **Na nuvem**
