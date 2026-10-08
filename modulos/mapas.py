@@ -46,6 +46,7 @@ class EspecMapa:
     decimais: int = 1            # casas decimais dos rótulos e do ranking (0 para contagens, como horas)
     credito: str = CREDITO
     ranking_absoluto: bool = False  # ranqueia pelo tamanho do valor, para cima ou para baixo (anomalias)
+    com_sinal: bool = False         # escreve o + dos positivos: nas anomalias, o número é um desvio
 
 
 @dataclass(frozen=True)
@@ -397,7 +398,8 @@ def _desenhar_indicadores(ax, gdf, indicadores: Indicadores) -> None:
 
 def _formato(espec: EspecMapa):
     """Formatação dos números do mapa (rótulos e ranking), com as casas decimais da especificação."""
-    return f"{{:.{espec.decimais}f}}".format
+    sinal = "+" if getattr(espec, "com_sinal", False) else ""
+    return f"{{:{sinal}.{espec.decimais}f}}".format
 
 
 def _classes_desiguais(niveis) -> bool:

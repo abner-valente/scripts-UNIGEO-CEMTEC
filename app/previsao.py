@@ -430,19 +430,24 @@ class MapaSemanal:
     decimais: int = 1
 
 
+# Os nomes dizem "anomalia" na tela inteira: só "Temperatura média" sobre um -2,4 se lia como uma
+# temperatura de -2,4 °C (08/10/2026). A máxima e a mínima do EC46 são as de cada 6 horas, quatro por
+# dia, na média da semana: em Campo Grande, na semana de 12/10, a "máxima" deu 25,6 °C e a máxima do
+# dia do ECMWF de 14 dias, 26,7 °C. Por isso o nome diz "de 6 h", e não "do dia".
 MAPAS_SEMANAIS = {mapa.nome: mapa for mapa in (
-    MapaSemanal("Temperatura média", "Anomalia da temperatura média", "anom_temperatura", "°C", "RdBu_r",
-                NIVEIS_ANOMALIA_TEMPERATURA, "a média da semana menos a normal do modelo para a mesma semana"),
-    MapaSemanal("Temperatura máxima", "Anomalia da temperatura máxima", "anom_temp_max", "°C", "RdBu_r",
+    MapaSemanal("Anomalia da temperatura média", "Anomalia da temperatura média", "anom_temperatura", "°C",
+                "RdBu_r", NIVEIS_ANOMALIA_TEMPERATURA,
+                "quanto a média da semana fica acima (+) ou abaixo (−) da normal do modelo para a mesma semana"),
+    MapaSemanal("Anomalia da máxima de 6 h", "Anomalia da máxima de 6 h", "anom_temp_max", "°C", "RdBu_r",
                 NIVEIS_ANOMALIA_TEMPERATURA,
-                "a máxima de cada 6 horas, na média da semana, menos a normal do modelo"),
-    MapaSemanal("Temperatura mínima", "Anomalia da temperatura mínima", "anom_temp_min", "°C", "RdBu_r",
+                "o mesmo para a máxima de cada 6 horas (quatro por dia), que fica entre a média e a máxima do dia"),
+    MapaSemanal("Anomalia da mínima de 6 h", "Anomalia da mínima de 6 h", "anom_temp_min", "°C", "RdBu_r",
                 NIVEIS_ANOMALIA_TEMPERATURA,
-                "a mínima de cada 6 horas, na média da semana, menos a normal do modelo"),
-    MapaSemanal("Chuva", "Anomalia da chuva", "anom_chuva", "mm", "BrBG", NIVEIS_ANOMALIA_CHUVA,
-                "a chuva da semana menos a normal do modelo para a mesma semana"),
+                "o mesmo para a mínima de cada 6 horas (quatro por dia), que fica entre a mínima do dia e a média"),
+    MapaSemanal("Anomalia da chuva", "Anomalia da chuva", "anom_chuva", "mm", "BrBG", NIVEIS_ANOMALIA_CHUVA,
+                "quanto a chuva da semana fica acima (+) ou abaixo (−) da normal do modelo para a mesma semana"),
 )}
-PADRAO_SEMANAIS = ("Temperatura média", "Chuva")
+PADRAO_SEMANAIS = ("Anomalia da temperatura média", "Anomalia da chuva")
 
 
 def semanas_inteiras(semanal: pd.DataFrame, rodada: datetime) -> list[date]:

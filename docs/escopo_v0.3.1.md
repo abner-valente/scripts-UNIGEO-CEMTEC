@@ -270,7 +270,11 @@ decide de quais rodadas precisa.
    - a API sazonal, com `models=ecmwf_ec46_ensemble_mean` e `forecast_days=46` (sem ele, a API
      devolve 27 semanas e cobra por elas). As quatro anomalias: `temperature_2m_anomaly`,
      `temperature_max6h_2m_anomaly`, `temperature_min6h_2m_anomaly` e `precipitation_anomaly`
-     (mm na semana). Os nomes foram achados por teste: a documentação só traz os rótulos;
+     (mm na semana). Os nomes foram achados por teste: a documentação só traz os rótulos. A
+     máxima e a mínima são as de cada 6 horas, na média da semana, e não as do dia: em Campo
+     Grande, na semana de 12/10, a "máxima" deu 25,6 °C, e a do dia do ECMWF, 26,7 °C;
+   - na tela, tudo diz "anomalia" e os números levam sinal: com o título "Temperatura média"
+     sobre um −2,4, o mapa se lia como uma temperatura de −2,4 °C (corrigido em 08/10);
    - a semana vai de segunda a domingo. Entram só as que começam no dia da rodada ou depois: a
      que já tinha começado só teria os dias que faltavam, e a que passa do dia 46 vem vazia. Na
      prática, cinco semanas;

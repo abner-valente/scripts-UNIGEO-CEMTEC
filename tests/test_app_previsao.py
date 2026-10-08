@@ -428,19 +428,25 @@ def test_a_semana_se_escreve_de_segunda_a_domingo():
 def test_o_mapa_da_semana_e_a_anomalia_de_cada_ponto():
     tabela = semanal({date(2026, 10, 12): -1.8, date(2026, 10, 19): -1.0})
 
-    valores = previsao.valores_da_semana(tabela, previsao.MAPAS_SEMANAIS["Chuva"], date(2026, 10, 12))
+    valores = previsao.valores_da_semana(tabela, previsao.MAPAS_SEMANAIS["Anomalia da chuva"], date(2026, 10, 12))
 
     assert valores.to_dict() == {"A": -18.0, "B": -18.0}
 
 
 def test_nas_estacoes_a_coluna_leva_o_titulo_que_nao_se_confunde_com_os_dias():
     tabela = semanal({date(2026, 10, 12): -1.8}, pontos=("A702", "A721"))
-    mapa = previsao.MAPAS_SEMANAIS["Temperatura média"]
+    mapa = previsao.MAPAS_SEMANAIS["Anomalia da temperatura média"]
 
     pontos = previsao.nas_estacoes_na_semana(tabela, ESTACOES, mapa, date(2026, 10, 12))
 
     assert list(pontos["Anomalia da temperatura média"]) == [-1.8, -1.8]
     assert "Temperatura média" not in pontos
+
+
+def test_todo_mapa_das_semanas_diz_que_e_anomalia():
+    """Só "Temperatura média" sobre um -2,4 se lia como uma temperatura de -2,4 °C."""
+    assert all(nome.startswith("Anomalia") for nome in previsao.MAPAS_SEMANAIS)
+    assert set(previsao.PADRAO_SEMANAIS) <= set(previsao.MAPAS_SEMANAIS)
 
 
 @pytest.mark.parametrize("niveis", [previsao.NIVEIS_ANOMALIA_TEMPERATURA, previsao.NIVEIS_ANOMALIA_CHUVA])

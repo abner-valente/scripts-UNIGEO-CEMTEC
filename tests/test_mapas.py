@@ -351,6 +351,13 @@ def test_o_ranking_das_anomalias_e_pelo_tamanho_do_desvio():
     assert ranking.splitlines()[1:6] == ["B: -3.4", "D: -2.9", "E: 1.0", "A: 0.4", "C: -0.3"]
 
 
+def test_nas_anomalias_os_positivos_levam_o_sinal():
+    espec = mapas.EspecMapa("", "v", "t", "s", "", "RdBu_r", "°C", "", com_sinal=True)
+
+    assert [mapas._formato(espec)(valor) for valor in (0.4, -2.1, 0.0)] == ["+0.4", "-2.1", "+0.0"]
+    assert mapas._formato(mapas.EspecMapa("", "v", "t", "s", "", "RdBu_r", "°C", ""))(0.4) == "0.4"
+
+
 def test_com_classes_a_barra_marca_todas_as_fronteiras():
     base = mapas.carregar_base()
     niveis = [-5, -4, -3, -2, -1, -0.5, 0.5, 1, 2, 3, 4, 5]

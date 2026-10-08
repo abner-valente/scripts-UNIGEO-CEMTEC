@@ -1221,7 +1221,8 @@ def mapa_de_risco_previsto(origem: tuple, nome: str, rotulos: bool, _grade: np.n
 
 @st.cache_data(show_spinner=False, max_entries=40)
 def mapa_previsto(origem: tuple, nome: str, paleta: str, unidade: str, decimais: int, setas: bool,
-                  rotulos: bool, niveis: tuple | None, _grade: np.ndarray, _estacoes: pd.DataFrame) -> bytes:
+                  rotulos: bool, niveis: tuple | None, _grade: np.ndarray, _estacoes: pd.DataFrame,
+                  com_sinal: bool = False) -> bytes:
     """PNG de um mapa da previsão para a tela, sem a moldura.
 
     `origem` diz de que previsão é o desenho: o modelo, a rodada e o dia (ou a semana). Com o
@@ -1230,7 +1231,7 @@ def mapa_previsto(origem: tuple, nome: str, paleta: str, unidade: str, decimais:
     """
     espec = mapas.EspecMapa(tabela="", coluna=nome, titulo=nome, subtitulo="", arquivo="",
                             cmap=paleta, unidade=f"{nome} ({unidade})", ranking="",
-                            decimais=decimais, direcao_vento=setas)
+                            decimais=decimais, direcao_vento=setas, com_sinal=com_sinal)
     figura = mapas.mapa_de_grade(_grade, _pontos_previstos(_estacoes, nome), espec,
                                  base_cartografica(previsao.UF), niveis=list(niveis) if niveis else 20,
                                  tela=mapas.Tela(rotulos=rotulos))
@@ -1465,12 +1466,12 @@ def painel_do_mapa_semanal(mapa: previsao.MapaSemanal, rodada: datetime, semana:
     escala = tuple(float(nivel) for nivel in mapa.niveis)
 
     png = mapa_previsto(("semanas", rodada, semana), mapa.titulo, mapa.paleta, mapa.unidade, mapa.decimais,
-                        False, rotulos, escala, _grade=grade, _estacoes=pontos)
+                        False, rotulos, escala, _grade=grade, _estacoes=pontos, com_sinal=True)
     st.image(png, width="stretch")
-    st.image(barra_de_escala(mapa.paleta, escala, mapa.unidade), width="stretch")
+    st.image(barra_de_escala(mapa.paleta, escala, f"{mapa.unidade} em relação ao normal"), width="stretch")
     no_estado = grade[base.dentro_uf]
-    st.caption(f"{np.nanmin(no_estado):+.{mapa.decimais}f} a {np.nanmax(no_estado):+.{mapa.decimais}f} "
-               f"{mapa.unidade} · {mapa.regra}.")
+    st.caption(f"De {np.nanmin(no_estado):+.{mapa.decimais}f} a {np.nanmax(no_estado):+.{mapa.decimais}f} "
+               f"{mapa.unidade} em relação ao normal · {mapa.regra}.")
 
     carimbo = previsao.carimbo_da_semana(rodada, semana)
     chave = f"{mapa.nome}_{semana:%Y%m%d}"
@@ -1481,9 +1482,9 @@ def painel_do_mapa_semanal(mapa: previsao.MapaSemanal, rodada: datetime, semana:
     # nome, que nos outros mapas pede as menores, aqui não muda o que se procura
     espec = mapas.EspecMapa(tabela="", coluna=mapa.titulo, titulo=boletim.titulo(mapa.titulo, previsao.UF),
                             subtitulo=previsao.subtitulo_da_semana(rodada, semana), arquivo="",
-                            cmap=mapa.paleta, unidade=f"Anomalia ({mapa.unidade})",
+                            cmap=mapa.paleta, unidade=f"{mapa.unidade} em relação ao normal",
                             ranking=previsao.RANKING_SEMANAS, decimais=mapa.decimais,
-                            credito=previsao.CREDITO, ranking_absoluto=True)
+                            credito=previsao.CREDITO, ranking_absoluto=True, com_sinal=True)
     gdf = _pontos_previstos(pontos, mapa.titulo)
     botao_do_boletim(mapa.titulo.lower(), f"semana_{chave}",
                      boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo),
@@ -1502,7 +1503,10 @@ def pagina_semanas() -> None:
     with st.sidebar:
         st.header("Filtros")
         st.session_state.setdefault("semanas_mapas", list(previsao.PADRAO_SEMANAIS))
-        escolhidos = st.multiselect("Mapas", list(previsao.MAPAS_SEMANAIS), key="semanas_mapas",
+        # Um nome que deixou de existir (os mapas foram renomeados em 08/10) seria recusado pelo widget
+        st.session_state["semanas_mapas"] = [nome for nome in st.session_state["semanas_mapas"]
+                                             if nome in previsao.MAPAS_SEMANAIS] or list(previsao.PADRAO_SEMANAIS)
+        escolhidos = st.multiselect("Anomalias", list(previsao.MAPAS_SEMANAIS), key="semanas_mapas",
                                     help="A anomalia de cada grandeza: quanto a semana deve ficar acima ou "
                                          "abaixo do normal.")
     try:
@@ -1543,6 +1547,9 @@ def pagina_semanas() -> None:
         paineis = [(mapa, semana, f"{mapa.nome}, {previsao.nome_da_semana(semana)}") for semana in semanas]
     rotulos = st.checkbox("Mostrar o valor de cada estação", value=True, key="semanas_rotulos",
                           help="A anomalia do EC46 no ponto de cada estação.")
+    st.info("**Os números destes mapas são desvios do normal, e não temperaturas ou chuvas.** −2,0 °C quer "
+            "dizer uma semana 2 °C mais fria que o normal daquela época; +30 mm, 30 mm a mais de chuva que o "
+            "normal da semana.")
     st.caption(f"**EC46**, a previsão estendida do ECMWF, na média dos membros; rodada de {rodada:%d/%m %H} UTC "
                "(sai uma por dia). **Anomalia** é a previsão da semana menos a normal do próprio modelo para a "
                "mesma época, tirada das reprevisões do ECMWF dos últimos anos: branco é o normal; azul, mais "
