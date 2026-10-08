@@ -1,17 +1,19 @@
 """As contas da página de previsão, sem tela.
 
-A busca é do `modulos/openmeteo.py`. Aqui fica o que a página faz com o que voltou: guardar a
-previsão de cada modelo até sair a rodada seguinte, para todos os que abrem a página, e montar as
-séries dos gráficos de cada estação, um modelo ao lado do outro.
+A busca é do `modulos/openmeteo.py`. Aqui fica o que as páginas fazem com o que voltou: guardar
+a previsão de cada modelo até sair a rodada seguinte, para todos os que abrem o painel; montar as
+séries dos gráficos de cada estação, um modelo ao lado do outro; e preparar os mapas dos dias.
 
 As decisões que desenham a página estão em docs/escopo_v0.3.1.md.
 """
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import date, datetime
 
+import numpy as np
 import pandas as pd
+from scipy.interpolate import RegularGridInterpolator, griddata
 
 from app import variaveis
 from modulos import config, openmeteo
@@ -207,3 +209,175 @@ def planilha(horaria: pd.DataFrame, fuso=config.FUSO_MS) -> pd.DataFrame:
     dias = dias.assign(modelo=dias["modelo"].map(openmeteo.NOMES),
                        rodada_utc=dias["rodada_utc"].dt.strftime("%Y-%m-%d %H:%M"))
     return dias.drop(columns=["latitude", "longitude"]).round(1)
+
+
+# =====================================================
+# OS MAPAS
+# =====================================================
+# A licença do Open-Meteo (CC BY 4.0) obriga o crédito, que vai no subtítulo do PNG do boletim
+CREDITO = "Open-Meteo (CC BY 4.0)/SEMADESC"
+DIAS_DA_SEMANA = ("seg", "ter", "qua", "qui", "sex", "sáb", "dom")
+
+
+@dataclass(frozen=True)
+class MapaPrevisto:
+    """Um mapa da página: de que coluna do dia ele sai, e como se colore e se nomeia."""
+
+    nome: str          # na tela
+    titulo: str        # no PNG do boletim
+    coluna: str        # da tabela diária do openmeteo
+    grandeza: str      # dá a escala de cores do observado e o plural do ranking
+    unidade: str
+    paleta: str
+    decimais: int
+    regra: str
+    setas: bool = False       # a direção dominante, em seta sobre cada estação
+    acumulado: bool = False   # soma os dias, de hoje até o escolhido
+
+
+# As paletas são as dos mapas do observado, grandeza por grandeza
+MAPAS = {mapa.nome: mapa for mapa in (
+    MapaPrevisto("Temperatura máxima", "Temperatura máxima prevista", "temp_max", "Temperatura", "°C",
+                 "RdYlBu_r", 1, "a maior das 24 horas do dia"),
+    MapaPrevisto("Temperatura mínima", "Temperatura mínima prevista", "temp_min", "Temperatura", "°C",
+                 "RdYlBu_r", 1, "a menor das 24 horas do dia"),
+    MapaPrevisto("Temperatura média", "Temperatura média prevista", "temp_media", "Temperatura", "°C",
+                 "RdYlBu_r", 1, "a média das 24 horas do dia"),
+    MapaPrevisto("Umidade mínima", "Umidade mínima prevista", "umid_min", "Umidade", "%",
+                 "YlGnBu", 0, "a menor das 24 horas do dia"),
+    MapaPrevisto("Chuva do dia", "Chuva prevista no dia", "chuva", "Chuva", "mm",
+                 "Blues", 1, "a soma das 24 horas do dia"),
+    MapaPrevisto("Chuva acumulada", "Chuva acumulada prevista", "chuva", "Chuva", "mm",
+                 "Blues", 1, "a soma dos dias, de hoje até o escolhido", acumulado=True),
+    MapaPrevisto("Rajada máxima", "Rajada máxima prevista", "rajada_max", "Vento", "km/h",
+                 "turbo", 1, "a maior rajada das 24 horas do dia; a seta é a direção dominante",
+                 setas=True),
+    MapaPrevisto("Vento máximo", "Vento máximo previsto", "vento_max", "Vento", "km/h",
+                 "turbo", 1, "a maior velocidade das 24 horas do dia; a seta é a direção dominante",
+                 setas=True),
+)}
+PADRAO_MAPAS = ("Temperatura máxima", "Temperatura mínima", "Chuva do dia")
+
+
+def nome_do_dia(dia: date) -> str:
+    """Como o deslizante escreve o dia: "qui 09/10". O dia da semana é o que se procura."""
+    return f"{DIAS_DA_SEMANA[dia.weekday()]} {dia:%d/%m}"
+
+
+def dias_inteiros(diaria: pd.DataFrame, hoje: date) -> list[date]:
+    """Os dias que a previsão tem inteiros, de hoje em diante: são as paradas do deslizante.
+
+    Um dia pela metade (o último, e o do fim do ICON) faria um mapa de máxima de meio dia, que
+    pareceria uma queda de temperatura que nenhum modelo previu.
+    """
+    dias = diaria.loc[diaria["horas"] == 24, "dia_previsto"]
+    return sorted(dia for dia in dias.unique() if dia >= hoje)
+
+
+def dias_somados(mapa: MapaPrevisto, dia: date, hoje: date) -> int:
+    """Quantos dias o mapa soma: um, ou de hoje até o escolhido no acumulado."""
+    return (dia - hoje).days + 1 if mapa.acumulado else 1
+
+
+def valores_do_dia(diaria: pd.DataFrame, mapa: MapaPrevisto, dia: date, hoje: date) -> pd.Series:
+    """O valor de cada ponto no dia, indexado pelo ponto.
+
+    No acumulado, a soma de hoje até o dia escolhido, e só onde todos esses dias estão inteiros:
+    somar o que houver daria menos chuva onde faltou um dia, e não onde choveu menos.
+    """
+    inteiros = diaria[diaria["horas"] == 24]
+    if not mapa.acumulado:
+        return inteiros[inteiros["dia_previsto"] == dia].set_index("ponto")[mapa.coluna]
+    janela = inteiros[(inteiros["dia_previsto"] >= hoje) & (inteiros["dia_previsto"] <= dia)]
+    grupos = janela.groupby("ponto")[mapa.coluna]
+    soma = grupos.sum(min_count=1)
+    return soma.where(grupos.count() == dias_somados(mapa, dia, hoje))
+
+
+def niveis(mapa: MapaPrevisto, dias: int = 1, ajustar: bool = False):
+    """Os níveis de cor, os mesmos dos mapas do observado (decisão 9 do escopo), ou None.
+
+    None deixa a escala se ajustar ao dado. A regra é a de `variaveis.escala`, que só olha a
+    grandeza: o mapa previsto passa por ela como um produto do observado, e uma temperatura
+    prevista de 34 °C sai com a mesma cor de uma medida. Na chuva, a duração conta: até 4 dias,
+    as classes curtas (até 100 mm); acima, as longas (até 300 mm).
+    """
+    if ajustar:
+        return None
+    escolhida = variaveis.escala(mapa, 24.0 * dias)
+    if escolhida is None:
+        return None
+    tipo, valores = escolhida
+    return np.linspace(*valores, 21) if tipo == "faixa" else list(valores)
+
+
+def superficie(valores: pd.Series, pontos: pd.DataFrame, lon_grade: np.ndarray, lat_grade: np.ndarray,
+               passo: float = config.GRADE_PREVISAO) -> np.ndarray | None:
+    """A previsão dos pontos da grade levada à grade fina do mapa, por interpolação bilinear.
+
+    Não é interpolação de estação: a superfície é a do modelo, que já calculou cada ponto, e aqui
+    ela só muda de resolução, de 0,5° para a do mapa. Bilinear, como fazem os visualizadores de
+    previsão: comparada em 08/10, a linear por triângulos deixava facetas retas no mapa, e a cúbica
+    inventava bolhas entre os pontos. A bilinear nunca passa dos valores do modelo.
+
+    Os pontos só cobrem o estado e uma fileira além da divisa; os nós que faltam no retângulo
+    recebem o ponto mais próximo, para a conta não esbarrar em buraco. None se o modelo não trouxe
+    o dado nesse dia.
+    """
+    tabela = pontos.set_index("ponto").join(valores.rename("valor"), how="inner").dropna(subset=["valor"])
+    if len(tabela) < 4:
+        return None
+    lons = np.arange(tabela["longitude"].min(), tabela["longitude"].max() + passo / 2, passo)
+    lats = np.arange(tabela["latitude"].min(), tabela["latitude"].max() + passo / 2, passo)
+    if len(lons) < 2 or len(lats) < 2:
+        return None
+    rede = np.full((len(lats), len(lons)), np.nan)
+    linhas = np.rint((tabela["latitude"].to_numpy() - lats[0]) / passo).astype(int)
+    colunas = np.rint((tabela["longitude"].to_numpy() - lons[0]) / passo).astype(int)
+    numeros = tabela["valor"].to_numpy(dtype=float)
+    rede[linhas, colunas] = numeros
+    faltam = np.isnan(rede)
+    if faltam.any():
+        lon_rede, lat_rede = np.meshgrid(lons, lats)
+        rede[faltam] = griddata(np.column_stack([tabela["longitude"], tabela["latitude"]]), numeros,
+                                (lon_rede[faltam], lat_rede[faltam]), method="nearest")
+    # Fora do retângulo dos pontos (os cantos do enquadramento, longe da divisa) ela estende a
+    # última inclinação; o recorte pelo estado esconde isso, e a faixa do modelo segura o resto
+    bilinear = RegularGridInterpolator((lats, lons), rede, method="linear", bounds_error=False,
+                                       fill_value=None)
+    grade = bilinear(np.column_stack([lat_grade.ravel(), lon_grade.ravel()])).reshape(lon_grade.shape)
+    return np.clip(grade, numeros.min(), numeros.max())
+
+
+def nas_estacoes(diaria: pd.DataFrame, estacoes: pd.DataFrame, mapa: MapaPrevisto, dia: date,
+                 hoje: date) -> pd.DataFrame:
+    """A previsão do mesmo modelo no ponto de cada estação, para os números e o ranking do mapa.
+
+    Os números sobre o mapa não são lidos da superfície: são a previsão pedida no ponto exato da
+    estação, que é a que se compara depois com o que ela mediu. A coluna do valor leva o nome do
+    mapa, como os pontos do observado.
+    """
+    tabela = pd.DataFrame({"Estação": estacoes["Estação"].to_numpy(),
+                           "Latitude": pd.to_numeric(estacoes["VL_LATITUDE"]).to_numpy(),
+                           "Longitude": pd.to_numeric(estacoes["VL_LONGITUDE"]).to_numpy()},
+                          index=estacoes["CD_ESTACAO"].astype(str).to_numpy())
+    if diaria.empty:
+        return tabela.iloc[0:0].assign(**{mapa.nome: pd.Series(dtype=float)})
+    tabela[mapa.nome] = valores_do_dia(diaria, mapa, dia, hoje)
+    if mapa.setas:
+        direcao = replace(mapa, coluna="direcao_dominante", acumulado=False)
+        tabela["Direção (°)"] = valores_do_dia(diaria, direcao, dia, hoje)
+    return tabela.dropna(subset=[mapa.nome]).reset_index(drop=True)
+
+
+def subtitulo(modelo: str, rodada: datetime, mapa: MapaPrevisto, dia: date, hoje: date) -> str:
+    """A janela, o modelo e a rodada no subtítulo do PNG do boletim."""
+    quando = (f"de {hoje:%d/%m} a {dia:%d/%m/%Y}" if mapa.acumulado and dia > hoje
+              else f"para {dia:%d/%m/%Y}")
+    return f"Previsão {quando} · {openmeteo.NOMES[modelo]}, rodada de {rodada:%d/%m %H} UTC"
+
+
+def carimbo(modelo: str, rodada: datetime, mapa: MapaPrevisto, dia: date, hoje: date) -> str:
+    """O fim do nome do arquivo: o modelo, o dia (ou a janela) e a rodada."""
+    quando = f"{hoje:%Y%m%d}_a_{dia:%Y%m%d}" if mapa.acumulado and dia > hoje else f"{dia:%Y%m%d}"
+    return f"{openmeteo.NOMES[modelo]}_{quando}_rodada_{rodada:%Y%m%d_%H}UTC"

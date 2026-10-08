@@ -567,7 +567,7 @@ E abra:
 streamlit run app/explorador.py
 ```
 
-O navegador abre em `http://localhost:8501`, na página **Observado (INMET)**. No topo da barra lateral fica a troca para a página **Previsão (MS)** (veja [Página "Previsão (MS)"](#página-previsão-ms)). Abaixo dela ficam o **estado**, o período, as estações e as **grandezas**. O seletor de estado só oferece as UFs que têm shapefile em `shp/` — hoje **os 25 que têm estação automática operante**, ou seja, todos menos RR e SE, cujas estações estão todas em pane. Para acrescentar uma delas quando voltarem, rode `python ferramentas/simplificar_municipios.py --uf SIGLA` (veja [Shapefiles](#shapefiles)). Trocar de estado troca junto o fuso (é ele que decide onde o dia começa), as estações e os shapefiles, e cada estado tem o seu lugar no cache: duas pessoas no mesmo painel, em estados diferentes, não veem o mapa uma da outra. Cada grandeza ganha o seu gráfico — escalas diferentes nunca se misturam num eixo só —, com as séries que a equipe de meteorologia definiu: no gráfico horário, a máxima, a mínima e a média da hora; no diário, as do dia mais a compensada. **Cor separa a estação, traço separa a série**, e clicar numa série da legenda deixa só ela no gráfico **e no balão** — Shift+clique na série destacada traz todas de volta. Zoom com Shift + roda, e tudo baixável em CSV. O cursor em **qualquer ponto** do gráfico marca a hora mais próxima com uma régua vertical e abre um balão só com **todas as estações daquele instante** — antes era preciso acertar o mouse em cima de um ponto, e o balão trazia uma linha de cada vez, que é justamente a comparação que não se queria fazer.
+O navegador abre em `http://localhost:8501`, na página **Observado (INMET)**. No topo da barra lateral ficam as páginas da **Previsão (MS)**: **Estações** e **Mapas** (veja [Previsão (MS)](#previsão-ms)). Abaixo dela ficam o **estado**, o período, as estações e as **grandezas**. O seletor de estado só oferece as UFs que têm shapefile em `shp/` — hoje **os 25 que têm estação automática operante**, ou seja, todos menos RR e SE, cujas estações estão todas em pane. Para acrescentar uma delas quando voltarem, rode `python ferramentas/simplificar_municipios.py --uf SIGLA` (veja [Shapefiles](#shapefiles)). Trocar de estado troca junto o fuso (é ele que decide onde o dia começa), as estações e os shapefiles, e cada estado tem o seu lugar no cache: duas pessoas no mesmo painel, em estados diferentes, não veem o mapa uma da outra. Cada grandeza ganha o seu gráfico — escalas diferentes nunca se misturam num eixo só —, com as séries que a equipe de meteorologia definiu: no gráfico horário, a máxima, a mínima e a média da hora; no diário, as do dia mais a compensada. **Cor separa a estação, traço separa a série**, e clicar numa série da legenda deixa só ela no gráfico **e no balão** — Shift+clique na série destacada traz todas de volta. Zoom com Shift + roda, e tudo baixável em CSV. O cursor em **qualquer ponto** do gráfico marca a hora mais próxima com uma régua vertical e abre um balão só com **todas as estações daquele instante** — antes era preciso acertar o mouse em cima de um ponto, e o balão trazia uma linha de cada vez, que é justamente a comparação que não se queria fazer.
 
 | | |
 |---|---|
@@ -670,19 +670,21 @@ Radiação levemente negativa à noite é ruído conhecido do sensor, não defei
 
 > Para o dia em curso, as horas mais recentes podem não estar no cache. Se precisar do dado de agora, limpe o cache ou consulte de novo mais tarde.
 
-### Página "Previsão (MS)"
+### Previsão (MS)
 
-A previsão do tempo para Mato Grosso do Sul, do [Open-Meteo](https://open-meteo.com/), com três modelos lado a lado: **ECMWF**, **GFS** e **ICON**. O ECMWF e o GFS vão até o dia 14; o ICON, até o dia 7. É uma página à parte porque não usa nenhum filtro do observado, e só consulta o Open-Meteo quando alguém a abre. O endereço dela é `…/previsao`.
+A previsão do tempo para Mato Grosso do Sul, do [Open-Meteo](https://open-meteo.com/), com três modelos: **ECMWF**, **GFS** e **ICON**. O ECMWF e o GFS vão até o dia 14; o ICON, até o dia 7. São páginas à parte porque não usam nenhum filtro do observado, e só consultam o Open-Meteo quando alguém as abre.
 
 | | |
 |---|---|
-| **O que mostra** | Os gráficos de uma estação de MS (abre em Campo Grande): temperatura, umidade, ponto de orvalho, vento e rajada, direção e chuva, por hora ou por dia. Cor separa o modelo, traço separa a série. Por dia, a chuva sai em barras, com o total previsto de cada modelo. A tabela diária baixa em CSV |
+| **Estações** (`…/previsao`) | Os gráficos de uma estação de MS (abre em Campo Grande), com os modelos lado a lado: temperatura, umidade, ponto de orvalho, vento e rajada, direção e chuva, por hora ou por dia. Cor separa o modelo, traço separa a série. Por dia, a chuva sai em barras, com o total previsto de cada modelo. A tabela diária baixa em CSV |
+| **Mapas** (`…/previsao-mapas`) | Os mapas dos dias, um modelo por vez, com um deslizante de hoje até o último dia inteiro do modelo: temperatura máxima, mínima e média, umidade mínima, chuva do dia, chuva acumulada de hoje até o dia escolhido, rajada e vento máximos com a seta da direção. As cores e as escalas são as dos mapas do observado, e cada mapa tem o botão do PNG do boletim |
+| **A superfície** | É a do próprio modelo, nos 178 pontos da grade de 0,5° que cobrem o estado, levada à resolução do mapa por interpolação bilinear. **Não é IDW de estação**: a previsão já vem em grade, e o IDW só mostraria um núcleo de chuva onde houvesse estação. Os números sobre as estações são a previsão do mesmo modelo no ponto de cada uma, e são eles que entram no ranking do boletim |
 | **O dia** | O mesmo do observado: da hora das 01:00 à das 00:00 do dia seguinte, no horário de MS. No modo por dia entram só os dias inteiros |
 | **A rodada** | A página diz de que rodada é cada modelo. Cada um é buscado de novo quando sai uma rodada dele, de 6 em 6 horas, e a busca fica guardada para todos que abrem o painel: só a primeira pessoa depois da rodada espera, alguns segundos. Se o Open-Meteo falhar, fica a última rodada guardada, com aviso |
-| **A cota** | O Open-Meteo gratuito aceita 10 mil chamadas por dia. As estações custam 58 por modelo e rodada: no máximo umas 700 por dia |
-| **Crédito** | Os dados são do Open-Meteo, com ECMWF, NOAA e DWD, sob CC BY 4.0, e o crédito vai na página |
+| **A cota** | O Open-Meteo gratuito aceita 10 mil chamadas por dia. As estações custam 58 por modelo e rodada, e a grade dos mapas, 178: no pior caso, alguém abrindo tudo depois de cada rodada, umas 2.800 por dia |
+| **Crédito** | Os dados são do Open-Meteo, com ECMWF, NOAA e DWD, sob CC BY 4.0. O crédito vai nas páginas e no subtítulo do PNG do boletim, no lugar do "INMET/SEMADESC" |
 
-O que vem depois (mapas dos dias 1 a 14, anomalia semanal e risco de fogo previsto) está em [`docs/escopo_v0.3.1.md`](docs/escopo_v0.3.1.md).
+O que vem depois (anomalia semanal e risco de fogo previsto) está em [`docs/escopo_v0.3.1.md`](docs/escopo_v0.3.1.md).
 
 ## Novos produtos
 
@@ -711,7 +713,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │       └── risco_fogo.py       # Risco de fogo pela regra 30-30-30, hora a hora
 ├── app/                  # Explorador em Streamlit (análise), com o seu cache local em cache/
 │   ├── explorador.py     # A tela: as páginas do observado e da previsão, filtros, gráficos, mapas e qualidade
-│   ├── previsao.py       # Previsão na tela: a rodada guardada de cada modelo e as séries dos gráficos
+│   ├── previsao.py       # Previsão na tela: a rodada guardada de cada modelo, as séries e os mapas dos dias
 │   ├── dados.py          # Coleta com cache, usada só pelo explorador
 │   ├── variaveis.py      # Catálogo do que se pode mapear e traçar, com a regra de cada um
 │   ├── animacao.py       # GIF do mapa no tempo: quais quadros entram e o carimbo de cada um

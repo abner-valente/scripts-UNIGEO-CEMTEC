@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import altair as alt
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pydeck as pdk
@@ -949,10 +950,10 @@ def condicoes_do_dia(horaria: pd.DataFrame, dia, ordem: list[str]) -> alt.Chart:
 # =====================================================
 @st.cache_resource(show_spinner=False, max_entries=1)
 def guarda_da_previsao() -> previsao.Guarda:
-    """A previsão guardada, uma só no processo: todos os que abrem a página dividem a mesma.
+    """A previsão guardada, uma só no processo: todos os que abrem o painel dividem a mesma.
 
-    São as estações de MS nos três modelos, uns 10 MB: a função não tem argumentos, e a entrada é
-    uma só.
+    São as estações e a grade de 0,5° de MS nos três modelos, uns 26 MB (medido em 08/10: 7,7 MB a
+    grade de um modelo): a função não tem argumentos, e a entrada é uma só.
     """
     return previsao.Guarda()
 
@@ -971,10 +972,13 @@ def rodadas_atuais() -> tuple[dict | None, str | None]:
         return None, str(erro)
 
 
-def previsao_das_estacoes(estacoes: pd.DataFrame, modelos: tuple[str, ...]) -> tuple[list[pd.DataFrame], list[str]]:
-    """A previsão horária das estações de MS, uma tabela por modelo, e os avisos para a tela."""
+def previsao_dos_pontos(conjunto: str, pontos: pd.DataFrame,
+                        modelos: tuple[str, ...]) -> tuple[list[pd.DataFrame], list[str]]:
+    """A previsão horária dos pontos, uma tabela por modelo, e os avisos para a tela.
+
+    `conjunto` nomeia os pontos na guarda: "estações" ou "grade".
+    """
     rodadas, falha = rodadas_atuais()
-    pontos = openmeteo.pontos_das_estacoes(estacoes)
     guarda = guarda_da_previsao()
     tabelas, avisos = [], []
     for modelo in modelos:
@@ -982,16 +986,16 @@ def previsao_das_estacoes(estacoes: pd.DataFrame, modelos: tuple[str, ...]) -> t
         rodada = rodadas[modelo] if rodadas else None
         buscar = lambda modelo=modelo: openmeteo.buscar(pontos, (modelo,))  # noqa: E731
         try:
-            if not guarda.precisa_buscar("estações", modelo, rodada):
-                obtida = guarda.obter("estações", modelo, rodada, buscar)
+            if not guarda.precisa_buscar(conjunto, modelo, rodada):
+                obtida = guarda.obter(conjunto, modelo, rodada, buscar)
             elif rodada is None:
                 # Nada guardado e nem os metadados responderam: a busca falharia do mesmo jeito,
                 # depois de esperar as tentativas
                 avisos.append(f"**{nome}** ficou de fora: o Open-Meteo não respondeu ({falha}).")
                 continue
             else:
-                with st.spinner(f"Buscando a previsão do {nome} no Open-Meteo…"):
-                    obtida = guarda.obter("estações", modelo, rodada, buscar)
+                with st.spinner(f"Buscando a previsão do {nome} ({conjunto}) no Open-Meteo…"):
+                    obtida = guarda.obter(conjunto, modelo, rodada, buscar)
         except openmeteo.ErroOpenMeteo as erro:
             avisos.append(f"**{nome}** ficou de fora: o Open-Meteo não respondeu ({erro}).")
             continue
@@ -1024,11 +1028,12 @@ def barras_da_chuva_prevista(longo: pd.DataFrame) -> alt.Chart:
 # página aparece sozinha, então ir à previsão e voltar perderia as estações escolhidas no
 # observado. Ficam só os filtros da barra lateral: as escolhas dentro das abas voltam ao padrão.
 CHAVES_DOS_FILTROS = ("uf", "estacoes", "grandezas",
-                      "previsao_estacao", "previsao_modelos", "previsao_grandezas", "previsao_modo")
+                      "previsao_estacao", "previsao_modelos", "previsao_grandezas", "previsao_modo",
+                      "mapas_previstos_modelo", "mapas_previstos")
 
 
 def lembrar_filtros() -> None:
-    """Mantém o que se escolheu nos filtros das duas páginas. Chamada no topo de toda execução.
+    """Mantém o que se escolheu nos filtros de cada página. Chamada no topo de toda execução.
 
     É a receita da documentação do Streamlit: regravar a chave a cada execução impede que ela seja
     apagada. Tem de ser em toda execução, e não só na da outra página: regravada só lá, a chave
@@ -1046,10 +1051,7 @@ def lembrar_filtros() -> None:
 
 
 def pagina_previsao() -> None:
-    """A previsão de MS nas estações, com os três modelos lado a lado.
-
-    É o passo 3 do escopo da v0.3.1. Os mapas vêm no passo seguinte.
-    """
+    """A previsão de MS nas estações, com os três modelos lado a lado (passo 3 do escopo)."""
     st.title("Previsão do tempo — Mato Grosso do Sul")
     aviso = st.container()
     # A previsão é do Open-Meteo, mas a lista das estações é do INMET
@@ -1084,7 +1086,7 @@ def pagina_previsao() -> None:
     if not modelos:
         st.info("Escolha ao menos um modelo na barra lateral.")
         st.stop()
-    tabelas, avisos = previsao_das_estacoes(estacoes, tuple(modelos))
+    tabelas, avisos = previsao_dos_pontos("estações", openmeteo.pontos_das_estacoes(estacoes), tuple(modelos))
     for texto in avisos:
         aviso.warning(texto)
     if not tabelas:
@@ -1141,6 +1143,163 @@ def pagina_previsao() -> None:
                            file_name=f"previsao_{codigo}_{desde:%Y%m%d_%H}h.csv", mime="text/csv")
 
 
+@st.cache_data(show_spinner=False, max_entries=12)
+def diario_previsto(conjunto: str, modelo: str, rodada: datetime, _horaria: pd.DataFrame) -> pd.DataFrame:
+    """O dia de cada ponto, tirado das horas uma vez por rodada.
+
+    As horas da grade são 60 mil linhas por modelo: refazer a soma a cada clique custaria mais que
+    o desenho. A chave é o conjunto, o modelo e a rodada, que é o que muda a tabela.
+    """
+    return openmeteo.diario(_horaria, config.FUSO_MS)
+
+
+@st.cache_data(show_spinner=False, max_entries=30)
+def mapa_previsto(nome: str, modelo: str, rodada: datetime, dia: date, hoje: date, rotulos: bool,
+                  niveis: tuple | None, _grade: np.ndarray, _estacoes: pd.DataFrame) -> bytes:
+    """PNG de um mapa da previsão para a tela, sem a moldura.
+
+    A chave é o que define o desenho (mapa, modelo, rodada, dia, escala); a superfície e as
+    estações vêm deles e ficam fora da chave, que não precisa comparar 10 mil números a cada clique.
+    """
+    mapa = previsao.MAPAS[nome]
+    espec = mapas.EspecMapa(tabela="", coluna=nome, titulo=nome, subtitulo="", arquivo="",
+                            cmap=mapa.paleta, unidade=f"{nome} ({mapa.unidade})", ranking="",
+                            decimais=mapa.decimais, direcao_vento=mapa.setas)
+    figura = mapas.mapa_de_grade(_grade, _pontos_previstos(_estacoes, nome), espec,
+                                 base_cartografica(previsao.UF), niveis=list(niveis) if niveis else 20,
+                                 tela=mapas.Tela(rotulos=rotulos))
+    arquivo = io.BytesIO()
+    figura.savefig(arquivo, format="png", dpi=DPI_MAPA, bbox_inches="tight", facecolor="white")
+    return arquivo.getvalue()
+
+
+def _pontos_previstos(estacoes: pd.DataFrame, nome: str):
+    """As estações com a previsão no ponto delas, prontas para o mapa; vazias se não houver."""
+    pontos = mapas.preparar_pontos(estacoes, nome, nome)
+    if pontos is None:
+        colunas = ["Estação", "Latitude", "Longitude", nome, "Direção (°)"]
+        pontos = gpd.GeoDataFrame(pd.DataFrame(columns=colunas), geometry=gpd.points_from_xy([], []),
+                                  crs="EPSG:4326")
+    return pontos
+
+
+def painel_do_mapa_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: datetime, dia: date,
+                            hoje: date, rotulos: bool, ajustar: bool, diaria_grade: pd.DataFrame,
+                            pontos_grade: pd.DataFrame, diaria_estacoes: pd.DataFrame,
+                            estacoes: pd.DataFrame) -> None:
+    """Uma coluna da linha de mapas da previsão: o desenho, a escala, a regra e os botões."""
+    st.markdown(f"**{mapa.nome}**")
+    base = base_cartografica(previsao.UF)
+    grade = previsao.superficie(previsao.valores_do_dia(diaria_grade, mapa, dia, hoje), pontos_grade,
+                                base.lon_grade, base.lat_grade)
+    if grade is None:
+        st.info(f"O {openmeteo.NOMES[modelo]} não traz {mapa.nome.lower()} para {previsao.nome_do_dia(dia)}.")
+        return
+    pontos = previsao.nas_estacoes(diaria_estacoes, estacoes, mapa, dia, hoje)
+    niveis = previsao.niveis(mapa, previsao.dias_somados(mapa, dia, hoje), ajustar)
+    escala = None if niveis is None else tuple(float(nivel) for nivel in niveis)
+
+    png = mapa_previsto(mapa.nome, modelo, rodada, dia, hoje, rotulos, escala, _grade=grade, _estacoes=pontos)
+    st.image(png, width="stretch")
+    if escala is not None:
+        st.image(barra_de_escala(mapa.paleta, escala, mapa.unidade), width="stretch")
+    no_estado = grade[base.dentro_uf]
+    st.caption(f"{np.nanmin(no_estado):.{mapa.decimais}f} a {np.nanmax(no_estado):.{mapa.decimais}f} "
+               f"{mapa.unidade} · {mapa.regra}.")
+
+    carimbo = previsao.carimbo(modelo, rodada, mapa, dia, hoje)
+    st.download_button(f"Baixar PNG — {mapa.nome.lower()}", png, mime="image/png",
+                       key=f"baixar_previsto_{mapa.nome}",
+                       file_name=f"Mapa_{mapa.titulo.replace(' ', '_')}_{carimbo}.png")
+    espec = boletim.espec(mapa.titulo, mapa.grandeza, mapa.unidade, mapa.paleta, mapa.decimais,
+                          previsao.UF, previsao.subtitulo(modelo, rodada, mapa, dia, hoje), mapa.setas,
+                          credito=previsao.CREDITO, coluna=mapa.nome)
+    gdf = _pontos_previstos(pontos, mapa.nome)
+    botao_do_boletim(mapa.nome.lower(), f"previsto_{mapa.nome}",
+                     boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo),
+                     lambda: mapas.mapa_de_grade(grade, gdf, espec, base,
+                                                 niveis=list(escala) if escala else 20))
+
+
+def pagina_mapas_previstos() -> None:
+    """Os mapas dos dias 1 a 14 de MS, um modelo por vez (passo 4 do escopo)."""
+    st.title("Mapas da previsão — Mato Grosso do Sul")
+    aviso = st.container()
+    # A superfície é do Open-Meteo; os números sobre as estações precisam da lista do INMET
+    if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
+        st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
+        st.stop()
+
+    with st.sidebar:
+        st.header("Filtros")
+        st.session_state.setdefault("mapas_previstos_modelo", config.MODELOS_PREVISAO[0])
+        modelo = st.radio("Modelo", list(config.MODELOS_PREVISAO), format_func=openmeteo.NOMES.get,
+                          key="mapas_previstos_modelo",
+                          help="Um modelo por vez. O ECMWF e o GFS vão até o dia 14; o ICON, até o dia 7.")
+        st.session_state.setdefault("mapas_previstos", list(previsao.PADRAO_MAPAS))
+        escolhidos = st.multiselect("Mapas", list(previsao.MAPAS), key="mapas_previstos",
+                                    help="A chuva acumulada soma de hoje até o dia escolhido.")
+    try:
+        estacoes = carregar_estacoes(previsao.UF).sort_values("Estação")
+    except fonte.ErroFonte:
+        sem_lista_de_estacoes(aviso, previsao.UF)
+    if not escolhidos:
+        st.info("Escolha ao menos um mapa na barra lateral.")
+        st.stop()
+
+    pontos_grade = openmeteo.pontos_da_grade()
+    grades, avisos = previsao_dos_pontos("grade", pontos_grade, (modelo,))
+    nas_estacoes, avisos_estacoes = previsao_dos_pontos("estações", openmeteo.pontos_das_estacoes(estacoes),
+                                                        (modelo,))
+    for texto in avisos + avisos_estacoes:
+        aviso.warning(texto)
+    if not grades:
+        st.stop()
+    rodada = previsao.rodada_da(grades[0])
+    diaria_grade = diario_previsto("grade", modelo, rodada, grades[0])
+    diaria_estacoes = (diario_previsto("estações", modelo, previsao.rodada_da(nas_estacoes[0]), nas_estacoes[0])
+                       if nas_estacoes else pd.DataFrame())
+
+    hoje = pd.Timestamp.now(tz=config.FUSO_MS).date()
+    dias = previsao.dias_inteiros(diaria_grade, hoje)
+    if not dias:
+        st.warning(f"O {openmeteo.NOMES[modelo]} não trouxe nenhum dia inteiro de hoje em diante.")
+        st.stop()
+    # Trocando de modelo, o dia escolhido pode não existir no outro (o ICON para no dia 7): fica o
+    # último que o modelo tem até ele, e não o primeiro, para quem olhava o fim da semana
+    escolhido = st.session_state.get("mapas_previstos_dia")
+    if escolhido not in dias:
+        st.session_state["mapas_previstos_dia"] = max((dia for dia in dias if escolhido and dia <= escolhido),
+                                                      default=dias[0])
+    dia = st.select_slider("Dia", options=dias, format_func=previsao.nome_do_dia, key="mapas_previstos_dia")
+    marcar, ajustar_escala = st.columns([1, 1])
+    with marcar:
+        rotulos = st.checkbox("Mostrar o valor de cada estação", value=True, key="mapas_previstos_rotulos",
+                              help="A previsão do mesmo modelo no ponto de cada estação.")
+    with ajustar_escala:
+        ajustar = st.checkbox("Ajustar a escala ao dado", value=False, key="mapas_previstos_ajustar",
+                              help="Desligada, a escala é a mesma dos mapas do observado: a mesma cor "
+                                   "quer dizer o mesmo valor, previsto ou medido.")
+    st.caption(f"**{openmeteo.NOMES[modelo]}**, rodada de {rodada:%d/%m %H} UTC. "
+               "Previsão: [Open-Meteo.com](https://open-meteo.com/), com dados do ECMWF, da NOAA e do "
+               "DWD ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)).")
+
+    # Na ordem do catálogo, e todas as linhas com a mesma quantidade de colunas, como no observado
+    ordem = [nome for nome in previsao.MAPAS if nome in escolhidos]
+    por_linha = min(len(ordem), MAPAS_POR_LINHA)
+    with st.spinner("Desenhando os mapas..."):
+        for primeiro in range(0, len(ordem), por_linha):
+            for coluna_tela, nome in zip(st.columns(por_linha), ordem[primeiro:primeiro + por_linha]):
+                with coluna_tela:
+                    painel_do_mapa_previsto(previsao.MAPAS[nome], modelo, rodada, dia, hoje, rotulos, ajustar,
+                                            diaria_grade, pontos_grade, diaria_estacoes, estacoes)
+    espacamento = f"{config.GRADE_PREVISAO:g}".replace(".", ",")
+    st.caption(f"A superfície é a do próprio modelo, nos {len(pontos_grade)} pontos da grade de "
+               f"{espacamento}° que cobrem o estado, levada à resolução do mapa por interpolação bilinear: "
+               "não é IDW de estação. Os números sobre as estações são a previsão do mesmo modelo no ponto "
+               "de cada uma, e são eles que entram no ranking do PNG do boletim.")
+
+
 # =====================================================
 # PÁGINAS
 # =====================================================
@@ -1148,12 +1307,18 @@ def _observado() -> None:
     """O observado do INMET: é o resto deste arquivo, que segue depois da navegação."""
 
 
-# Duas páginas. A previsão não usa nenhum filtro do observado (estado, período, estações), e numa
-# aba ela ficaria atrás deles; como página, ela só consulta o Open-Meteo quando alguém a abre.
+# A previsão não usa nenhum filtro do observado (estado, período, estações), e numa aba ela ficaria
+# atrás deles; como página, ela só consulta o Open-Meteo quando alguém a abre. Os gráficos e os
+# mapas são páginas separadas pelo mesmo motivo: os mapas pedem a grade, os gráficos não.
 observado = st.Page(_observado, title="Observado (INMET)", icon=":material/history:", default=True)
 lembrar_filtros()
-pagina = st.navigation([observado, st.Page(pagina_previsao, title="Previsão (MS)",
-                                           icon=":material/partly_cloudy_day:", url_path="previsao")])
+pagina = st.navigation({
+    "": [observado],
+    "Previsão (MS)": [
+        st.Page(pagina_previsao, title="Estações", icon=":material/show_chart:", url_path="previsao"),
+        st.Page(pagina_mapas_previstos, title="Mapas", icon=":material/map:", url_path="previsao-mapas"),
+    ],
+})
 pagina.run()
 if pagina is not observado:
     st.stop()

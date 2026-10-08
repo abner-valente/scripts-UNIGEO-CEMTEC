@@ -1,13 +1,13 @@
 """As contas da página de previsão: a previsão guardada por rodada e as séries dos gráficos."""
 import threading
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from app import previsao
-from modulos import config, openmeteo
+from app import boletim, previsao
+from modulos import config, mapas, openmeteo
 
 RODADA_00 = datetime(2026, 10, 7, 0, tzinfo=timezone.utc)
 RODADA_06 = datetime(2026, 10, 7, 6, tzinfo=timezone.utc)
@@ -227,3 +227,169 @@ def test_a_planilha_tem_um_dia_por_linha_e_modelo_com_o_nome_do_modelo():
     assert list(planilha["modelo"]) == ["ECMWF", "GFS"]
     assert planilha["rodada_utc"].iloc[0] == "2026-10-07 00:00"
     assert "latitude" not in planilha
+
+
+# =====================================================
+# OS MAPAS
+# =====================================================
+HOJE = date(2026, 10, 8)
+
+
+def diaria(dias: dict, pontos=("A", "B"), coluna: str = "chuva", horas: dict | None = None) -> pd.DataFrame:
+    """Uma tabela diária como a do `openmeteo.diario`: um valor por ponto e dia."""
+    linhas = [{"modelo": "ecmwf_ifs025", "ponto": ponto, "dia_previsto": dia, coluna: valor,
+               "direcao_dominante": 90.0, "horas": (horas or {}).get(dia, 24)}
+              for dia, valor in dias.items() for ponto in pontos]
+    return pd.DataFrame(linhas)
+
+
+def test_os_dias_do_deslizante_sao_os_inteiros_de_hoje_em_diante():
+    tabela = diaria({date(2026, 10, 7): 1.0, HOJE: 1.0, date(2026, 10, 9): 1.0, date(2026, 10, 10): 1.0},
+                    horas={date(2026, 10, 10): 20})
+
+    assert previsao.dias_inteiros(tabela, HOJE) == [HOJE, date(2026, 10, 9)]
+
+
+def test_o_dia_da_semana_vai_no_deslizante():
+    assert previsao.nome_do_dia(date(2026, 10, 10)) == "sáb 10/10"
+
+
+def test_o_mapa_do_dia_e_o_valor_daquele_dia():
+    tabela = diaria({HOJE: 2.0, date(2026, 10, 9): 5.0})
+
+    valores = previsao.valores_do_dia(tabela, previsao.MAPAS["Chuva do dia"], date(2026, 10, 9), HOJE)
+
+    assert valores.to_dict() == {"A": 5.0, "B": 5.0}
+
+
+def test_o_acumulado_soma_de_hoje_ate_o_dia_escolhido():
+    tabela = diaria({date(2026, 10, 7): 100.0, HOJE: 2.0, date(2026, 10, 9): 5.0, date(2026, 10, 10): 7.0})
+
+    valores = previsao.valores_do_dia(tabela, previsao.MAPAS["Chuva acumulada"], date(2026, 10, 9), HOJE)
+
+    assert valores.to_dict() == {"A": 7.0, "B": 7.0}           # ontem e o dia seguinte ficam de fora
+
+
+def test_no_acumulado_um_dia_faltando_deixa_o_ponto_sem_valor():
+    """Somar o que houver daria menos chuva onde faltou dia, e não onde choveu menos."""
+    tabela = diaria({HOJE: 2.0, date(2026, 10, 9): 5.0})
+    tabela = tabela[~((tabela["ponto"] == "B") & (tabela["dia_previsto"] == HOJE))]
+
+    valores = previsao.valores_do_dia(tabela, previsao.MAPAS["Chuva acumulada"], date(2026, 10, 9), HOJE)
+
+    assert valores["A"] == 7.0 and np.isnan(valores["B"])
+
+
+@pytest.mark.parametrize("nome, dias, primeiro, ultimo, quantos", [
+    ("Temperatura máxima", 1, 0.0, 45.0, 21),      # a faixa fixa do observado
+    ("Umidade mínima", 1, 0.0, 100.0, 21),
+    ("Rajada máxima", 1, 0.0, 130.0, 21),
+    ("Chuva do dia", 1, 0.2, 100, 9),              # as classes curtas
+    ("Chuva acumulada", 4, 0.2, 100, 9),           # 96 h ainda é janela curta
+    ("Chuva acumulada", 7, 1, 300, 9),             # acima disso, as longas
+])
+def test_a_escala_e_a_mesma_dos_mapas_do_observado(nome, dias, primeiro, ultimo, quantos):
+    niveis = previsao.niveis(previsao.MAPAS[nome], dias)
+
+    assert (niveis[0], niveis[-1], len(niveis)) == (primeiro, ultimo, quantos)
+
+
+def test_ajustar_a_escala_deixa_os_niveis_para_o_dado():
+    assert previsao.niveis(previsao.MAPAS["Temperatura máxima"], ajustar=True) is None
+
+
+def rede(passo: float = 0.5, faltando: tuple = ()) -> pd.DataFrame:
+    """Pontos de 0,5° num quadrado de MS, sem os de `faltando`."""
+    lons, lats = np.meshgrid(np.arange(-56.0, -53.9, passo), np.arange(-22.0, -19.9, passo))
+    pontos = pd.DataFrame({"latitude": lats.ravel(), "longitude": lons.ravel()})
+    pontos["ponto"] = [f"{lat:.2f};{lon:.2f}" for lat, lon in zip(pontos["latitude"], pontos["longitude"])]
+    return pontos[~pontos["ponto"].isin(faltando)].reset_index(drop=True)
+
+
+def test_a_superficie_bilinear_reproduz_um_campo_plano():
+    """Entre os pontos, um campo que varia em linha reta sai exato: nada é inventado."""
+    pontos = rede()
+    valores = pd.Series(2.0 * pontos["longitude"].to_numpy() + 3.0 * pontos["latitude"].to_numpy(),
+                        index=pontos["ponto"].to_numpy())
+    lon_fina, lat_fina = np.meshgrid(np.linspace(-55.8, -54.2, 9), np.linspace(-21.8, -20.2, 9))
+
+    grade = previsao.superficie(valores, pontos, lon_fina, lat_fina)
+
+    assert np.allclose(grade, 2.0 * lon_fina + 3.0 * lat_fina)
+
+
+def test_a_superficie_nao_passa_da_faixa_do_modelo():
+    pontos = rede()
+    valores = pd.Series(np.where(pontos["latitude"] > -21, 30.0, 10.0), index=pontos["ponto"].to_numpy())
+    lon_fina, lat_fina = np.meshgrid(np.linspace(-57.0, -53.0, 20), np.linspace(-23.0, -19.0, 20))
+
+    grade = previsao.superficie(valores, pontos, lon_fina, lat_fina)
+
+    assert grade.min() >= 10.0 and grade.max() <= 30.0      # nem fora do retângulo dos pontos
+
+
+def test_um_no_que_falta_na_grade_nao_abre_buraco():
+    pontos = rede(faltando=("-21.00;-55.00",))
+    valores = pd.Series(20.0, index=pontos["ponto"].to_numpy())
+    lon_fina, lat_fina = np.meshgrid(np.linspace(-55.5, -54.5, 5), np.linspace(-21.5, -20.5, 5))
+
+    assert np.allclose(previsao.superficie(valores, pontos, lon_fina, lat_fina), 20.0)
+
+
+def test_sem_o_dado_no_dia_nao_ha_superficie():
+    pontos = rede()
+    valores = pd.Series(np.nan, index=pontos["ponto"].to_numpy())
+
+    assert previsao.superficie(valores, pontos, np.zeros((2, 2)), np.zeros((2, 2))) is None
+
+
+ESTACOES = pd.DataFrame({"CD_ESTACAO": ["A702", "A721"], "Estação": ["Campo Grande", "Dourados"],
+                         "VL_LATITUDE": ["-20.45", "-22.19"], "VL_LONGITUDE": ["-54.61", "-54.91"]})
+
+
+def test_nas_estacoes_vai_a_previsao_do_ponto_de_cada_uma_com_o_nome_do_mapa():
+    tabela = diaria({HOJE: 31.5}, pontos=("A702", "A721"), coluna="rajada_max")
+
+    pontos = previsao.nas_estacoes(tabela, ESTACOES, previsao.MAPAS["Rajada máxima"], HOJE, HOJE)
+
+    assert list(pontos["Estação"]) == ["Campo Grande", "Dourados"]
+    assert list(pontos["Rajada máxima"]) == [31.5, 31.5]
+    assert list(pontos["Direção (°)"]) == [90.0, 90.0]              # a seta da direção dominante
+    assert pontos["Latitude"].iloc[0] == -20.45
+
+
+def test_sem_a_previsao_das_estacoes_o_mapa_sai_sem_numeros():
+    pontos = previsao.nas_estacoes(pd.DataFrame(), ESTACOES, previsao.MAPAS["Chuva do dia"], HOJE, HOJE)
+
+    assert pontos.empty and "Chuva do dia" in pontos
+
+
+def test_subtitulo_e_carimbo_dizem_o_modelo_a_janela_e_a_rodada():
+    rodada = datetime(2026, 10, 8, 6, tzinfo=timezone.utc)
+    dia = previsao.MAPAS["Chuva do dia"]
+    acumulada = previsao.MAPAS["Chuva acumulada"]
+
+    assert (previsao.subtitulo("ecmwf_ifs025", rodada, dia, date(2026, 10, 10), HOJE)
+            == "Previsão para 10/10/2026 · ECMWF, rodada de 08/10 06 UTC")
+    assert (previsao.subtitulo("gfs_seamless", rodada, acumulada, date(2026, 10, 14), HOJE)
+            == "Previsão de 08/10 a 14/10/2026 · GFS, rodada de 08/10 06 UTC")
+    assert (previsao.carimbo("icon_seamless", rodada, acumulada, date(2026, 10, 14), HOJE)
+            == "ICON_20261008_a_20261014_rodada_20261008_06UTC")
+
+
+def test_o_png_do_boletim_da_previsao_leva_o_credito_do_open_meteo():
+    """A licença do Open-Meteo obriga o crédito; o main.py segue com o do INMET."""
+    base = mapas.carregar_base()
+    mapa = previsao.MAPAS["Temperatura máxima"]
+    pontos = previsao.nas_estacoes(diaria({HOJE: 33.0}, pontos=("A702", "A721"), coluna="temp_max"),
+                                   ESTACOES, mapa, HOJE, HOJE)
+    espec = boletim.espec(mapa.titulo, mapa.grandeza, mapa.unidade, mapa.paleta, mapa.decimais, "MS",
+                          "Previsão para 08/10/2026", credito=previsao.CREDITO, coluna=mapa.nome)
+
+    figura = mapas.mapa_de_grade(np.full(base.lon_grade.shape, 30.0),
+                                 mapas.preparar_pontos(pontos, mapa.nome), espec, base,
+                                 niveis=previsao.niveis(mapa))
+
+    assert figura.axes[0].get_title() == ("Temperatura máxima prevista em MS\n"
+                                          "Previsão para 08/10/2026 — Open-Meteo (CC BY 4.0)/SEMADESC")
+    assert mapas.EspecMapa("", "", "", "", "", "", "", "").credito == "INMET/SEMADESC"

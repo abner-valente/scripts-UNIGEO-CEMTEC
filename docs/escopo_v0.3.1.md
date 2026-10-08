@@ -230,14 +230,16 @@ Para MS, com 3 modelos, 7 variáveis horárias e 14 dias, cada ponto custa 2,1:
 
 | Produto | Sob demanda, 0,5° | Agendado, 0,25° |
 |---|---|---|
-| Grade (mapas e risco de fogo), 2 rodadas | ~750 | ~2.550 |
+| Grade de 0,5° dos mapas: cada modelo, a cada rodada dele | até ~2.100 | ~2.550 |
 | Gráficos de linha nas 58 estações: cada modelo, a cada rodada dele | até ~700 | ~250 |
 | Anomalia semanal do EC46, 46 dias, a 0,5°, 1 por dia | ~590 | ~590 |
-| **Total por dia** | **~2.000 (20% da cota)** | **~3.400 (34% da cota)** |
+| **Total por dia, no pior caso** | **~3.400 (34% da cota)** | **~3.400 (34% da cota)** |
 
-A linha das estações mudou em 08/10, com a decisão 11: são 58 chamadas por modelo e rodada, e
-cada modelo tem até 4 rodadas por dia. Só gasta isso se alguém abrir a página depois de cada
-rodada. A linha da grade é revista no passo 4, quando os mapas forem escritos.
+As duas primeiras linhas mudaram em 08/10, com a decisão 11: são 178 (grade) e 58 (estações)
+chamadas por modelo e rodada, e cada modelo tem até 4 rodadas por dia. É o pior caso: só gasta
+isso se alguém abrir os mapas de cada modelo depois de cada rodada dele. A coluna do agendado
+continua com as contas de 06/10 (duas rodadas, os três modelos juntos); o coletor da v0.4.x
+decide de quais rodadas precisa.
 
 ## Ordem de trabalho
 
@@ -256,7 +258,14 @@ rodada. A linha da grade é revista no passo 4, quando os mapas forem escritos.
    mostra se a fonte serve. **Feito em 08/10**: temperatura, umidade, ponto de orvalho, vento,
    direção e chuva, por hora ou por dia, com a tabela diária em CSV.
 4. **Mapas de dias**, de 1 a 14. Um modelo por vez, com um seletor para trocar, e o PNG do
-   boletim.
+   boletim. **Feito em 08/10**, numa página própria, ao lado da dos gráficos:
+   - temperatura máxima, mínima e média, umidade mínima, chuva do dia, chuva acumulada de hoje
+     até o dia escolhido, rajada e vento máximos com a seta da direção dominante;
+   - **a superfície é a do modelo**, levada da grade de 0,5° à do mapa por interpolação
+     **bilinear**. Comparadas no mesmo dia, a linear por triângulos deixava facetas retas e a
+     cúbica inventava bolhas entre os pontos;
+   - os números e o ranking são a previsão do mesmo modelo **no ponto de cada estação**;
+   - o PNG do boletim leva "Open-Meteo (CC BY 4.0)/SEMADESC" no lugar do "INMET/SEMADESC".
 5. **Mapas de anomalia semanal** do EC46.
 6. **Risco de fogo previsto.**
 

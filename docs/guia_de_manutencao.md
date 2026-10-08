@@ -172,18 +172,18 @@ Além disso, há o **cache em disco** de `app/dados.py`: um `cache/<código da e
 |---|---|
 | 1–120 | imports e constantes da tela (`DPI_MAPA`, `MAPAS_POR_LINHA`, `CONVERSOES`, `ESTADOS_NA_MEMORIA`…) |
 | 120–945 | funções: as carregadas em cache (`carregar_*`, `mapa_do_*`, `gif_*`) e os pedaços de tela reutilizados (`painel_do_mapa`, `painel_da_chuva`, `botao_do_boletim`…) |
-| ~947 | **PREVISÃO**: a página inteira da previsão (`pagina_previsao`), as funções dela e `lembrar_filtros` |
-| ~1144 | **PÁGINAS**: `st.navigation`, com as duas páginas. Na previsão, o script para aqui; o observado é o resto do arquivo. |
-| ~1161 | **FILTROS**: a barra lateral do observado (estado, período, estações, grandezas, cache) |
-| ~1229 | **DADOS**: converte as datas do estado em UTC e carrega as estações escolhidas |
-| ~1259 | `with aba_series:` — Séries Temporais |
-| ~1333 | `with aba_mapa:` — Mapas Boletim. O botão carrega **todas** as estações do estado mais as vizinhas. |
-| ~1432 | `with aba_chuva:` — Chuva. Tem carga própria, porque os acumulados olham para trás do período. |
-| ~1619 | `with aba_risco:` — Risco de Fogo. Usa o mesmo dado da aba de mapas. |
-| ~1817 | `with aba_navegavel:` — Mapa Navegação (pydeck), em avaliação |
-| ~1916 | `with aba_qualidade:` — Qualidade dos dados |
+| ~949 | **PREVISÃO**: as páginas da previsão (`pagina_previsao`, os gráficos; `pagina_mapas_previstos`, os mapas), as funções delas e `lembrar_filtros` |
+| ~1304 | **PÁGINAS**: `st.navigation`, com o observado e o grupo da previsão. Na previsão, o script para aqui; o observado é o resto do arquivo. |
+| ~1327 | **FILTROS**: a barra lateral do observado (estado, período, estações, grandezas, cache) |
+| ~1395 | **DADOS**: converte as datas do estado em UTC e carrega as estações escolhidas |
+| ~1424 | `with aba_series:` — Séries Temporais |
+| ~1498 | `with aba_mapa:` — Mapas Boletim. O botão carrega **todas** as estações do estado mais as vizinhas. |
+| ~1597 | `with aba_chuva:` — Chuva. Tem carga própria, porque os acumulados olham para trás do período. |
+| ~1784 | `with aba_risco:` — Risco de Fogo. Usa o mesmo dado da aba de mapas. |
+| ~1982 | `with aba_navegavel:` — Mapa Navegação (pydeck), em avaliação |
+| ~2081 | `with aba_qualidade:` — Qualidade dos dados |
 
-**As duas páginas.** O painel tem o "Observado (INMET)" e a "Previsão (MS)", trocadas no topo da barra lateral. O Streamlit apaga o valor de um widget que não aparece numa execução, e cada página aparece sozinha: sem cuidado, ir à previsão e voltar perderia as estações escolhidas. Um filtro novo da barra lateral que deva sobreviver à troca precisa de três coisas: uma `key`, entrar em `CHAVES_DOS_FILTROS`, e receber o valor inicial com `st.session_state.setdefault` antes do widget, **e não** pelo parâmetro (`default=`, `index=`). Com o valor nos dois lugares, o widget volta vazio na tela enquanto o painel usa o valor guardado. O período é a exceção, explicada em `lembrar_filtros`.
+**As páginas.** O painel tem o "Observado (INMET)" e, no grupo "Previsão (MS)", as "Estações" e os "Mapas", trocadas no topo da barra lateral. O Streamlit apaga o valor de um widget que não aparece numa execução, e cada página aparece sozinha: sem cuidado, ir à previsão e voltar perderia as estações escolhidas. Um filtro novo da barra lateral que deva sobreviver à troca precisa de três coisas: uma `key`, entrar em `CHAVES_DOS_FILTROS`, e receber o valor inicial com `st.session_state.setdefault` antes do widget, **e não** pelo parâmetro (`default=`, `index=`). Com o valor nos dois lugares, o widget volta vazio na tela enquanto o painel usa o valor guardado. O período é a exceção, explicada em `lembrar_filtros`.
 
 A regra de organização: **conta vai para um módulo de `app/` sem Streamlit; tela fica no `explorador.py`**. `variaveis`, `chuva`, `risco`, `dados`, `previsao`, `boletim`, `animacao`, `superficie` e `qualidade` não importam `streamlit`, e é por isso que têm testes. O `explorador.py` não tem teste direto: ele é verificado abrindo o painel.
 
@@ -200,7 +200,7 @@ A regra de organização: **conta vai para um módulo de `app/` sem Streamlit; t
 | `inmet.py` | toda conversa com a API: lista de estações, dados horários, tentativas, vizinhas, resumo de quem ficou de fora. O token sai das mensagens de erro (`_sem_token`). | a API muda, ou a forma de baixar |
 | `openmeteo.py` | a previsão do Open-Meteo: os pontos (grade com uma fileira além da divisa, e as estações), a rodada de cada modelo pelos metadados, os pedidos em lotes que cabem no limite de 600 por minuto, e o dia tirado das horas pela regra do projeto (`diario`). Os modelos, os 14 dias e o espaçamento da grade ficam em `config.py`. | o Open-Meteo muda, ou muda um modelo, uma variável ou a grade |
 | `calculos.py` | contas puras: `recortar` (a janela `(início, fim]`), extremos, acumulado de chuva, `criar_grade`, `interpolar_idw` (distâncias em km), `apoio_que_entra` | quer mudar como se interpola ou se recorta no tempo |
-| `mapas.py` | todos os desenhos: `mapa_pontual`, `mapa_interpolado`, `mapa_de_grade`, os de classes, logos, ranking, setas de vento; `EspecMapa`, `EspecClasses`, `Tela`, `BaseCartografica` | o **visual** de um mapa muda, nos dois lados |
+| `mapas.py` | todos os desenhos: `mapa_pontual`, `mapa_interpolado`, `mapa_de_grade`, os de classes, logos, ranking, setas de vento; `EspecMapa`, `EspecClasses`, `Tela`, `BaseCartografica`. O crédito do subtítulo é o `credito` da espec: "INMET/SEMADESC" por padrão, o do Open-Meteo na previsão | o **visual** de um mapa muda, nos dois lados |
 | `excel.py` | grava as tabelas num `.xlsx`, uma aba por tabela | o formato da planilha muda |
 | `graficos.py` | barras empilhadas, agrupadas e calendário, no estilo comum | um produto precisa de gráfico |
 | `produtos/relatorio_inmet.py` | o relatório: o que se calcula por estação, quais abas e **quais mapas** (`especificacoes_mapas`, com títulos e paletas) | muda o conteúdo do boletim |
@@ -219,7 +219,7 @@ A regra de organização: **conta vai para um módulo de `app/` sem Streamlit; t
 | `animacao.py` | os GIFs: quais quadros entram e o carimbo de cada um |
 | `superficie.py` | a superfície como imagem transparente, para o mapa navegável |
 | `qualidade.py` | as conferências da aba de qualidade: completude, valores impossíveis, sensores travados |
-| `previsao.py` | as contas da página de previsão: a cópia guardada de cada modelo até a rodada seguinte (`Guarda`), o catálogo dos gráficos (`GRANDEZAS`) e as séries de cada estação, um modelo ao lado do outro. A busca é do `modulos/openmeteo.py`. |
+| `previsao.py` | as contas das páginas de previsão: a cópia guardada de cada modelo até a rodada seguinte (`Guarda`), o catálogo dos gráficos (`GRANDEZAS`) e as séries de cada estação; o catálogo dos mapas (`MAPAS`), a escala (a do observado), o acumulado e a `superficie`, que leva a grade de 0,5° do modelo à do mapa por interpolação bilinear. A busca é do `modulos/openmeteo.py`. |
 | `requirements.txt` | as dependências **do painel**. É este arquivo que o Streamlit Cloud instala. |
 
 ### O resto

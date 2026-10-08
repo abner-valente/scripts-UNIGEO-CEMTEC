@@ -22,6 +22,9 @@ from . import calculos, config
 
 # Acima disso a lista de níveis é uma faixa contínua, e não classes (como as da chuva)
 MAX_CLASSES = 12
+# De quem é o dado, no fim do subtítulo. A previsão troca pelo do Open-Meteo, cuja licença
+# (CC BY 4.0) obriga o crédito.
+CREDITO = "INMET/SEMADESC"
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,7 @@ class EspecMapa:
     maiores: bool = True         # ranking dos maiores (True) ou dos menores (False)
     direcao_vento: bool = False  # desenha as setas de direção do vento
     decimais: int = 1            # casas decimais dos rótulos e do ranking (0 para contagens, como horas)
+    credito: str = CREDITO
 
 
 @dataclass(frozen=True)
@@ -54,6 +58,7 @@ class EspecClasses:
     arquivo: str
     cores: list[str]
     rotulos: list[str]
+    credito: str = CREDITO
 
 
 @dataclass(frozen=True)
@@ -475,7 +480,7 @@ def _finalizar(fig, ax, espec, base: BaseCartografica, caminho: Path | None,
     miniatura. O relatório, que não passa `tela`, continua saindo com tudo.
     """
     if tela is None:
-        ax.set_title(f"{espec.titulo}\n{espec.subtitulo} — INMET/SEMADESC", fontsize=16, weight="bold", pad=20)
+        ax.set_title(f"{espec.titulo}\n{espec.subtitulo} — {espec.credito}", fontsize=16, weight="bold", pad=20)
     # O enquadramento vem da base, e não do módulo: é a base que sabe de que recorte ela é
     oeste, leste, sul, norte = base.recorte.limites
     ax.set_xlim(oeste, leste)

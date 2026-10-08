@@ -15,10 +15,11 @@ Ainda não está na `main`. O plano desta versão está em `docs/escopo_v0.3.1.m
 
 ### Novo
 
-- **Painel: página "Previsão (MS)"**, ao lado do painel de sempre, que passa a se chamar "Observado (INMET)". A troca fica no topo da barra lateral.
-  - Mostra a previsão do Open-Meteo para as estações de MS, com os modelos ECMWF, GFS e ICON lado a lado, por hora ou por dia, até 14 dias (o ICON vai até o dia 7). Os mapas vêm depois.
-  - A página diz de que rodada é cada modelo, e a tabela diária baixa em CSV.
-  - O que se escolhe na barra lateral de cada página (estado, período, estações, grandezas) continua lá quando se volta a ela.
+- **Painel: previsão do tempo para MS**, do Open-Meteo, com os modelos ECMWF, GFS e ICON, até 14 dias (o ICON vai até o dia 7). Fica num grupo "Previsão (MS)" no topo da barra lateral, com duas páginas, ao lado do painel de sempre, que passa a se chamar "Observado (INMET)".
+  - **Estações**: os gráficos de uma estação, com os três modelos lado a lado, por hora ou por dia. A tabela diária baixa em CSV.
+  - **Mapas**: os mapas dos dias, um modelo por vez. Temperatura máxima, mínima e média, umidade mínima, chuva do dia, chuva acumulada de hoje até o dia escolhido, rajada e vento máximos com a direção. As cores e as escalas são as dos mapas do observado, e cada mapa tem o botão do PNG do boletim, com o crédito do Open-Meteo no lugar do INMET.
+  - As páginas dizem de que rodada é cada modelo.
+  - O que se escolhe na barra lateral de cada página (estado, período, estações, grandezas, modelo, mapas) continua lá quando se volta a ela.
 
 ### Corrigido
 
