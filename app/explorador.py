@@ -1022,15 +1022,25 @@ def barras_da_chuva_prevista(longo: pd.DataFrame) -> alt.Chart:
 
 # O Streamlit apaga o que se escolheu num widget quando ele não aparece numa execução. Cada
 # página aparece sozinha, então ir à previsão e voltar perderia as estações escolhidas no
-# observado. Regravar as chaves da outra página impede isso (é a receita da documentação do
-# Streamlit). Ficam só os filtros da barra lateral: as escolhas dentro das abas voltam ao padrão.
-CHAVES_DO_OBSERVADO = ("uf", "periodo", "estacoes", "grandezas")
-CHAVES_DA_PREVISAO = ("previsao_estacao", "previsao_modelos", "previsao_grandezas", "previsao_modo")
+# observado. Ficam só os filtros da barra lateral: as escolhas dentro das abas voltam ao padrão.
+CHAVES_DOS_FILTROS = ("uf", "estacoes", "grandezas",
+                      "previsao_estacao", "previsao_modelos", "previsao_grandezas", "previsao_modo")
 
 
-def lembrar(chaves: tuple[str, ...]) -> None:
-    """Mantém o que foi escolhido na outra página para quando se voltar a ela."""
-    for chave in chaves:
+def lembrar_filtros() -> None:
+    """Mantém o que se escolheu nos filtros das duas páginas. Chamada no topo de toda execução.
+
+    É a receita da documentação do Streamlit: regravar a chave a cada execução impede que ela seja
+    apagada. Tem de ser em toda execução, e não só na da outra página: regravada só lá, a chave
+    sobrevivia, mas o widget voltava vazio na tela, e o painel mostrava uma estação que o seletor
+    não mostrava. Por isso esses widgets não recebem valor inicial pelo parâmetro: ele entra no
+    estado com `setdefault`, antes do widget. Com os dois, o Streamlit avisa que o valor veio de
+    dois lugares.
+
+    O período fica de fora: o seletor de datas só sabe que é de intervalo pelo valor inicial. Ele
+    volta pelo valor guardado em `periodo_guardado`.
+    """
+    for chave in CHAVES_DOS_FILTROS:
         if chave in st.session_state:
             st.session_state[chave] = st.session_state[chave]
 
@@ -1040,7 +1050,6 @@ def pagina_previsao() -> None:
 
     É o passo 3 do escopo da v0.3.1. Os mapas vêm no passo seguinte.
     """
-    lembrar(CHAVES_DO_OBSERVADO)
     st.title("Previsão do tempo — Mato Grosso do Sul")
     aviso = st.container()
     # A previsão é do Open-Meteo, mas a lista das estações é do INMET
@@ -1058,16 +1067,18 @@ def pagina_previsao() -> None:
         codigos = estacoes["CD_ESTACAO"].astype(str).tolist()
         # Aqui a estação já vem escolhida, ao contrário do observado: a busca é das estações todas
         # de uma vez, e escolher uma ou outra não muda o custo
+        if st.session_state.get("previsao_estacao") not in nomes:
+            st.session_state["previsao_estacao"] = (nomes[codigos.index(previsao.ESTACAO_INICIAL)]
+                                                    if previsao.ESTACAO_INICIAL in codigos else nomes[0])
         nome = st.selectbox("Estação", nomes, key="previsao_estacao",
-                            index=codigos.index(previsao.ESTACAO_INICIAL)
-                            if previsao.ESTACAO_INICIAL in codigos else 0,
                             help="A previsão é a do ponto da estação: é o que permite comparar, "
                                  "depois, o previsto com o que ela mediu.")
-        modelos = st.multiselect("Modelos", list(config.MODELOS_PREVISAO), default=list(config.MODELOS_PREVISAO),
+        st.session_state.setdefault("previsao_modelos", list(config.MODELOS_PREVISAO))
+        modelos = st.multiselect("Modelos", list(config.MODELOS_PREVISAO),
                                  format_func=openmeteo.NOMES.get, key="previsao_modelos",
                                  help="O ECMWF e o GFS vão até o dia 14; o ICON, até o dia 7.")
-        escolhidas = st.multiselect("Grandezas", list(previsao.GRANDEZAS), default=["Temperatura", "Chuva"],
-                                    key="previsao_grandezas",
+        st.session_state.setdefault("previsao_grandezas", ["Temperatura", "Chuva"])
+        escolhidas = st.multiselect("Grandezas", list(previsao.GRANDEZAS), key="previsao_grandezas",
                                     help="Cada grandeza ganha o seu gráfico, com os modelos lado a lado.")
 
     if not modelos:
@@ -1082,8 +1093,8 @@ def pagina_previsao() -> None:
     horaria = pd.concat([tabela[tabela["ponto"] == codigo] for tabela in tabelas], ignore_index=True)
 
     # Por dia de saída: catorze dias hora a hora são 336 pontos por linha
-    modo = MODOS_GRAFICO[st.radio("Agregação", list(MODOS_GRAFICO), index=1, horizontal=True,
-                                  key="previsao_modo")]
+    st.session_state.setdefault("previsao_modo", "Por dia")
+    modo = MODOS_GRAFICO[st.radio("Agregação", list(MODOS_GRAFICO), horizontal=True, key="previsao_modo")]
     rodadas = " · ".join(f"{openmeteo.NOMES[modelo]} {rodada:%d/%m %H} UTC" for modelo, rodada
                          in horaria.groupby("modelo")["rodada_utc"].first().items())
     st.caption(f"**Rodadas:** {rodadas}. Cada modelo é buscado de novo quando sai uma rodada dele, "
@@ -1096,7 +1107,8 @@ def pagina_previsao() -> None:
         st.info("Escolha ao menos uma grandeza na barra lateral.")
 
     desde = pd.Timestamp.now(tz=config.FUSO_MS).floor("h")
-    for grandeza in escolhidas:
+    # Na ordem do catálogo, e não na da escolha: a direção fica logo depois do vento
+    for grandeza in [nome for nome in previsao.GRANDEZAS if nome in escolhidas]:
         dados_grandeza = previsao.GRANDEZAS[grandeza]
         longo = previsao.series(horaria, grandeza, modo, desde)
         if longo.empty:
@@ -1139,12 +1151,12 @@ def _observado() -> None:
 # Duas páginas. A previsão não usa nenhum filtro do observado (estado, período, estações), e numa
 # aba ela ficaria atrás deles; como página, ela só consulta o Open-Meteo quando alguém a abre.
 observado = st.Page(_observado, title="Observado (INMET)", icon=":material/history:", default=True)
+lembrar_filtros()
 pagina = st.navigation([observado, st.Page(pagina_previsao, title="Previsão (MS)",
                                            icon=":material/partly_cloudy_day:", url_path="previsao")])
 pagina.run()
 if pagina is not observado:
     st.stop()
-lembrar(CHAVES_DA_PREVISAO)
 
 # =====================================================
 # FILTROS
@@ -1163,18 +1175,21 @@ with st.sidebar:
     # O estado vem primeiro porque tudo abaixo depende dele: as estações, o fuso que define o
     # dia, os shapefiles do mapa. Só aparecem as UFs que têm shapefile na pasta shp/.
     ufs = config.ufs_disponiveis()
-    uf = st.selectbox("Estado", ufs, index=ufs.index(config.UF) if config.UF in ufs else 0, key="uf",
+    st.session_state.setdefault("uf", config.UF if config.UF in ufs else ufs[0])
+    uf = st.selectbox("Estado", ufs, key="uf",
                       format_func=lambda sigla: f"{sigla} — {config.ESTADOS[sigla][0]}",
                       help="Para acrescentar um estado, rode "
                            "ferramentas/simplificar_municipios.py --uf SIGLA, que busca a "
                            "malha dele no IBGE.")
     recorte = config.recorte_de(uf)
     hoje = date.today()
-    intervalo = st.date_input("Período", value=(hoje - timedelta(days=7), hoje - timedelta(days=1)),
-                              max_value=hoje, format="DD/MM/YYYY", key="periodo")
+    intervalo = st.date_input("Período", max_value=hoje, format="DD/MM/YYYY",
+                              value=st.session_state.get("periodo_guardado",
+                                                         (hoje - timedelta(days=7), hoje - timedelta(days=1))))
     if len(intervalo) != 2:
         st.info("Escolha a data inicial e a final.")
         st.stop()
+    st.session_state["periodo_guardado"] = intervalo
 
     try:
         estacoes = carregar_estacoes(uf).sort_values("Estação")
@@ -1182,16 +1197,21 @@ with st.sidebar:
         sem_lista_de_estacoes(aviso_principal, uf)
     # Sem estação escolhida de saída: quem abre decide o que quer ver, e nenhuma consulta
     # à API acontece antes disso.
-    nomes = st.multiselect("Estações", estacoes["Estação"].tolist(), default=[], key="estacoes",
+    # As escolhidas que não são do estado saem antes do widget: trocando o estado, as do anterior
+    # não estão mais entre as opções, e o Streamlit recusaria o valor guardado
+    st.session_state["estacoes"] = [nome for nome in st.session_state.get("estacoes", [])
+                                    if nome in set(estacoes["Estação"])]
+    nomes = st.multiselect("Estações", estacoes["Estação"].tolist(), key="estacoes",
                            help="Cada estação vira uma linha no gráfico. Os mapas usam sempre "
                                 "todas as estações do estado.")
     # Uma grandeza dá um gráfico, com as suas séries dentro (máxima, mínima, média): escalas
     # diferentes nunca se misturam num eixo só. A chuva ficou de fora: ela não vira linha, vira
     # cascata, e a cascata mora na aba Chuva, junto do resto do que se lê dela.
+    st.session_state.setdefault("grandezas", ["Temperatura", "Vento"])
     escolhidas = st.multiselect("Grandezas",
                                 [nome for nome in variaveis.grandezas(variaveis.HORA, variaveis.GRAFICO)
                                  if nome != "Chuva"],
-                                default=["Temperatura", "Vento"], key="grandezas",
+                                key="grandezas",
                                 help="Cada grandeza ganha o seu gráfico, com as séries que a equipe "
                                      "de meteorologia definiu.")
 
