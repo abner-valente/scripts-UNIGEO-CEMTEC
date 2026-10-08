@@ -576,3 +576,26 @@ def subtitulo_do_risco(modelo: str, rodada: datetime, dia: date) -> str:
     """O subtítulo dos mapas de risco: o dia, o modelo, a rodada e a regra."""
     return (f"Previsão para {dia:%d/%m/%Y} · {openmeteo.NOMES[modelo]}, rodada de {rodada:%d/%m %H} UTC · "
             "regra 30-30-30")
+
+
+# A previsão da semana contra a normal da época, numa estação: é o gráfico que explica a anomalia.
+# A normal não vem pronta: é a previsão menos a anomalia, que o Open-Meteo devolve as duas.
+SERIES_SEMANAIS = {
+    "Temperatura média": ("temperatura", "anom_temperatura", "°C"),
+    "Chuva": ("chuva", "anom_chuva", "mm"),
+}
+PREVISTA, NORMAL = "Prevista (EC46)", "Normal da época"
+
+
+def semana_contra_o_normal(semanal: pd.DataFrame, ponto: str, grandeza: str, rodada: datetime) -> pd.DataFrame:
+    """Uma linha por semana inteira: a previsão, a normal da época e a anomalia, que é a diferença."""
+    coluna, anomalia, _ = SERIES_SEMANAIS[grandeza]
+    colunas = ["semana", "rotulo", "prevista", "normal", "anomalia"]
+    if semanal.empty or coluna not in semanal:
+        return pd.DataFrame(columns=colunas)
+    semanas = semanas_inteiras(semanal, rodada)
+    tabela = semanal[(semanal["ponto"] == ponto) & semanal["semana"].isin(semanas)].sort_values("semana")
+    return pd.DataFrame({"semana": tabela["semana"], "rotulo": tabela["semana"].map(nome_da_semana),
+                         "prevista": tabela[coluna], "normal": (tabela[coluna] - tabela[anomalia]).round(1),
+                         "anomalia": tabela[anomalia]}).dropna().reset_index(drop=True)[colunas]
+

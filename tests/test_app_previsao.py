@@ -533,3 +533,26 @@ def test_sem_as_tres_variaveis_no_dia_nao_ha_grade_de_risco():
 def test_os_dois_mapas_do_risco_estao_no_catalogo():
     assert previsao.MAPAS["Risco de fogo"].risco == "nivel"
     assert previsao.MAPAS["Horas em risco alto"].risco == "horas"
+
+
+def test_a_normal_da_semana_e_a_previsao_menos_a_anomalia():
+    """Campo Grande, semana de 12/10/2026: o EC46 previu 23,8 °C com anomalia de -1,8; a normal é 25,6."""
+    tabela = pd.DataFrame([
+        {"ponto": "A702", "semana": date(2026, 10, 5), "temperatura": 24.9, "anom_temperatura": -0.8},
+        {"ponto": "A702", "semana": date(2026, 10, 12), "temperatura": 23.8, "anom_temperatura": -1.8},
+        {"ponto": "A702", "semana": date(2026, 10, 19), "temperatura": 24.1, "anom_temperatura": -1.0},
+        {"ponto": "A721", "semana": date(2026, 10, 12), "temperatura": 22.6, "anom_temperatura": -2.2},
+    ])
+
+    serie = previsao.semana_contra_o_normal(tabela, "A702", "Temperatura média", RODADA_EC46)
+
+    assert list(serie["rotulo"]) == ["12/10 a 18/10", "19/10 a 25/10"]      # a semana da rodada fica de fora
+    assert list(serie["prevista"]) == [23.8, 24.1]
+    assert list(serie["normal"]) == [25.6, 25.1]
+    assert list(serie["anomalia"]) == [-1.8, -1.0]
+
+
+def test_sem_as_medias_da_semana_o_grafico_fica_vazio():
+    tabela = semanal({date(2026, 10, 12): -1.8})          # só as anomalias, como antes de 08/10
+
+    assert previsao.semana_contra_o_normal(tabela, "A", "Chuva", RODADA_EC46).empty

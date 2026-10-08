@@ -282,7 +282,7 @@ def test_as_semanas_vem_uma_linha_por_ponto_e_semana_com_a_rodada(open_meteo):
     assert (tabela["modelo"] == config.MODELO_SEMANAS).all()
 
 
-def test_o_pedido_semanal_leva_as_quatro_anomalias_e_os_46_dias(open_meteo):
+def test_o_pedido_semanal_leva_as_previsoes_as_anomalias_e_os_46_dias(open_meteo):
     pedidos, _ = open_meteo
 
     openmeteo.buscar_semanas(pontos(1))

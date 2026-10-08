@@ -46,13 +46,18 @@ VARIAVEIS = {
 COLUNAS_HORARIAS = ["modelo", "rodada_utc", "ponto", "latitude", "longitude", "hora_prevista_utc",
                     *VARIAVEIS.values()]
 
-# As quatro anomalias semanais do EC46, contra a normal do próprio modelo para a mesma semana. A
+# O EC46 por semana: a previsão (média dos membros; na chuva, o total da semana) e a anomalia, que é
+# ela menos a normal do próprio modelo para a mesma semana. A normal sai da diferença das duas. A
 # máxima e a mínima são as de cada 6 horas, na média da semana. Nomes medidos em 08/10/2026 (a
-# documentação só traz os rótulos).
+# documentação só traz os rótulos). São 8 variáveis: abaixo de 10, o custo por ponto é o de uma só.
 VARIAVEIS_SEMANAIS = {
+    "temperature_2m_mean": "temperatura",
     "temperature_2m_anomaly": "anom_temperatura",
+    "temperature_max6h_2m_mean": "temp_max",
     "temperature_max6h_2m_anomaly": "anom_temp_max",
+    "temperature_min6h_2m_mean": "temp_min",
     "temperature_min6h_2m_anomaly": "anom_temp_min",
+    "precipitation_mean": "chuva",
     "precipitation_anomaly": "anom_chuva",
 }
 COLUNAS_SEMANAIS = ["modelo", "rodada_utc", "ponto", "latitude", "longitude", "semana",

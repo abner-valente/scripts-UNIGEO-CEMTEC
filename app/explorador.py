@@ -1060,7 +1060,7 @@ def barras_da_chuva_prevista(longo: pd.DataFrame) -> alt.Chart:
 # observado. Ficam só os filtros da barra lateral: as escolhas dentro das abas voltam ao padrão.
 CHAVES_DOS_FILTROS = ("uf", "estacoes", "grandezas",
                       "previsao_estacao", "previsao_modelos", "previsao_grandezas", "previsao_modo",
-                      "mapas_previstos_modelo", "mapas_previstos", "semanas_mapas")
+                      "mapas_previstos_modelo", "mapas_previstos", "semanas_mapas", "semanas_estacao")
 
 
 def lembrar_filtros() -> None:
@@ -1491,6 +1491,49 @@ def painel_do_mapa_semanal(mapa: previsao.MapaSemanal, rodada: datetime, semana:
                      lambda: mapas.mapa_de_grade(grade, gdf, espec, base, niveis=list(escala)))
 
 
+def semana_contra_o_normal(tabela: pd.DataFrame, grandeza: str) -> alt.Chart:
+    """A previsão de cada semana contra a normal da época, e a anomalia como a distância entre as duas.
+
+    A barra entre as linhas é o número dos mapas: vermelha (ou verde, na chuva) quando a semana fica
+    acima do normal, azul (ou marrom) quando fica abaixo.
+    """
+    _, _, unidade = previsao.SERIES_SEMANAIS[grandeza]
+    chuva = grandeza == "Chuva"
+    acima, abaixo = ("#1b7837", "#8c510a") if chuva else ("#d6604d", "#4393c3")
+    ordem = list(tabela["rotulo"])
+    # "12/10 a 18/10" em duas linhas: numa linha só, metade das semanas sumia do eixo por falta de lugar
+    eixo_x = alt.X("rotulo:O", sort=ordem, title=None,
+                   axis=alt.Axis(labelAngle=0, labelFontSize=11, labelOverlap=False,
+                                 labelExpr="[split(datum.label, ' a ')[0], 'a ' + split(datum.label, ' a ')[1]]"))
+    series = [previsao.PREVISTA, previsao.NORMAL]
+    longo = (tabela.melt(id_vars=["rotulo"], value_vars=["prevista", "normal"], var_name="qual", value_name="valor")
+             .assign(Série=lambda dados: dados["qual"].map({"prevista": previsao.PREVISTA,
+                                                           "normal": previsao.NORMAL})))
+    linhas = (alt.Chart(longo).mark_line(point=alt.OverlayMarkDef(filled=True, size=60), strokeWidth=2.5)
+              .encode(x=eixo_x,
+                      y=alt.Y("valor:Q", title=f"{grandeza} ({unidade})", scale=alt.Scale(zero=chuva),
+                              axis=alt.Axis(grid=True, gridOpacity=0.25)),
+                      color=alt.Color("Série:N", title=None, legend=alt.Legend(orient="bottom"),
+                                      scale=alt.Scale(domain=series, range=["#1f77b4", "#9e9e9e"])),
+                      strokeDash=alt.StrokeDash("Série:N", legend=None,
+                                                scale=alt.Scale(domain=series, range=[[1, 0], [6, 4]])),
+                      tooltip=[alt.Tooltip("rotulo:O", title="Semana"), alt.Tooltip("Série:N"),
+                               alt.Tooltip("valor:Q", title=unidade, format=".1f")]))
+    com_sinal = tabela.assign(lado=np.where(tabela["anomalia"] >= 0, "acima", "abaixo"),
+                              texto=tabela["anomalia"].map(lambda valor: f"{valor:+.1f}".replace(".", ",")),
+                              meio=(tabela["prevista"] + tabela["normal"]) / 2)
+    cor_do_lado = alt.Color("lado:N", legend=None, scale=alt.Scale(domain=["acima", "abaixo"], range=[acima, abaixo]))
+    barras = (alt.Chart(com_sinal).mark_rule(strokeWidth=7, opacity=0.5)
+              .encode(x=eixo_x, y="normal:Q", y2="prevista:Q", color=cor_do_lado,
+                      tooltip=[alt.Tooltip("rotulo:O", title="Semana"),
+                               alt.Tooltip("prevista:Q", title=previsao.PREVISTA, format=".1f"),
+                               alt.Tooltip("normal:Q", title=previsao.NORMAL, format=".1f"),
+                               alt.Tooltip("anomalia:Q", title="Anomalia", format="+.1f")]))
+    numeros = (alt.Chart(com_sinal).mark_text(align="left", dx=8, fontSize=13, fontWeight="bold")
+               .encode(x=eixo_x, y="meio:Q", text="texto:N", color=cor_do_lado))
+    return alt.layer(barras, linhas, numeros).resolve_scale(color="independent").properties(height=320)
+
+
 def pagina_semanas() -> None:
     """A anomalia semanal do EC46 em MS, até 6 semanas à frente (passo 5 do escopo)."""
     st.title("Previsão por semana — Mato Grosso do Sul")
@@ -1500,8 +1543,19 @@ def pagina_semanas() -> None:
         st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
         st.stop()
 
+    try:
+        estacoes = carregar_estacoes(previsao.UF).sort_values("Estação")
+    except fonte.ErroFonte:
+        sem_lista_de_estacoes(aviso, previsao.UF)
     with st.sidebar:
         st.header("Filtros")
+        nomes = estacoes["Estação"].tolist()
+        codigos = estacoes["CD_ESTACAO"].astype(str).tolist()
+        if st.session_state.get("semanas_estacao") not in nomes:
+            st.session_state["semanas_estacao"] = (nomes[codigos.index(previsao.ESTACAO_INICIAL)]
+                                                   if previsao.ESTACAO_INICIAL in codigos else nomes[0])
+        nome_estacao = st.selectbox("Estação", nomes, key="semanas_estacao",
+                                    help="A do gráfico da semana contra o normal, no topo da página.")
         st.session_state.setdefault("semanas_mapas", list(previsao.PADRAO_SEMANAIS))
         # Um nome que deixou de existir (os mapas foram renomeados em 08/10) seria recusado pelo widget
         st.session_state["semanas_mapas"] = [nome for nome in st.session_state["semanas_mapas"]
@@ -1509,10 +1563,6 @@ def pagina_semanas() -> None:
         escolhidos = st.multiselect("Anomalias", list(previsao.MAPAS_SEMANAIS), key="semanas_mapas",
                                     help="A anomalia de cada grandeza: quanto a semana deve ficar acima ou "
                                          "abaixo do normal.")
-    try:
-        estacoes = carregar_estacoes(previsao.UF).sort_values("Estação")
-    except fonte.ErroFonte:
-        sem_lista_de_estacoes(aviso, previsao.UF)
     if not escolhidos:
         st.info("Escolha ao menos um mapa na barra lateral.")
         st.stop()
@@ -1531,6 +1581,22 @@ def pagina_semanas() -> None:
     if not semanas:
         st.warning("O EC46 não trouxe nenhuma semana inteira nesta rodada.")
         st.stop()
+
+    codigo_estacao = str(estacoes.set_index("Estação").loc[nome_estacao, "CD_ESTACAO"])
+    st.subheader(f"{nome_estacao}: a semana contra o normal")
+    colunas_graficos = st.columns(2)
+    for coluna_tela, grandeza in zip(colunas_graficos, previsao.SERIES_SEMANAIS):
+        with coluna_tela:
+            tabela = previsao.semana_contra_o_normal(semanal_estacoes, codigo_estacao, grandeza, rodada)
+            if tabela.empty:
+                st.info(f"O EC46 não trouxe {grandeza.lower()} para {nome_estacao}.")
+            else:
+                st.altair_chart(semana_contra_o_normal(tabela, grandeza), width="stretch")
+    st.caption("A linha cinza tracejada é a **normal da época**: a do próprio modelo, tirada das reprevisões "
+               "do ECMWF dos últimos anos para as mesmas semanas. A azul é a **previsão do EC46** para cada "
+               "semana (na chuva, o total da semana). A barra entre as duas é a **anomalia**, o número dos "
+               "mapas abaixo: o quanto a semana deve ficar acima ou abaixo do normal.")
+    st.divider()
 
     ordem = [nome for nome in previsao.MAPAS_SEMANAIS if nome in escolhidos]
     ver = st.radio("Ver", ["Uma semana", "Todas as semanas"], horizontal=True, key="semanas_ver",

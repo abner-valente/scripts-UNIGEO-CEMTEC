@@ -273,6 +273,11 @@ decide de quais rodadas precisa.
      (mm na semana). Os nomes foram achados por teste: a documentação só traz os rótulos. A
      máxima e a mínima são as de cada 6 horas, na média da semana, e não as do dia: em Campo
      Grande, na semana de 12/10, a "máxima" deu 25,6 °C, e a do dia do ECMWF, 26,7 °C;
+   - a busca traz também a previsão da semana em valor (`temperature_2m_mean`, as de 6 h e
+     `precipitation_mean`, o total da semana): são 8 variáveis, e o custo por ponto não muda.
+     A normal da época é a previsão menos a anomalia. No topo da página, os gráficos de uma
+     estação mostram as duas linhas e a anomalia entre elas (pedido de 08/10, para explicar o
+     que é a previsão semanal);
    - na tela, tudo diz "anomalia" e os números levam sinal: com o título "Temperatura média"
      sobre um −2,4, o mapa se lia como uma temperatura de −2,4 °C (corrigido em 08/10);
    - a semana vai de segunda a domingo. Entram só as que começam no dia da rodada ou depois: a
