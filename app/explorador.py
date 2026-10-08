@@ -243,6 +243,14 @@ def _regua(dados: pd.DataFrame, linhas_do_balao: list[tuple[str, str, str]], cas
             .add_params(apontar))
 
 
+def _escala_das_cores(cores: dict[str, str] | None, presentes: pd.Series):
+    """A cor fixa de cada modelo, só com os que estão no gráfico: os outros não vão para a legenda."""
+    if not cores:
+        return alt.Undefined
+    nomes = [nome for nome in cores if nome in set(presentes)]
+    return alt.Scale(domain=nomes, range=[cores[nome] for nome in nomes])
+
+
 def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, casas: int = 1,
              cores: dict[str, str] | None = None) -> alt.Chart:
     """As séries de uma grandeza no tempo: cor separa a estação, traço separa a série.
@@ -281,8 +289,7 @@ def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, 
         y=alt.Y("valor:Q", title=rotulo_y, scale=alt.Scale(zero=zero_na_base),
                 axis=alt.Axis(grid=True, gridOpacity=0.25)),
         color=alt.Color("Estação:N", title=None, legend=alt.Legend(orient="bottom"),
-                        scale=(alt.Scale(domain=list(cores), range=list(cores.values())) if cores
-                               else alt.Undefined)),
+                        scale=_escala_das_cores(cores, longo["Estação"])),
         opacity=alt.condition(isolar, alt.value(1), alt.value(0.12)))
     linhas = (base.mark_line(strokeWidth=2, point=alt.OverlayMarkDef(filled=True, size=32))
               .encode(strokeDash=alt.StrokeDash("Série:N", title=None,
@@ -1041,8 +1048,7 @@ def barras_da_chuva_prevista(longo: pd.DataFrame) -> alt.Chart:
                     xOffset=alt.XOffset("Modelo:N", sort=list(previsao.CORES)),
                     y=alt.Y("valor:Q", title="Chuva (mm)", axis=alt.Axis(grid=True, gridOpacity=0.25)),
                     color=alt.Color("Modelo:N", title=None, legend=alt.Legend(orient="bottom"),
-                                    scale=alt.Scale(domain=list(previsao.CORES),
-                                                    range=list(previsao.CORES.values()))),
+                                    scale=_escala_das_cores(previsao.CORES, longo["Modelo"])),
                     tooltip=[alt.Tooltip("yearmonthdate(dt_local):T", title="Dia", format="%d/%m"),
                              alt.Tooltip("Modelo:N"),
                              alt.Tooltip("valor:Q", title="Chuva (mm)", format=".1f")])
@@ -1359,7 +1365,10 @@ def calendario_do_risco_previsto(dias: pd.DataFrame) -> alt.Chart:
                     tooltip=[alt.Tooltip("Modelo:N"), alt.Tooltip("dia:O", title="Dia"),
                              alt.Tooltip("risco_max:O", title="Pior nível"),
                              alt.Tooltip("horas_risco_alto:Q", title="Horas em risco alto")])
-            .properties(height=45 * max(dados["Modelo"].nunique(), 1) + 60))
+            # A altura vai por linha, e não total: o Streamlit encaixa o gráfico na altura pedida, e o
+            # eixo dos dias e a legenda tomam uns 120 px dela. Com um total de 45 px por modelo, um
+            # modelo só ficava sem linha nenhuma, e dois, com linhas de 13 px.
+            .properties(height=alt.Step(32)))
 
 
 def pagina_mapas_previstos() -> None:
