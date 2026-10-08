@@ -2,8 +2,8 @@
 
 A busca é do `modulos/openmeteo.py`. Aqui fica o que as páginas fazem com o que voltou: guardar
 a previsão de cada modelo até sair a rodada seguinte, para todos os que abrem o painel; montar as
-séries dos gráficos de cada estação, um modelo ao lado do outro; e preparar os mapas dos dias e
-os das semanas.
+séries dos gráficos de cada estação, um modelo ao lado do outro; preparar os mapas dos dias e os
+das semanas; e aplicar a regra do risco de fogo sobre as horas previstas.
 
 As decisões que desenham a página estão em docs/escopo_v0.3.1.md.
 """
@@ -18,6 +18,7 @@ from scipy.interpolate import RegularGridInterpolator, griddata
 
 from app import variaveis
 from modulos import config, openmeteo
+from modulos.produtos import risco_fogo
 
 HORA, DIA = variaveis.HORA, variaveis.DIA
 
@@ -205,8 +206,8 @@ def chuva_total(horaria: pd.DataFrame, desde: pd.Timestamp, fuso=config.FUSO_MS)
 
 
 def planilha(horaria: pd.DataFrame, fuso=config.FUSO_MS) -> pd.DataFrame:
-    """A previsão diária do ponto como vai para o CSV: um dia por linha e modelo."""
-    dias = openmeteo.diario(horaria, fuso)
+    """A previsão diária do ponto como vai para o CSV: um dia por linha e modelo, com o risco."""
+    dias = diario_com_risco(horaria, fuso)
     dias = dias.assign(modelo=dias["modelo"].map(openmeteo.NOMES),
                        rodada_utc=dias["rodada_utc"].dt.strftime("%Y-%m-%d %H:%M"))
     return dias.drop(columns=["latitude", "longitude"]).round(1)
@@ -234,6 +235,7 @@ class MapaPrevisto:
     regra: str
     setas: bool = False       # a direção dominante, em seta sobre cada estação
     acumulado: bool = False   # soma os dias, de hoje até o escolhido
+    risco: str = ""           # "nivel" ou "horas": a superfície sai da regra aplicada hora a hora
 
 
 # As paletas são as dos mapas do observado, grandeza por grandeza
@@ -256,6 +258,12 @@ MAPAS = {mapa.nome: mapa for mapa in (
     MapaPrevisto("Vento máximo", "Vento máximo previsto", "vento_max", "Vento", "km/h",
                  "turbo", 1, "a maior velocidade das 24 horas do dia; a seta é a direção dominante",
                  setas=True),
+    MapaPrevisto("Risco de fogo", "Risco de fogo previsto — pior nível do dia", "risco_max", "Risco", "",
+                 "", 0, "o pior nível das 24 horas do dia pela regra 30-30-30, aplicada a cada hora",
+                 risco="nivel"),
+    MapaPrevisto("Horas em risco alto", "Horas previstas em risco alto de fogo", "horas_risco_alto", "Risco",
+                 "h", "YlOrRd", 0, "quantas das 24 horas do dia têm as três condições da regra 30-30-30",
+                 risco="horas"),
 )}
 PADRAO_MAPAS = ("Temperatura máxima", "Temperatura mínima", "Chuva do dia")
 
@@ -477,3 +485,89 @@ def subtitulo_da_semana(rodada: datetime, semana: date) -> str:
 def carimbo_da_semana(rodada: datetime, semana: date) -> str:
     """O fim do nome do arquivo: a semana e a rodada."""
     return f"EC46_semana_{semana:%Y%m%d}_rodada_{rodada:%Y%m%d_%H}UTC"
+
+
+# =====================================================
+# O RISCO DE FOGO PREVISTO
+# =====================================================
+# A regra é a do produto (`risco_fogo.condicoes_atendidas`), usada como está (decisão 8 do escopo):
+# temperatura, umidade e rajada estão entre as sete variáveis horárias, e não há pedido a mais. Um
+# cuidado conhecido: na estação, a regra usa a máxima e a mínima **dentro** da hora (TEM_MAX,
+# UMD_MIN); o modelo dá o valor da hora cheia, que fica um pouco aquém dos extremos. O risco
+# previsto tende a sair um pouco abaixo do que a estação vai medir.
+VARIAVEIS_DO_RISCO = ("temperatura", "umidade", "rajada")
+GRANDEZA_RISCO = "Risco de fogo"   # na página das estações, o calendário dos piores níveis
+CHAVES_DO_DIA = ["modelo", "rodada_utc", "ponto", "latitude", "longitude", "dia_previsto"]
+
+
+def risco_por_hora(horaria: pd.DataFrame) -> pd.DataFrame:
+    """As horas com as três condições e o nível (0 a 3), pela regra do produto.
+
+    Horas a que falta alguma das três ficam de fora, como no produto: sem elas não dá para dizer
+    quantas condições valeram.
+    """
+    completas = horaria.dropna(subset=list(VARIAVEIS_DO_RISCO))
+    atendidas = risco_fogo.condicoes_atendidas(*(completas[coluna] for coluna in VARIAVEIS_DO_RISCO))
+    tabela = completas.assign(**dict(zip(risco_fogo.COLUNAS_CONDICOES, atendidas)))
+    return tabela.assign(nivel=tabela[risco_fogo.COLUNAS_CONDICOES].sum(axis=1).astype(int))
+
+
+def _dia_previsto(horaria: pd.DataFrame, fuso) -> pd.Series:
+    """O dia de cada hora pela regra do produto: a das 00:00 fecha o dia anterior."""
+    return pd.Series(risco_fogo.dia_da_leitura(pd.DatetimeIndex(horaria["hora_prevista_utc"]), fuso),
+                     index=horaria.index)
+
+
+def risco_por_dia(horaria: pd.DataFrame, fuso=config.FUSO_MS) -> pd.DataFrame:
+    """O pior nível e as horas em risco alto de cada dia, por modelo, rodada e ponto."""
+    horas = risco_por_hora(horaria)
+    if horas.empty:
+        return pd.DataFrame(columns=CHAVES_DO_DIA + ["risco_max", "horas_risco_alto"])
+    horas = horas.assign(dia_previsto=_dia_previsto(horas, fuso),
+                         alto=(horas["nivel"] == risco_fogo.NIVEL_ALTO).astype(int))
+    return (horas.groupby(CHAVES_DO_DIA, sort=True)
+            .agg(risco_max=("nivel", "max"), horas_risco_alto=("alto", "sum")).reset_index())
+
+
+def diario_com_risco(horaria: pd.DataFrame, fuso=config.FUSO_MS) -> pd.DataFrame:
+    """O dia do `openmeteo.diario`, com o pior nível de risco e as horas em risco alto.
+
+    É a tabela diária do escopo (decisão 6), com o `risco_max` dela.
+    """
+    dias = openmeteo.diario(horaria, fuso)
+    risco = risco_por_dia(horaria, fuso)
+    if dias.empty:
+        return dias.assign(risco_max=pd.Series(dtype=float), horas_risco_alto=pd.Series(dtype=float))
+    return dias.merge(risco, on=CHAVES_DO_DIA, how="left")
+
+
+def risco_na_grade(horaria: pd.DataFrame, pontos: pd.DataFrame, dia: date, lon_grade: np.ndarray,
+                   lat_grade: np.ndarray, fuso=config.FUSO_MS) -> tuple[np.ndarray, np.ndarray] | None:
+    """O pior nível e as horas em risco alto do dia, célula a célula da grade do mapa.
+
+    Como o produto faz com as estações: em cada hora, as três variáveis viram superfície e a regra
+    é aplicada em cada célula. Aplicar a regra nos pontos e interpolar o nível daria degraus
+    falsos entre um ponto e outro, porque o nível não é um número que se possa tirar média.
+    None se o modelo não trouxer as três variáveis em nenhuma hora do dia.
+    """
+    completas = horaria.dropna(subset=list(VARIAVEIS_DO_RISCO))
+    if completas.empty:
+        return None
+    do_dia = completas[_dia_previsto(completas, fuso) == dia]
+    niveis = []
+    for _, hora in do_dia.groupby("hora_prevista_utc", sort=True):
+        por_ponto = hora.set_index("ponto")
+        campos = [superficie(por_ponto[coluna], pontos, lon_grade, lat_grade) for coluna in VARIAVEIS_DO_RISCO]
+        if any(campo is None for campo in campos):
+            continue
+        niveis.append(risco_fogo.contar_condicoes(*campos))
+    if not niveis:
+        return None
+    pilha = np.stack(niveis)
+    return pilha.max(axis=0).astype(np.int8), (pilha == risco_fogo.NIVEL_ALTO).sum(axis=0)
+
+
+def subtitulo_do_risco(modelo: str, rodada: datetime, dia: date) -> str:
+    """O subtítulo dos mapas de risco: o dia, o modelo, a rodada e a regra."""
+    return (f"Previsão para {dia:%d/%m/%Y} · {openmeteo.NOMES[modelo]}, rodada de {rodada:%d/%m %H} UTC · "
+            "regra 30-30-30")

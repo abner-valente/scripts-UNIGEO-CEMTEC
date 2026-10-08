@@ -173,15 +173,15 @@ Além disso, há o **cache em disco** de `app/dados.py`: um `cache/<código da e
 | 1–120 | imports e constantes da tela (`DPI_MAPA`, `MAPAS_POR_LINHA`, `CONVERSOES`, `ESTADOS_NA_MEMORIA`…) |
 | 120–945 | funções: as carregadas em cache (`carregar_*`, `mapa_do_*`, `gif_*`) e os pedaços de tela reutilizados (`painel_do_mapa`, `painel_da_chuva`, `botao_do_boletim`…) |
 | ~949 | **PREVISÃO**: as páginas da previsão (`pagina_previsao`, os gráficos; `pagina_mapas_previstos`, os mapas dos dias; `pagina_semanas`, as anomalias do EC46), as funções delas e `lembrar_filtros` |
-| ~1446 | **PÁGINAS**: `st.navigation`, com o observado e o grupo da previsão. Na previsão, o script para aqui; o observado é o resto do arquivo. |
-| ~1470 | **FILTROS**: a barra lateral do observado (estado, período, estações, grandezas, cache) |
-| ~1538 | **DADOS**: converte as datas do estado em UTC e carrega as estações escolhidas |
-| ~1567 | `with aba_series:` — Séries Temporais |
-| ~1641 | `with aba_mapa:` — Mapas Boletim. O botão carrega **todas** as estações do estado mais as vizinhas. |
-| ~1740 | `with aba_chuva:` — Chuva. Tem carga própria, porque os acumulados olham para trás do período. |
-| ~1927 | `with aba_risco:` — Risco de Fogo. Usa o mesmo dado da aba de mapas. |
-| ~2125 | `with aba_navegavel:` — Mapa Navegação (pydeck), em avaliação |
-| ~2224 | `with aba_qualidade:` — Qualidade dos dados |
+| ~1561 | **PÁGINAS**: `st.navigation`, com o observado e o grupo da previsão. Na previsão, o script para aqui; o observado é o resto do arquivo. |
+| ~1585 | **FILTROS**: a barra lateral do observado (estado, período, estações, grandezas, cache) |
+| ~1653 | **DADOS**: converte as datas do estado em UTC e carrega as estações escolhidas |
+| ~1682 | `with aba_series:` — Séries Temporais |
+| ~1756 | `with aba_mapa:` — Mapas Boletim. O botão carrega **todas** as estações do estado mais as vizinhas. |
+| ~1855 | `with aba_chuva:` — Chuva. Tem carga própria, porque os acumulados olham para trás do período. |
+| ~2042 | `with aba_risco:` — Risco de Fogo. Usa o mesmo dado da aba de mapas. |
+| ~2240 | `with aba_navegavel:` — Mapa Navegação (pydeck), em avaliação |
+| ~2339 | `with aba_qualidade:` — Qualidade dos dados |
 
 **As páginas.** O painel tem o "Observado (INMET)" e, no grupo "Previsão (MS)", as "Estações", os "Mapas" e as "Semanas", trocadas no topo da barra lateral. O Streamlit apaga o valor de um widget que não aparece numa execução, e cada página aparece sozinha: sem cuidado, ir à previsão e voltar perderia as estações escolhidas. Um filtro novo da barra lateral que deva sobreviver à troca precisa de três coisas: uma `key`, entrar em `CHAVES_DOS_FILTROS`, e receber o valor inicial com `st.session_state.setdefault` antes do widget, **e não** pelo parâmetro (`default=`, `index=`). Com o valor nos dois lugares, o widget volta vazio na tela enquanto o painel usa o valor guardado. O período é a exceção, explicada em `lembrar_filtros`.
 
@@ -219,7 +219,7 @@ A regra de organização: **conta vai para um módulo de `app/` sem Streamlit; t
 | `animacao.py` | os GIFs: quais quadros entram e o carimbo de cada um |
 | `superficie.py` | a superfície como imagem transparente, para o mapa navegável |
 | `qualidade.py` | as conferências da aba de qualidade: completude, valores impossíveis, sensores travados |
-| `previsao.py` | as contas das páginas de previsão: a cópia guardada de cada modelo até a rodada seguinte (`Guarda`), o catálogo dos gráficos (`GRANDEZAS`) e as séries de cada estação; o catálogo dos mapas (`MAPAS`), a escala (a do observado), o acumulado e a `superficie`, que leva a grade de 0,5° do modelo à do mapa por interpolação bilinear; o catálogo das semanas (`MAPAS_SEMANAIS`), com as escalas divergentes, e quais semanas estão inteiras. A busca é do `modulos/openmeteo.py`. |
+| `previsao.py` | as contas das páginas de previsão: a cópia guardada de cada modelo até a rodada seguinte (`Guarda`), o catálogo dos gráficos (`GRANDEZAS`) e as séries de cada estação; o catálogo dos mapas (`MAPAS`), a escala (a do observado), o acumulado e a `superficie`, que leva a grade de 0,5° do modelo à do mapa por interpolação bilinear; o catálogo das semanas (`MAPAS_SEMANAIS`), com as escalas divergentes, e quais semanas estão inteiras; e o risco de fogo previsto, com a regra do `risco_fogo` usada como está: o nível de cada hora (`risco_por_hora`), o pior nível e as horas em risco alto do dia (`diario_com_risco`), e a grade do dia, com a regra aplicada célula a célula, hora a hora (`risco_na_grade`). A busca é do `modulos/openmeteo.py`. |
 | `requirements.txt` | as dependências **do painel**. É este arquivo que o Streamlit Cloud instala. |
 
 ### O resto

@@ -456,3 +456,74 @@ def test_subtitulo_e_carimbo_da_semana():
     assert (previsao.subtitulo_da_semana(RODADA_EC46, date(2026, 10, 12))
             == "Semana de 12/10 a 18/10/2026 · EC46 (média dos membros), rodada de 07/10 00 UTC")
     assert previsao.carimbo_da_semana(RODADA_EC46, date(2026, 10, 12)) == "EC46_semana_20261012_rodada_20261007_00UTC"
+
+
+# =====================================================
+# O RISCO DE FOGO PREVISTO
+# =====================================================
+def test_o_nivel_de_cada_hora_e_o_da_regra_do_produto():
+    """Temperatura ≥ 30 °C, umidade ≤ 30 % e rajada ≥ 30 km/h: cada uma soma um nível."""
+    horas = horaria("2026-10-08 01:00", 4, modelos=("ecmwf_ifs025",),
+                    temperatura=[35.0, 35.0, 25.0, 35.0], umidade=[20.0, 40.0, 40.0, 20.0],
+                    rajada=[40.0, 40.0, 10.0, 29.9])
+
+    assert list(previsao.risco_por_hora(horas)["nivel"]) == [3, 2, 0, 2]
+
+
+def test_hora_sem_uma_das_tres_variaveis_fica_fora_do_risco():
+    horas = horaria("2026-10-08 01:00", 2, modelos=("ecmwf_ifs025",), temperatura=[35.0, np.nan],
+                    umidade=[20.0, 20.0], rajada=[40.0, 40.0])
+
+    assert len(previsao.risco_por_hora(horas)) == 1
+
+
+def test_o_dia_do_risco_e_o_pior_nivel_e_as_horas_em_risco_alto():
+    """A das 00:00 fecha o dia anterior, como no produto: o risco alto dela conta no dia 8."""
+    temperatura = [35.0] * 3 + [25.0] * 20 + [35.0] + [35.0]          # 01:00 do dia 8 à 01:00 do dia 9
+    horas = horaria("2026-10-08 01:00", 25, modelos=("ecmwf_ifs025",), temperatura=temperatura,
+                    umidade=[20.0] * 25, rajada=[40.0] * 25)
+
+    dias = previsao.risco_por_dia(horas).set_index("dia_previsto")
+
+    assert dias.loc[date(2026, 10, 8), "risco_max"] == 3
+    assert dias.loc[date(2026, 10, 8), "horas_risco_alto"] == 4
+    assert dias.loc[date(2026, 10, 9), "horas_risco_alto"] == 1
+
+
+def test_a_tabela_diaria_e_a_planilha_levam_o_risco():
+    horas = horaria("2026-10-08 01:00", 24, temperatura=[35.0] * 24, umidade=[20.0] * 24, rajada=[10.0] * 24)
+
+    assert set(previsao.diario_com_risco(horas)["risco_max"]) == {2}
+    assert {"risco_max", "horas_risco_alto"} <= set(previsao.planilha(horas).columns)
+
+
+def test_na_grade_a_regra_e_aplicada_celula_a_celula_hora_a_hora():
+    """Quente a oeste e ameno a leste: o nível muda no meio, onde a temperatura passa de 30 °C."""
+    pontos = rede()
+    linhas = []
+    for hora in pd.date_range("2026-10-08 01:00", periods=24, freq="h", tz=config.FUSO_MS):
+        for ponto in pontos.itertuples():
+            linhas.append({"modelo": "ecmwf_ifs025", "rodada_utc": RODADA_00, "ponto": ponto.ponto,
+                           "latitude": ponto.latitude, "longitude": ponto.longitude,
+                           "hora_prevista_utc": hora.tz_convert("UTC"),
+                           "temperatura": 35.0 if ponto.longitude < -55 else 25.0,
+                           "umidade": 20.0, "rajada": 40.0})
+    horas = pd.DataFrame(linhas)
+    lon_fina, lat_fina = np.meshgrid(np.linspace(-55.9, -54.1, 10), np.linspace(-21.5, -20.5, 3))
+
+    nivel, horas_alto = previsao.risco_na_grade(horas, pontos, date(2026, 10, 8), lon_fina, lat_fina)
+
+    assert list(nivel[0, [0, -1]]) == [3, 2]                       # oeste no alto, leste no médio
+    assert horas_alto[0, 0] == 24 and horas_alto[0, -1] == 0
+
+
+def test_sem_as_tres_variaveis_no_dia_nao_ha_grade_de_risco():
+    pontos = rede()
+    horas = pd.DataFrame(columns=openmeteo.COLUNAS_HORARIAS)
+
+    assert previsao.risco_na_grade(horas, pontos, date(2026, 10, 8), np.zeros((2, 2)), np.zeros((2, 2))) is None
+
+
+def test_os_dois_mapas_do_risco_estao_no_catalogo():
+    assert previsao.MAPAS["Risco de fogo"].risco == "nivel"
+    assert previsao.MAPAS["Horas em risco alto"].risco == "horas"

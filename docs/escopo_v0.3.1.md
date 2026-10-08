@@ -283,7 +283,17 @@ decide de quais rodadas precisa.
      na chuva (marrom e verde), com o normal (−0,5 a 0,5 °C; −5 a 5 mm) em branco. O lado chuvoso
      vai mais longe porque o seco não passa da normal da semana; a primeira semana medida passou de
      80 mm. O ranking do boletim é o dos **maiores desvios do normal**, para cima ou para baixo.
-6. **Risco de fogo previsto.**
+6. **Risco de fogo previsto.** **Feito em 08/10**:
+   - a regra é a do produto (`risco_fogo.condicoes_atendidas`), sem reescrever, aplicada a cada
+     hora prevista; o dia segue a regra do produto (`dia_da_leitura`). A tabela diária ganha o
+     `risco_max` da decisão 6 e as horas em risco alto (`app/previsao.diario_com_risco`);
+   - nos **Mapas**, o pior nível do dia e as horas em risco alto. A superfície é feita como o
+     produto faz: em cada hora, as três variáveis viram superfície (bilinear) e a regra é
+     aplicada em cada célula. Aplicar a regra nos 178 pontos e interpolar o nível daria degraus
+     falsos, porque nível não se interpola. Custa ~0,14 s por dia e modelo;
+   - nas **Estações**, um calendário com o pior nível de cada dia em cada modelo;
+   - na rodada de 08/10, 06 UTC, do ECMWF: risco médio em 83% do estado e alto em 2% para o dia
+     08/10, com até 4 horas em risco alto.
 
 ## Encaixe com a ida para o servidor da UNIGEO
 

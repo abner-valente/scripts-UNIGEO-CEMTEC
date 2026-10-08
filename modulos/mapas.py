@@ -320,7 +320,8 @@ def mapa_classes_interpolado(grade, gdf, coluna: str, espec: EspecClasses, base:
                              levels=limites, colors=espec.cores, alpha=0.85)
     superficie.set_clip_path(base.contorno_uf, transform=ax.transData)
     _desenhar_limites(ax, base)
-    gdf.plot(ax=ax, color="black", markersize=50, alpha=0.7, edgecolor="white", linewidth=1.5)
+    if len(gdf):   # o risco previsto vem do modelo: sem a previsão das estações, sai sem os pontos
+        gdf.plot(ax=ax, color="black", markersize=50, alpha=0.7, edgecolor="white", linewidth=1.5)
 
     classes = _classes(gdf[coluna], espec)
     if tela is None or tela.rotulos:

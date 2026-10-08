@@ -19,6 +19,7 @@ Ainda não está na `main`. O plano desta versão está em `docs/escopo_v0.3.1.m
   - **Estações**: os gráficos de uma estação, com os três modelos lado a lado, por hora ou por dia. A tabela diária baixa em CSV.
   - **Mapas**: os mapas dos dias, um modelo por vez. Temperatura máxima, mínima e média, umidade mínima, chuva do dia, chuva acumulada de hoje até o dia escolhido, rajada e vento máximos com a direção. As cores e as escalas são as dos mapas do observado, e cada mapa tem o botão do PNG do boletim, com o crédito do Open-Meteo no lugar do INMET.
   - **Semanas**: a anomalia semanal do EC46, a previsão estendida do ECMWF: quanto cada uma das próximas semanas deve ficar acima ou abaixo do normal, na temperatura média, máxima e mínima e na chuva. Uma semana com vários mapas, ou um mapa com todas as semanas lado a lado. Branco é o normal; azul e vermelho, mais frio e mais quente; marrom e verde, menos e mais chuva.
+  - **Risco de fogo previsto**, pela regra 30-30-30 do produto, aplicada a cada hora prevista. Nos Mapas, o pior nível do dia e as horas em risco alto, com as cores e o PNG do boletim do produto; nas Estações, um calendário com o pior nível de cada dia em cada modelo. O modelo dá o valor da hora cheia, e a estação mede os extremos dentro da hora: o risco previsto tende a sair um pouco abaixo do medido.
   - As páginas dizem de que rodada é cada modelo.
   - O que se escolhe na barra lateral de cada página (estado, período, estações, grandezas, modelo, mapas) continua lá quando se volta a ela.
 

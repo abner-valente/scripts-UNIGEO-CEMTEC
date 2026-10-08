@@ -1105,7 +1105,8 @@ def pagina_previsao() -> None:
                                  format_func=openmeteo.NOMES.get, key="previsao_modelos",
                                  help="O ECMWF e o GFS vão até o dia 14; o ICON, até o dia 7.")
         st.session_state.setdefault("previsao_grandezas", ["Temperatura", "Chuva"])
-        escolhidas = st.multiselect("Grandezas", list(previsao.GRANDEZAS), key="previsao_grandezas",
+        escolhidas = st.multiselect("Grandezas", [*previsao.GRANDEZAS, previsao.GRANDEZA_RISCO],
+                                    key="previsao_grandezas",
                                     help="Cada grandeza ganha o seu gráfico, com os modelos lado a lado.")
 
     if not modelos:
@@ -1159,6 +1160,19 @@ def pagina_previsao() -> None:
                 f"{linha.Modelo} {linha.chuva:.1f} mm até {linha.ate:%d/%m}" for linha in totais.itertuples())
         st.caption(regras)
 
+    if previsao.GRANDEZA_RISCO in escolhidas:
+        st.subheader(previsao.GRANDEZA_RISCO)
+        dias = previsao.diario_com_risco(horaria)
+        dias = dias[(dias["horas"] == 24) & (dias["dia_previsto"] >= desde.date())].dropna(subset=["risco_max"])
+        if dias.empty:
+            st.warning(f"Nenhum modelo trouxe as três variáveis da regra para {nome}.")
+        else:
+            st.altair_chart(calendario_do_risco_previsto(dias), width="stretch")
+            st.caption("O pior nível de cada dia pela regra 30-30-30 (temperatura ≥ 30 °C, umidade ≤ 30 %, "
+                       "rajada ≥ 30 km/h), aplicada a cada hora prevista, como no produto. O modelo dá o valor "
+                       "da hora cheia, e a estação mede a máxima e a mínima dentro da hora: o risco previsto "
+                       "tende a sair um pouco abaixo do medido. No balão, as horas em risco alto.")
+
     with st.expander("Ver e baixar a previsão diária desta estação"):
         visivel = previsao.planilha(horaria)
         st.caption("Um dia por linha e modelo, pela regra do observado. `horas` diz quantas horas o "
@@ -1173,9 +1187,30 @@ def diario_previsto(conjunto: str, modelo: str, rodada: datetime, _horaria: pd.D
     """O dia de cada ponto, tirado das horas uma vez por rodada.
 
     As horas da grade são 60 mil linhas por modelo: refazer a soma a cada clique custaria mais que
-    o desenho. A chave é o conjunto, o modelo e a rodada, que é o que muda a tabela.
+    o desenho. A chave é o conjunto, o modelo e a rodada, que é o que muda a tabela. Vem com o pior
+    nível de risco de fogo de cada dia e as horas em risco alto.
     """
-    return openmeteo.diario(_horaria, config.FUSO_MS)
+    return previsao.diario_com_risco(_horaria, config.FUSO_MS)
+
+
+@st.cache_data(show_spinner=False, max_entries=12)
+def risco_na_grade_prevista(modelo: str, rodada: datetime, dia: date, _horaria: pd.DataFrame,
+                            _pontos: pd.DataFrame) -> tuple[np.ndarray, np.ndarray] | None:
+    """O pior nível e as horas em risco alto do dia, célula a célula: a regra aplicada a cada hora."""
+    base = base_cartografica(previsao.UF)
+    return previsao.risco_na_grade(_horaria, _pontos, dia, base.lon_grade, base.lat_grade, config.FUSO_MS)
+
+
+@st.cache_data(show_spinner=False, max_entries=20)
+def mapa_de_risco_previsto(origem: tuple, nome: str, rotulos: bool, _grade: np.ndarray,
+                           _estacoes: pd.DataFrame) -> bytes:
+    """PNG do mapa do pior nível de risco previsto para a tela, com as cores do produto."""
+    espec = mapas.EspecClasses(nome, "", "", config.CORES_RISCO, config.ROTULOS_RISCO)
+    figura = mapas.mapa_classes_interpolado(_grade, _pontos_previstos(_estacoes, nome), nome, espec,
+                                            base_cartografica(previsao.UF), tela=mapas.Tela(rotulos=rotulos))
+    arquivo = io.BytesIO()
+    figura.savefig(arquivo, format="png", dpi=DPI_MAPA, bbox_inches="tight", facecolor="white")
+    return arquivo.getvalue()
 
 
 @st.cache_data(show_spinner=False, max_entries=40)
@@ -1211,9 +1246,13 @@ def _pontos_previstos(estacoes: pd.DataFrame, nome: str):
 def painel_do_mapa_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: datetime, dia: date,
                             hoje: date, rotulos: bool, ajustar: bool, diaria_grade: pd.DataFrame,
                             pontos_grade: pd.DataFrame, diaria_estacoes: pd.DataFrame,
-                            estacoes: pd.DataFrame) -> None:
+                            estacoes: pd.DataFrame, horaria_grade: pd.DataFrame) -> None:
     """Uma coluna da linha de mapas da previsão: o desenho, a escala, a regra e os botões."""
     st.markdown(f"**{mapa.nome}**")
+    if mapa.risco:
+        painel_do_risco_previsto(mapa, modelo, rodada, dia, hoje, rotulos, horaria_grade, pontos_grade,
+                                 diaria_estacoes, estacoes)
+        return
     base = base_cartografica(previsao.UF)
     grade = previsao.superficie(previsao.valores_do_dia(diaria_grade, mapa, dia, hoje), pontos_grade,
                                 base.lon_grade, base.lat_grade)
@@ -1245,6 +1284,82 @@ def painel_do_mapa_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: da
                      boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo),
                      lambda: mapas.mapa_de_grade(grade, gdf, espec, base,
                                                  niveis=list(escala) if escala else 20))
+
+
+def painel_do_risco_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: datetime, dia: date,
+                             hoje: date, rotulos: bool, horaria_grade: pd.DataFrame,
+                             pontos_grade: pd.DataFrame, diaria_estacoes: pd.DataFrame,
+                             estacoes: pd.DataFrame) -> None:
+    """Os mapas do risco de fogo previsto: o pior nível do dia ou as horas em risco alto.
+
+    A superfície sai da regra aplicada célula a célula, hora a hora (`previsao.risco_na_grade`), e
+    os números sobre as estações, da regra aplicada às horas previstas no ponto de cada uma.
+    """
+    base = base_cartografica(previsao.UF)
+    calculado = risco_na_grade_prevista(modelo, rodada, dia, _horaria=horaria_grade, _pontos=pontos_grade)
+    if calculado is None:
+        st.info(f"O {openmeteo.NOMES[modelo]} não traz as três variáveis da regra para {previsao.nome_do_dia(dia)}.")
+        return
+    nivel, horas_alto = calculado
+    pontos = previsao.nas_estacoes(diaria_estacoes, estacoes, mapa, dia, hoje)
+    carimbo = previsao.carimbo(modelo, rodada, mapa, dia, hoje)
+    subtitulo = previsao.subtitulo_do_risco(modelo, rodada, dia)
+    gdf = _pontos_previstos(pontos, mapa.nome)
+    no_estado = (nivel if mapa.risco == "nivel" else horas_alto)[base.dentro_uf]
+
+    if mapa.risco == "nivel":
+        png = mapa_de_risco_previsto(("dias", modelo, rodada, dia), mapa.nome, rotulos, _grade=nivel,
+                                     _estacoes=pontos)
+        st.image(png, width="stretch")
+        partes = [f"{config.ROTULOS_RISCO[classe].replace('Risco ', '').capitalize()} em "
+                  f"{(no_estado == classe).mean():.0%}" for classe in range(len(config.CORES_RISCO) - 1, -1, -1)
+                  if (no_estado == classe).any()]
+        st.caption(f"{' · '.join(partes)} do estado · {mapa.regra}.")
+        espec = mapas.EspecClasses(boletim.titulo(mapa.titulo, previsao.UF), subtitulo, "", config.CORES_RISCO,
+                                   config.ROTULOS_RISCO, credito=previsao.CREDITO)
+        desenhar = lambda: mapas.mapa_classes_interpolado(nivel, gdf, mapa.nome, espec, base)  # noqa: E731
+    else:
+        niveis = niveis_das_horas(horas_alto)
+        escala = tuple(float(valor) for valor in niveis) if np.ndim(niveis) else None
+        png = mapa_previsto(("dias", modelo, rodada, dia, hoje), mapa.nome, mapa.paleta, mapa.unidade,
+                            mapa.decimais, False, rotulos, escala, _grade=horas_alto, _estacoes=pontos)
+        st.image(png, width="stretch")
+        if escala is not None:
+            st.image(barra_de_escala(mapa.paleta, escala, "horas"), width="stretch")
+        st.caption(f"0 a {int(no_estado.max())} h · {mapa.regra}.")
+        espec = mapas.EspecMapa("", mapa.nome, boletim.titulo(mapa.titulo, previsao.UF), subtitulo, "",
+                                mapa.paleta, "Horas em risco alto", "5 MAIORES EXPOSIÇÕES", decimais=0,
+                                credito=previsao.CREDITO)
+        desenhar = lambda: mapas.mapa_de_grade(horas_alto, gdf, espec, base, niveis=niveis)  # noqa: E731
+
+    arquivo = mapa.titulo.replace(" — ", " ")   # sem o travessão no nome do arquivo
+    st.download_button(f"Baixar PNG — {mapa.nome.lower()}", png, mime="image/png",
+                       key=f"baixar_previsto_{mapa.nome}",
+                       file_name=f"Mapa_{arquivo.replace(' ', '_')}_{carimbo}.png")
+    botao_do_boletim(mapa.nome.lower(), f"previsto_{mapa.nome}",
+                     boletim.nome_do_arquivo(arquivo, previsao.UF, carimbo), desenhar)
+
+
+def calendario_do_risco_previsto(dias: pd.DataFrame) -> alt.Chart:
+    """O pior nível de cada dia em cada modelo, na estação: as duas semanas de relance."""
+    dados = dias.assign(Modelo=dias["modelo"].map(openmeteo.NOMES),
+                        dia=dias["dia_previsto"].map(previsao.nome_do_dia),
+                        risco_max=dias["risco_max"].astype(int))
+    ordem_dos_dias = list(dict.fromkeys(dados.sort_values("dia_previsto")["dia"]))
+    return (alt.Chart(dados)
+            .mark_rect(stroke="#111111", strokeWidth=1)
+            .encode(x=alt.X("dia:O", sort=ordem_dos_dias, title=None, axis=alt.Axis(labelAngle=0, labelFontSize=11)),
+                    y=alt.Y("Modelo:N", sort=list(previsao.CORES), title=None, axis=alt.Axis(labelFontSize=12)),
+                    color=alt.Color("risco_max:O", title="Pior nível do dia",
+                                    scale=alt.Scale(domain=[0, 1, risco.NIVEL_MEDIO, risco.NIVEL_ALTO],
+                                                    range=config.CORES_RISCO),
+                                    legend=alt.Legend(orient="bottom",
+                                                      labelExpr="{'0': 'Sem condição', '1': 'Baixo', "
+                                                                "'2': 'Médio', '3': 'Alto'}[datum.label]")),
+                    tooltip=[alt.Tooltip("Modelo:N"), alt.Tooltip("dia:O", title="Dia"),
+                             alt.Tooltip("risco_max:O", title="Pior nível"),
+                             alt.Tooltip("horas_risco_alto:Q", title="Horas em risco alto")])
+            .properties(height=45 * max(dados["Modelo"].nunique(), 1) + 60))
 
 
 def pagina_mapas_previstos() -> None:
@@ -1318,7 +1433,7 @@ def pagina_mapas_previstos() -> None:
             for coluna_tela, nome in zip(st.columns(por_linha), ordem[primeiro:primeiro + por_linha]):
                 with coluna_tela:
                     painel_do_mapa_previsto(previsao.MAPAS[nome], modelo, rodada, dia, hoje, rotulos, ajustar,
-                                            diaria_grade, pontos_grade, diaria_estacoes, estacoes)
+                                            diaria_grade, pontos_grade, diaria_estacoes, estacoes, grades[0])
     espacamento = f"{config.GRADE_PREVISAO:g}".replace(".", ",")
     st.caption(f"A superfície é a do próprio modelo, nos {len(pontos_grade)} pontos da grade de "
                f"{espacamento}° que cobrem o estado, levada à resolução do mapa por interpolação bilinear: "

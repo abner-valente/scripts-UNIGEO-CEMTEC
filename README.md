@@ -676,8 +676,9 @@ A previsão do tempo para Mato Grosso do Sul, do [Open-Meteo](https://open-meteo
 
 | | |
 |---|---|
-| **Estações** (`…/previsao`) | Os gráficos de uma estação de MS (abre em Campo Grande), com os modelos lado a lado: temperatura, umidade, ponto de orvalho, vento e rajada, direção e chuva, por hora ou por dia. Cor separa o modelo, traço separa a série. Por dia, a chuva sai em barras, com o total previsto de cada modelo. A tabela diária baixa em CSV |
-| **Mapas** (`…/previsao-mapas`) | Os mapas dos dias, um modelo por vez, com um deslizante de hoje até o último dia inteiro do modelo: temperatura máxima, mínima e média, umidade mínima, chuva do dia, chuva acumulada de hoje até o dia escolhido, rajada e vento máximos com a seta da direção. As cores e as escalas são as dos mapas do observado, e cada mapa tem o botão do PNG do boletim |
+| **Estações** (`…/previsao`) | Os gráficos de uma estação de MS (abre em Campo Grande), com os modelos lado a lado: temperatura, umidade, ponto de orvalho, vento e rajada, direção e chuva, por hora ou por dia. Cor separa o modelo, traço separa a série. Por dia, a chuva sai em barras, com o total previsto de cada modelo. Em "Risco de fogo", um calendário com o pior nível de cada dia em cada modelo. A tabela diária, com o risco, baixa em CSV |
+| **Mapas** (`…/previsao-mapas`) | Os mapas dos dias, um modelo por vez, com um deslizante de hoje até o último dia inteiro do modelo: temperatura máxima, mínima e média, umidade mínima, chuva do dia, chuva acumulada de hoje até o dia escolhido, rajada e vento máximos com a seta da direção, e o risco de fogo (o pior nível do dia e as horas em risco alto). As cores e as escalas são as dos mapas do observado, e cada mapa tem o botão do PNG do boletim |
+| **O risco de fogo** | A regra 30-30-30 do produto `risco_fogo`, sem reescrever, aplicada a cada hora prevista: no mapa, as três variáveis viram superfície e a regra é aplicada em cada célula, como o produto faz com as estações. O modelo dá o valor da hora cheia, e a estação mede a máxima e a mínima dentro da hora: o risco previsto tende a sair um pouco abaixo do medido |
 | **Semanas** (`…/previsao-semanas`) | A anomalia semanal do **EC46**, a previsão estendida do ECMWF (média dos membros, uma rodada por dia): quanto cada semana, de segunda a domingo, deve ficar acima ou abaixo do normal do próprio modelo, na temperatura média, máxima e mínima e na chuva. Entram as semanas inteiras depois da rodada, cinco na prática. Uma semana com vários mapas, ou um mapa com todas as semanas lado a lado. Branco é o normal; azul e vermelho, mais frio e mais quente; marrom e verde, menos e mais chuva. Dá a tendência da semana, e não o tempo de um dia |
 | **A superfície** | É a do próprio modelo, nos 178 pontos da grade de 0,5° que cobrem o estado, levada à resolução do mapa por interpolação bilinear. **Não é IDW de estação**: a previsão já vem em grade, e o IDW só mostraria um núcleo de chuva onde houvesse estação. Os números sobre as estações são a previsão do mesmo modelo no ponto de cada uma, e são eles que entram no ranking do boletim |
 | **O dia** | O mesmo do observado: da hora das 01:00 à das 00:00 do dia seguinte, no horário de MS. No modo por dia entram só os dias inteiros |
@@ -685,7 +686,7 @@ A previsão do tempo para Mato Grosso do Sul, do [Open-Meteo](https://open-meteo
 | **A cota** | O Open-Meteo gratuito aceita 10 mil chamadas por dia. As estações custam 58 por modelo e rodada, e a grade dos mapas, 178: no pior caso, alguém abrindo tudo depois de cada rodada, umas 2.800 por dia. As semanas, no máximo umas 780, uma vez por dia |
 | **Crédito** | Os dados são do Open-Meteo, com ECMWF, NOAA e DWD, sob CC BY 4.0. O crédito vai nas páginas e no subtítulo do PNG do boletim, no lugar do "INMET/SEMADESC" |
 
-O que vem depois (o risco de fogo previsto) está em [`docs/escopo_v0.3.1.md`](docs/escopo_v0.3.1.md).
+As decisões estão em [`docs/escopo_v0.3.1.md`](docs/escopo_v0.3.1.md), e o que vem depois (o banco, os coletores e o servidor da unidade), em [`docs/plano_arquitetura.md`](docs/plano_arquitetura.md).
 
 ## Novos produtos
 
