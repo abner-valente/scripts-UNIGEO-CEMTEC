@@ -44,39 +44,36 @@ nuvem continuam indo direto às APIs.
 | A VM alcança o banco | **sim** (09/10): uma aplicação que já roda nela usa o banco |
 | A VM alcança o Open-Meteo | **sim** (09/10): os quatro endereços que o painel usa (a previsão, a API sazonal e os metadados das duas) responderam HTTP 200 no PowerShell, com `Invoke-WebRequest`. Se o Python falhar lá mais tarde, é o proxy, que ele lê de outro lugar |
 | Versão do Windows da VM | **Windows Server 2022** (09/10): recente o bastante para o Python 3.14 |
-| Versão do PostgreSQL e extensões disponíveis | **PostgreSQL 11.14**, com **PostGIS 2.5.3** instalado; sem `pg_partman`, `pg_cron` nem `timescaledb` (ver abaixo) |
+| Versão do PostgreSQL e extensões disponíveis | **PostgreSQL 16.3**, com **PostGIS 3.4.4** ativo; sem `pg_partman`, `pg_cron` nem `timescaledb` (09/10, ver abaixo) |
 | Quem cria e mantém a API de leitura | **o programador**, na máquina host, que alcança o banco e a VM ao mesmo tempo |
 | A TI aceita publicar a API por HTTPS para fora? | **sim** (09/10). Fica a "opção 2 com API"; a opção 3 (cópia na nuvem) sai da mesa |
 | A gerência quer uma versão externa? | **sim** (09/10). A fase 4 vai até o passo 11, a publicação para fora |
 
 ### O que a versão do banco muda
 
-Consultado em 07/10: **PostgreSQL 11.14** (Red Hat, 64 bits), com **PostGIS 2.5.3** e nenhuma
-outra das extensões procuradas.
+Consultado em 09/10 pela conexão de teste: **PostgreSQL 16.3** (Linux, 64 bits), com o **PostGIS
+3.4.4** ativo no banco (e o `postgis_raster` e o `postgis_topology`). A consulta de 07/10, que
+dava o 11.14 com o PostGIS 2.5.3, tinha sido feita noutro banco, que não é o do projeto.
 
-**O que a 11 já tem e o plano usa:**
+**O que a 16 tem e o plano usa:**
 - tabelas particionadas, com chave primária na tabela inteira e `INSERT ... ON CONFLICT`
   funcionando nelas. É o que permite atualizar as últimas 48 h do INMET;
 - `COPY` direto na tabela particionada;
-- índices BRIN, pequenos e bons para tabelas que só crescem no tempo.
+- partições que se desanexam sem travar a tabela (`DETACH PARTITION ... CONCURRENTLY`): a
+  limpeza da grade não segura quem está lendo;
+- colunas calculadas pelo banco: a geometria de cada estação sai da latitude e da longitude;
+- chaves estrangeiras apontando para tabelas particionadas.
 
-**O que muda no jeito de fazer:**
+**O que continua igual:**
 - **Sem `pg_partman` e sem `pg_cron`, quem cuida das partições é o coletor.** A cada execução ele
-  cria as partições dos próximos dias e apaga as que passaram do prazo. O agendamento fica no
-  servidor, junto dos coletores, e não no banco.
-- **Três limites da 11 que o desenho respeita:**
-  - partição se apaga de uma vez, porque desanexar sem travar só chegou na 14; a limpeza segura
-    a tabela por um instante, de madrugada;
-  - não há colunas calculadas pelo banco, que só chegaram na 12;
-  - outras tabelas não podem apontar (chave estrangeira) para uma tabela particionada; isso só
-    chegou na 12.
+  cria as partições que vêm e apaga as que passaram do prazo. O agendamento fica no servidor,
+  junto dos coletores, e não no banco.
 - **O PostGIS é um bônus, não uma dependência.** Ele permite guardar estações e pontos da grade
   com geometria e perguntar, por exemplo, quais caem dentro de MS.
+- **O fuso do servidor é `America/Cuiaba`**, o mesmo de MS. As horas são gravadas com fuso
+  (`timestamptz`), em UTC, e o fuso do servidor não muda nada nelas.
 
-**Um alerta para a TI:** o PostgreSQL 11 está fora de suporte desde novembro de 2023 e não recebe
-mais correções de segurança. O banco continua fechado para fora em todas as opções, e é a API que
-vai para a internet na fase 4. Mesmo assim, vale recomendar uma atualização (14 ou mais nova) em
-algum momento. O plano não depende dela.
+A 16 tem suporte até novembro de 2028.
 
 ## Fase 1: a fundação, sem mudar nada para a equipe
 
@@ -112,7 +109,7 @@ das estações, os três modelos, a rodada e os pedidos de até 600 chamadas por
   INMET por hora. O coletor as busca por estação **uma vez por dia** (decidido em 09/10): umas 740
   consultas a mais por dia, espalhadas.
 - *Como confirmar:* testes contra um PostgreSQL de verdade, de dois jeitos: o GitHub Actions sobe
-  um PostgreSQL 11 com PostGIS só para os testes, e na máquina do programador, que é a mesma do
+  um PostgreSQL 16 com PostGIS só para os testes, e na máquina do programador, que é a mesma do
   DBeaver, os testes usam um schema de teste no servidor de verdade (`climageo_teste`), com a
   conexão no `.env`.
 

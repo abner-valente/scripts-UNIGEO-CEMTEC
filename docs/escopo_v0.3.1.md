@@ -331,7 +331,8 @@ sua tabela: o INMET do Brasil inteiro, de hora em hora, e o Open-Meteo de MS. O 
 ainda está aberto.
 
 Em 07/10 ficaram definidos mais dois pontos:
-- **O banco é PostgreSQL**, versão 11.14, com PostGIS. O particionamento por dia de coleta usa o
+- **O banco é PostgreSQL**, versão 16.3, com PostGIS 3.4.4 (corrigido em 09/10: a consulta de
+  07/10, que dava o 11.14, tinha sido feita noutro banco). O particionamento por dia de coleta usa o
   particionamento nativo dele, e é o coletor quem cria e apaga as partições, porque o banco não tem
   `pg_partman` nem `pg_cron` (detalhes em [`plano_arquitetura.md`](plano_arquitetura.md)).
   As rodadas entram em lote (`COPY`), porque são ~500 mil linhas cada. A atualização das últimas
