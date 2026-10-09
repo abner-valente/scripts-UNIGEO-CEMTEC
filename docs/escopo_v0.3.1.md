@@ -388,8 +388,11 @@ HTTPS. Enquanto isso, a versão da nuvem segue pela opção 1.
 ## Fora do escopo
 
 - **Outros estados**, por causa do custo (decisão 1).
-- **Previsão na linha de comando** (`main.py`). Pode virar um produto depois que a página estiver
-  validada pela equipe.
+- **Previsão na linha de comando** (`main.py`). Fica para a v0.4.x (decidido em 09/10/2026), lendo
+  do banco. Buscando direto no Open-Meteo, cada máquina gastaria a cota por conta própria (uma
+  execução completa custa umas 1.000 chamadas), e todas saem pelo mesmo endereço da unidade. Com
+  o banco, os dados também ficam à mão para conferir. Antes, as contas de `app/previsao.py` (e as
+  escalas de `app/variaveis.py`) precisam ir para `modulos/`, que não importa nada de `app/`.
 - **Previsto contra observado.** A comparação com as estações do INMET, para a equipe saber em
   que modelo confiar em MS, fica para a versão seguinte. Os dados para ela começam a ser
   guardados já nesta (decisão 6).

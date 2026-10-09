@@ -176,7 +176,7 @@ ela continua sob demanda, a 0,5°, até a publicação da API (passo 11).
 | Versão | O que entra |
 |---|---|
 | **v0.3.x** | a fase 1 e a página de previsão sob demanda |
-| **v0.4.x** | o banco, os dois coletores e o servidor interno no Windows (fases 2 e 3); a página de previsão passa a ler do banco no servidor |
+| **v0.4.x** | o banco, os dois coletores e o servidor interno no Windows (fases 2 e 3); a página de previsão passa a ler do banco no servidor; o produto de previsão do `main.py` (decidido em 09/10/2026), lendo do banco |
 | **v0.5.x** | a API de leitura e a versão externa (fase 4) |
 
 Cada versão entra na `main` por PR, como de costume. O Streamlit Cloud acompanha a `main`; o
