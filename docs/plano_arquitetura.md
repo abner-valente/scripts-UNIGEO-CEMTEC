@@ -96,8 +96,9 @@ das estações, os três modelos, a rodada e os pedidos de até 600 chamadas por
 ## Fase 2: o banco e os coletores
 
 **3. `banco/esquema.sql` e `modulos/banco.py`.**
-- As tabelas: o cadastro de estações, as leituras horárias do INMET, a previsão horária e as
-  semanas do EC46, com as partições por dia de coleta. **Só as horas** (decidido em 09/10): o dia,
+- As tabelas: o cadastro de estações, as leituras horárias do INMET, a previsão horária em duas
+  tabelas (a da grade, com partições por dia de coleta, apagadas depois de 21 dias; a das
+  estações, com partições por mês, para sempre; uma *view* junta as duas) e as semanas do EC46. **Só as horas** (decidido em 09/10): o dia,
   a semana e o mês saem delas na leitura, pela regra do Python. Para o DBeaver, *views* de dias e
   meses, com um teste que confere que dão o mesmo que o Python. O EC46 é a exceção: chega por
   semana, com a anomalia já calculada, e é guardado assim.

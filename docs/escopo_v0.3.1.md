@@ -126,13 +126,20 @@ mais tarde, ao previsto contra observado.
 
 **6. Guardar só as horas, por rodada, só inserindo; o dia, a semana e o mês saem delas**
 (decidido em 07/10; em 09/10, a tabela diária saiu). A previsão horária tem uma coluna por
-variável. O EC46 é a exceção e tem tabela própria, porque já chega por semana:
+variável, e os três modelos ficam juntos, com a coluna `modelo` na chave. A grade e as estações
+ficam em **duas tabelas** com as mesmas colunas (decidido em 09/10), porque têm prazos
+diferentes e a limpeza apaga partições inteiras: numa tabela só, a da grade levaria junto as
+horas das estações. Uma *view* junta as duas para consultar. O EC46 é a exceção e tem tabela
+própria, porque já chega por semana. Tudo no schema `climageo`:
 
 ```
-previsao_horaria
+previsao_horaria_grade     (partições por dia de coleta; apagadas depois de 21 dias)
+previsao_horaria_estacao   (partições por mês; para sempre)
   modelo, rodada_utc, ponto, latitude, longitude, hora_prevista_utc,
   temperatura, umidade, orvalho, chuva, vento, rajada, direcao
   chave: (modelo, rodada_utc, ponto, hora_prevista_utc)
+
+previsao_horaria (view: as duas juntas)
 
 previsao_semanal (o EC46, como chega do Open-Meteo)
   modelo, rodada_utc, ponto, latitude, longitude, semana,
