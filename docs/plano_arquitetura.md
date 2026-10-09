@@ -108,6 +108,12 @@ das estações, os três modelos, a rodada e os pedidos de até 600 chamadas por
 - **A bateria e a sensação térmica** (`TEN_BAT`, `TEM_SEN`, `TEM_CPU`) não vêm no endereço do
   INMET por hora. O coletor as busca por estação **uma vez por dia** (decidido em 09/10): umas 740
   consultas a mais por dia, espalhadas.
+- **Feito em 09/10, na v0.4.1:** o `banco/esquema.sql` e o `modulos/banco.py`, com 15 testes que
+  passam contra o `climageo_teste` no servidor de verdade. Uma rodada real da grade do ECMWF
+  (59.808 linhas) grava em 1,3 s, volta em 0,2 s e ocupa 12 MB, com o índice: uns 200 bytes por
+  linha. Na grade de 0,25° com duas rodadas por dia, os 21 dias ficam em ~4 GB (o escopo
+  estimava ~3 GB); com as quatro rodadas de cada modelo, em ~8 GB. O passo 5 decide quais rodadas
+  o coletor guarda.
 - *Como confirmar:* testes contra um PostgreSQL de verdade, de dois jeitos: o GitHub Actions sobe
   um PostgreSQL 16 com PostGIS só para os testes, e na máquina do programador, que é a mesma do
   DBeaver, os testes usam um schema de teste no servidor de verdade (`climageo_teste`), com a

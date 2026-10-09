@@ -9,6 +9,15 @@ Cada versão separa as mudanças em até quatro grupos:
 
 Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
+## [0.4.1] — em andamento
+
+Ainda não está na `main`. É o começo do banco da UNIGEO e dos coletores (fase 2 de `docs/plano_arquitetura.md`). Para quem usa o painel e o `main.py`, nada muda ainda: os dois seguem buscando nas APIs.
+
+### Novo
+
+- **O esquema do banco** (`banco/esquema.sql`, no schema `climageo` do PostgreSQL 16 da UNIGEO) e o `modulos/banco.py`, a única peça que fala SQL. O banco guarda só as horas, do INMET e da previsão; o dia, a semana e o mês saem delas na leitura. O EC46 fica por semana, como chega.
+- **O `.env.example` ganhou as conexões do banco** (`BANCO_GRAVACAO`, `BANCO_LEITURA` e `BANCO_TESTE`). Por enquanto, só quem programa usa a de teste.
+
 ## [0.3.1] — 08/10/2026
 
 Levada à `main` em 08/10/2026. As decisões desta versão estão em `docs/escopo_v0.3.1.md`, e o plano até o servidor da unidade, em `docs/plano_arquitetura.md`.

@@ -547,6 +547,8 @@ pytest
 
 Rode os testes antes de cada commit: eles conferem as janelas de tempo, os cálculos, o acesso à API e a execução completa (Excel e mapas) de cada produto.
 
+Os testes do banco (`tests/test_banco.py`) precisam de um PostgreSQL de verdade: eles usam a conexão `BANCO_TESTE` do `.env` e trabalham no schema `climageo_teste`, que apagam e recriam a cada execução. Sem essa linha no `.env`, eles são pulados.
+
 Os testes também rodam automaticamente no GitHub (GitHub Actions, em Linux, com Python 3.14) a cada push e a cada pull request para a `main`. O resultado aparece como ✓ ou ✗ ao lado de cada commit e na aba **Actions** do repositório, onde também é possível rodá-los manualmente.
 
 ## Explorador (Streamlit)
@@ -706,6 +708,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │   ├── fonte.py          # De onde vêm os dados: é a ele que os produtos e o painel pedem (hoje, as APIs)
 │   ├── inmet.py          # Acesso à API do INMET (estações e dados horários)
 │   ├── openmeteo.py      # Previsão do Open-Meteo (ECMWF, GFS e ICON), hora a hora, e o dia tirado das horas
+│   ├── banco.py          # O banco da UNIGEO (PostgreSQL): a única peça que fala SQL
 │   ├── calculos.py       # Recorte no tempo, extremos, acumulados e interpolação IDW
 │   ├── mapas.py          # Mapas pontuais, interpolados e de classes (níveis de risco)
 │   ├── graficos.py       # Gráficos de barras e calendário, com o estilo comum aos produtos
@@ -727,6 +730,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │   └── requirements.txt  # Dependências só do explorador
 ├── ferramentas/          # Scripts auxiliares (ex.: preparar os shapefiles de um estado)
 ├── servidor/             # Para o servidor Windows da unidade: iniciar_painel.bat (logs em logs/)
+├── banco/                # O esquema do banco (esquema.sql): as tabelas do schema climageo
 ├── tests/                # Testes automatizados (pytest), com a API do INMET simulada
 ├── .github/workflows/    # Execução automática dos testes no GitHub (GitHub Actions)
 ├── docs/                 # Documentos da equipe (ex.: questões para a meteorologia, guias de migração e de manutenção)
@@ -739,7 +743,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 ├── requirements-dev.txt  # Dependências de desenvolvimento (testes)
 ├── pytest.ini            # Configuração dos testes
 ├── CHANGELOG.md          # O que mudou em cada versão, para quem usa
-├── .env                  # Token do INMET (local, fora do controle de versão)
+├── .env                  # Token do INMET e conexões do banco (local, fora do controle de versão)
 ├── .env.example          # Modelo do arquivo .env
 └── README.md
 ```

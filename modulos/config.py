@@ -170,6 +170,12 @@ TOKEN_EXEMPLO = "seu_token_aqui"  # valor do .env.example, tratado como "não co
 # e a API de leitura chegam nas próximas versões (docs/plano_arquitetura.md).
 FONTE_DADOS = os.getenv("FONTE_DADOS", "apis").strip().lower()
 
+# O banco da UNIGEO (PostgreSQL 16, com PostGIS): o schema das tabelas e o nome da variável do .env
+# com a conexão de cada papel. As conexões em si nunca ficam no código (modelo: .env.example).
+BANCO_SCHEMA = os.getenv("BANCO_SCHEMA", "climageo").strip()
+BANCO_CONEXOES = {"gravacao": "BANCO_GRAVACAO", "leitura": "BANCO_LEITURA", "teste": "BANCO_TESTE"}
+BANCO_ESQUEMA = RAIZ / "banco" / "esquema.sql"
+
 # =====================================================
 # API DO INMET
 # =====================================================
