@@ -101,17 +101,29 @@ das estações, os três modelos, a rodada e os pedidos de até 600 chamadas por
   a semana e o mês saem delas na leitura, pela regra do Python. Para o DBeaver, *views* de dias e
   meses, com um teste que confere que dão o mesmo que o Python. O EC46 é a exceção: chega por
   semana, com a anomalia já calculada, e é guardado assim.
+- **Tudo num schema próprio, `climageo`** (decidido em 09/10).
 - Dois usuários no banco: um que grava, para os coletores, e um que só lê, para a API e o painel.
+  **Eles já existem** (09/10), e quem os administra é o programador. Um cuidado: o coletor cria e
+  apaga as partições sozinho, e o PostgreSQL só deixa fazer isso o dono da tabela; as tabelas
+  devem ser criadas pelo usuário que grava, ou passadas para ele.
 - A gravação em lote (`COPY`) e a atualização das últimas 48 h do INMET.
-- *Como confirmar:* testes contra um PostgreSQL de verdade, que o GitHub Actions sobe só para os
-  testes.
+- **A bateria e a sensação térmica** (`TEN_BAT`, `TEM_SEN`, `TEM_CPU`) não vêm no endereço do
+  INMET por hora. O coletor as busca por estação **uma vez por dia** (decidido em 09/10): umas 740
+  consultas a mais por dia, espalhadas.
+- *Como confirmar:* testes contra um PostgreSQL de verdade, de dois jeitos: o GitHub Actions sobe
+  um PostgreSQL 11 com PostGIS só para os testes, e na máquina do programador, que é a mesma do
+  DBeaver, os testes usam um schema de teste no servidor de verdade (`climageo_teste`), com a
+  conexão no `.env`.
 
 **4. O coletor do INMET**, em três passos:
 1. Testar o endereço que devolve todas as estações de uma hora (`/estacao/dados/{data}/{hora}`).
-   Ele não é documentado: os dados dele têm de bater com os da consulta por estação.
+   Ele não é documentado: os dados dele têm de bater com os da consulta por estação. **Feito em
+   09/10:** com o token, 740 estações de uma hora em 0,8 s. Os valores batem com a consulta por
+   estação, salvo a radiação, que vem com três casas em vez de uma. Faltam três campos: a
+   sensação térmica, a bateria e a temperatura do processador (ver o passo 3).
 2. O coletor de hora em hora, que rebusca as últimas 48 h e atualiza o que mudou.
-3. A carga do histórico. Desde 2018 são umas 70 mil consultas de ~1 s: algumas horas de
-   execução, uma vez só.
+3. A carga do histórico. Desde 2018 são umas 75 mil consultas de ~1 s (uma por hora, para o
+   Brasil inteiro): umas 21 horas de execução, uma vez só.
 
 **5. O coletor do Open-Meteo.** Confere a rodada mais recente de cada modelo, busca se ela ainda
 não está no banco, grava as horas (e, uma vez por dia, as semanas do EC46), e apaga as
