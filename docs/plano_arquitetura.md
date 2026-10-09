@@ -41,7 +41,7 @@ nuvem continuam indo direto às APIs.
 |---|---|
 | A VM | **Windows**, com acesso do programador. **O Docker não está rodando nela**: por ora, o painel e os coletores rodam direto no Windows (ver abaixo) |
 | A VM alcança o INMET | **sim** |
-| A VM alcança o Open-Meteo | a testar no PowerShell, com `Invoke-WebRequest` (o `curl` do PowerShell não é o curl de verdade) |
+| A VM alcança o Open-Meteo | **sim** (09/10): os quatro endereços que o painel usa (a previsão, a API sazonal e os metadados das duas) responderam HTTP 200 no PowerShell, com `Invoke-WebRequest`. Se o Python falhar lá mais tarde, é o proxy, que ele lê de outro lugar |
 | Versão do Windows da VM | **Windows Server 2022** (09/10): recente o bastante para o Python 3.14 |
 | Versão do PostgreSQL e extensões disponíveis | **PostgreSQL 11.14**, com **PostGIS 2.5.3** instalado; sem `pg_partman`, `pg_cron` nem `timescaledb` (ver abaixo) |
 | Quem cria e mantém a API de leitura | **o programador**, na máquina host, que alcança o banco e a VM ao mesmo tempo |
