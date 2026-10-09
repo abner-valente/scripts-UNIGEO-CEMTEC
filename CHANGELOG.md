@@ -9,9 +9,14 @@ Cada versão separa as mudanças em até quatro grupos:
 
 Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
-## [0.3.1] — em andamento
+## [0.3.1] — 08/10/2026
 
-Ainda não está na `main`. O plano desta versão está em `docs/escopo_v0.3.1.md` e `docs/plano_arquitetura.md`.
+Levada à `main` em 08/10/2026. As decisões desta versão estão em `docs/escopo_v0.3.1.md`, e o plano até o servidor da unidade, em `docs/plano_arquitetura.md`.
+
+### Atenção ao atualizar
+
+- **Quem roda o painel na própria máquina precisa reiniciá-lo** (Ctrl+C e `streamlit run app/explorador.py` de novo) depois de atualizar: mudaram arquivos que o Streamlit não relê sozinho. As dependências não mudaram. No Streamlit Cloud, é o Reboot.
+- **A previsão é buscada no Open-Meteo quando alguém abre as páginas**, e guardada por rodada para todos que usam o mesmo painel. Ainda não há banco nem histórico das rodadas: isso vem na 0.4.
 
 ### Novo
 
