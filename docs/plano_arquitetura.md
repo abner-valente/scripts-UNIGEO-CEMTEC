@@ -37,16 +37,16 @@ nuvem continuam indo direto às APIs.
 
 ## Fase 0: o que depende de outras pessoas
 
-| Item | Situação em 07/10 |
+| Item | Situação (07 a 09/10) |
 |---|---|
 | A VM | **Windows**, com acesso do programador. **O Docker não está rodando nela**: por ora, o painel e os coletores rodam direto no Windows (ver abaixo) |
 | A VM alcança o INMET | **sim** |
 | A VM alcança o Open-Meteo | a testar no PowerShell, com `Invoke-WebRequest` (o `curl` do PowerShell não é o curl de verdade) |
-| Versão do Windows da VM | a conferir: o Python 3.14 pede um Windows recente |
+| Versão do Windows da VM | **Windows Server 2022** (09/10): recente o bastante para o Python 3.14 |
 | Versão do PostgreSQL e extensões disponíveis | **PostgreSQL 11.14**, com **PostGIS 2.5.3** instalado; sem `pg_partman`, `pg_cron` nem `timescaledb` (ver abaixo) |
 | Quem cria e mantém a API de leitura | **o programador**, na máquina host, que alcança o banco e a VM ao mesmo tempo |
-| A TI aceita publicar a API por HTTPS para fora? | a perguntar. Decide entre a "opção 2 com API" e a opção 3 (cópia na nuvem) |
-| A gerência quer uma versão externa? | a perguntar. Sem ela, a fase 4 para no passo 10 |
+| A TI aceita publicar a API por HTTPS para fora? | **sim** (09/10). Fica a "opção 2 com API"; a opção 3 (cópia na nuvem) sai da mesa |
+| A gerência quer uma versão externa? | **sim** (09/10). A fase 4 vai até o passo 11, a publicação para fora |
 
 ### O que a versão do banco muda
 

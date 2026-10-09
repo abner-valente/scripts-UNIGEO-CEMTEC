@@ -346,7 +346,7 @@ Foram consideradas quatro formas:
 |---|---|---|
 | 1. Direto das APIs | Como hoje: consulta o INMET e o Open-Meteo sozinha. Sem o histórico do banco, com a previsão a 0,5° sob demanda. | o ponto de partida: não pede nada novo |
 | 2. O banco aberto para a internet | O app da nuvem faz consultas SQL no PostgreSQL da unidade | **descartada**: expõe o banco |
-| **2 com API. Uma API só de leitura na frente do banco** | O app da nuvem pede à API, por HTTPS, com chave | **escolhida em 07/10**, se houver versão externa com os mesmos dados |
+| **2 com API. Uma API só de leitura na frente do banco** | O app da nuvem pede à API, por HTTPS, com chave | **escolhida em 07/10**; a versão externa e a publicação por HTTPS foram confirmadas em 09/10 |
 | 3. Uma cópia publicada na nuvem | O servidor envia uma cópia para fora, e a nuvem lê a cópia | a saída se a TI não aceitar nenhuma conexão de fora para dentro |
 
 **Por que a API.** Ela já seria necessária de qualquer jeito: é o que deixa o `main.py`, nas
@@ -382,8 +382,8 @@ O resto do código não sabe de onde os dados vêm. A API é criada e mantida pe
 máquina host, que alcança o banco e a VM. A tecnologia ainda vai ser escolhida; o candidato
 natural é o FastAPI, por ser Python como o resto.
 
-**Depende de:** a gerência aprovar uma versão externa, e a TI aceitar publicar um serviço por
-HTTPS. Enquanto isso, a versão da nuvem segue pela opção 1.
+**Confirmado em 09/10:** a gerência quer a versão externa, e a TI aceita publicar a API por HTTPS.
+Até a API ficar pronta (v0.5.x), a versão da nuvem segue pela opção 1.
 
 ## Fora do escopo
 
