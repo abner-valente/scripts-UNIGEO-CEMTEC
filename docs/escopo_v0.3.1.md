@@ -124,8 +124,9 @@ Por isso os mapas **não** são feitos interpolando a previsão nos pontos das e
 mostra um núcleo de chuva onde há estação. Os pontos das estações servem aos gráficos de linha e,
 mais tarde, ao previsto contra observado.
 
-**6. Guardar as horas, por rodada, só inserindo, e o diário tirado delas** (decidido em 07/10).
-Duas tabelas, as duas com uma coluna por variável:
+**6. Guardar só as horas, por rodada, só inserindo; o dia, a semana e o mês saem delas**
+(decidido em 07/10; em 09/10, a tabela diária saiu). A previsão horária tem uma coluna por
+variável. O EC46 é a exceção e tem tabela própria, porque já chega por semana:
 
 ```
 previsao_horaria
@@ -133,19 +134,29 @@ previsao_horaria
   temperatura, umidade, orvalho, chuva, vento, rajada, direcao
   chave: (modelo, rodada_utc, ponto, hora_prevista_utc)
 
-previsao_diaria
-  modelo, rodada_utc, ponto, latitude, longitude, dia_previsto,
-  temp_max, temp_min, temp_media, umid_min, orvalho_medio, chuva, vento_max, rajada_max,
-  direcao_dominante, risco_max
-  chave: (modelo, rodada_utc, ponto, dia_previsto)
+previsao_semanal (o EC46, como chega do Open-Meteo)
+  modelo, rodada_utc, ponto, latitude, longitude, semana,
+  temperatura, anom_temperatura, temp_max, anom_temp_max, temp_min, anom_temp_min,
+  chuva, anom_chuva
+  chave: (modelo, rodada_utc, ponto, semana)
 ```
 
 - **Cada rodada nova é um insert; nada é atualizado.** A "previsão atual" é uma consulta, ou uma
   view, que pega a rodada mais recente de cada modelo. A virada do dia não pede tratamento
   nenhum, e uma busca que falhe no meio não mistura rodadas.
-- **O diário é calculado das horas pelo coletor**, uma vez por rodada, pela regra da decisão 4, e
-  gravado na tabela diária. A mesma função faz isso para todos os pontos: não há duas versões de
-  "máxima do dia". Ele sobrevive à limpeza das horas antigas da grade.
+- **Só as horas, também no INMET** (decidido em 09/10). O dia, a semana e o mês são tirados das
+  horas na hora de ler, e não guardados: uma fonte só, e nenhuma chance de uma tabela diária
+  discordar da horária. Em 07/10 ficou decidido guardar também uma tabela diária da previsão; ela
+  saiu.
+- **A regra do dia continua sendo uma só, a do Python** (`openmeteo.diario`,
+  `previsao.diario_com_risco` e o catálogo `app/variaveis.py`), que o painel e os produtos já
+  usam. Para olhar dias e meses direto no DBeaver, o banco ganha *views*, com um teste que confere
+  que elas dão o mesmo que o Python. Sem o teste, seriam duas versões da "máxima do dia".
+- **Apagada a hora, vai junto o dia.** A grade guarda 21 dias de horas, e depois disso o dia
+  dela não existe mais. A previsão nas estações fica para sempre, e é dela o previsto contra o
+  observado. Guardar a grade horária por um ano daria uns 50 GB.
+- **O EC46 é guardado por semana, como chega.** A anomalia vem calculada contra a normal do
+  modelo, tirada das reprevisões do ECMWF, e isso não se reconstrói a partir de horas.
 - **O histórico das rodadas fica**: o que cada rodada previa para um dia que já passou. É a base
   do previsto contra observado.
 - **Uma coluna por variável, e não uma linha por variável**, senão as linhas se multiplicam
@@ -157,9 +168,9 @@ Quanto guardar:
 
 | O quê | Prazo | Por quê | Tamanho |
 |---|---|---|---|
-| Grade, horária e diária (0,25°) | **21 dias** | 14 de horizonte + uma semana de folga para conferir a semana que passou com todas as antecedências | ~21 milhões de linhas horárias, ~3 GB |
-| Estações, horária | **para sempre** | permite conferir horários: "a chuva chegou na hora prevista?" | ~37 milhões de linhas e ~4 GB por ano |
-| Estações, diária | **para sempre** | é o que a verificação do dia a dia mais usa | ~1,5 milhão de linhas por ano |
+| Grade, horária (0,25°) | **21 dias** | 14 de horizonte + uma semana de folga para conferir a semana que passou com todas as antecedências | ~21 milhões de linhas, ~3 GB |
+| Estações, horária | **para sempre** | dela saem o dia, a semana e o mês, e permite conferir horários: "a chuva chegou na hora prevista?" | ~37 milhões de linhas e ~4 GB por ano |
+| EC46, semanal (grade e estações) | **para sempre** | é pequena: uma rodada por dia, cinco ou seis semanas por ponto | ~500 mil linhas por ano |
 
 A previsão incha por um motivo próprio: **cada hora futura é guardada uma vez por rodada**. Com 14
 dias de horizonte e duas rodadas por dia, cada hora real fica guardada umas 28 vezes, e esse é o
@@ -178,7 +189,8 @@ cada modelo.
 
 **8. Risco de fogo previsto, hora a hora, das mesmas horas.** A temperatura, a umidade e a
 rajada da regra 30-30-30 estão entre as sete variáveis horárias: não há pedido separado. A regra é
-aplicada **a cada hora**, como no produto, e o pior nível do dia vai para a tabela diária. Ela já
+aplicada **a cada hora**, como no produto, e o pior nível do dia sai das horas, como os outros
+valores do dia. Ela já
 existe em `modulos/produtos/risco_fogo.py` e é usada como está, sem reescrever. Do dia 8 ao 14,
 sem o ICON, sai de dois modelos.
 
@@ -294,8 +306,8 @@ decide de quais rodadas precisa.
      80 mm. O ranking do boletim é o dos **maiores desvios do normal**, para cima ou para baixo.
 6. **Risco de fogo previsto.** **Feito em 08/10**:
    - a regra é a do produto (`risco_fogo.condicoes_atendidas`), sem reescrever, aplicada a cada
-     hora prevista; o dia segue a regra do produto (`dia_da_leitura`). A tabela diária ganha o
-     `risco_max` da decisão 6 e as horas em risco alto (`app/previsao.diario_com_risco`);
+     hora prevista; o dia segue a regra do produto (`dia_da_leitura`). O dia ganha o pior nível
+     (`risco_max`) e as horas em risco alto, tirados das horas (`app/previsao.diario_com_risco`);
    - nos **Mapas**, o pior nível do dia e as horas em risco alto. A superfície é feita como o
      produto faz: em cada hora, as três variáveis viram superfície (bilinear) e a regra é
      aplicada em cada célula. Aplicar a regra nos 178 pontos e interpolar o nível daria degraus

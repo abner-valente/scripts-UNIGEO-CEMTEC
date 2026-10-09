@@ -41,6 +41,7 @@ nuvem continuam indo direto às APIs.
 |---|---|
 | A VM | **Windows**, com acesso do programador. **O Docker não está rodando nela**: por ora, o painel e os coletores rodam direto no Windows (ver abaixo) |
 | A VM alcança o INMET | **sim** |
+| A VM alcança o banco | **sim** (09/10): uma aplicação que já roda nela usa o banco |
 | A VM alcança o Open-Meteo | **sim** (09/10): os quatro endereços que o painel usa (a previsão, a API sazonal e os metadados das duas) responderam HTTP 200 no PowerShell, com `Invoke-WebRequest`. Se o Python falhar lá mais tarde, é o proxy, que ele lê de outro lugar |
 | Versão do Windows da VM | **Windows Server 2022** (09/10): recente o bastante para o Python 3.14 |
 | Versão do PostgreSQL e extensões disponíveis | **PostgreSQL 11.14**, com **PostGIS 2.5.3** instalado; sem `pg_partman`, `pg_cron` nem `timescaledb` (ver abaixo) |
@@ -95,8 +96,11 @@ das estações, os três modelos, a rodada e os pedidos de até 600 chamadas por
 ## Fase 2: o banco e os coletores
 
 **3. `banco/esquema.sql` e `modulos/banco.py`.**
-- As tabelas: o cadastro de estações, as leituras do INMET, a previsão horária e a previsão
-  diária, com as partições por dia de coleta.
+- As tabelas: o cadastro de estações, as leituras horárias do INMET, a previsão horária e as
+  semanas do EC46, com as partições por dia de coleta. **Só as horas** (decidido em 09/10): o dia,
+  a semana e o mês saem delas na leitura, pela regra do Python. Para o DBeaver, *views* de dias e
+  meses, com um teste que confere que dão o mesmo que o Python. O EC46 é a exceção: chega por
+  semana, com a anomalia já calculada, e é guardado assim.
 - Dois usuários no banco: um que grava, para os coletores, e um que só lê, para a API e o painel.
 - A gravação em lote (`COPY`) e a atualização das últimas 48 h do INMET.
 - *Como confirmar:* testes contra um PostgreSQL de verdade, que o GitHub Actions sobe só para os
@@ -110,8 +114,8 @@ das estações, os três modelos, a rodada e os pedidos de até 600 chamadas por
    execução, uma vez só.
 
 **5. O coletor do Open-Meteo.** Confere a rodada mais recente de cada modelo, busca se ela ainda
-não está no banco, grava a horária e a diária, e apaga as partições que passaram de 21 dias na
-grade.
+não está no banco, grava as horas (e, uma vez por dia, as semanas do EC46), e apaga as
+partições que passaram de 21 dias na grade.
 
 **6. Rodar em paralelo por alguns dias.**
 - *Como confirmar:* o banco contra as APIs, dia a dia, até baterem.

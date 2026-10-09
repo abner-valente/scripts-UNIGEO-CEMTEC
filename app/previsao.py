@@ -227,7 +227,7 @@ class MapaPrevisto:
 
     nome: str          # na tela
     titulo: str        # no PNG do boletim
-    coluna: str        # da tabela diária do openmeteo
+    coluna: str        # do dia tirado das horas (`openmeteo.diario`)
     grandeza: str      # dá a escala de cores do observado e o plural do ranking
     unidade: str
     paleta: str
@@ -537,7 +537,8 @@ def risco_por_dia(horaria: pd.DataFrame, fuso=config.FUSO_MS) -> pd.DataFrame:
 def diario_com_risco(horaria: pd.DataFrame, fuso=config.FUSO_MS) -> pd.DataFrame:
     """O dia do `openmeteo.diario`, com o pior nível de risco e as horas em risco alto.
 
-    É a tabela diária do escopo (decisão 6), com o `risco_max` dela.
+    É o dia da decisão 6 do escopo, com o `risco_max` dela. Desde 09/10/2026 ele não é guardado no
+    banco: sai das horas na leitura, por esta função.
     """
     dias = openmeteo.diario(horaria, fuso)
     risco = risco_por_dia(horaria, fuso)
