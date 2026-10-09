@@ -37,14 +37,26 @@ def _sem_token(texto) -> str:
     return texto.replace(config.TOKEN_INMET, "***") if config.TOKEN_INMET else texto
 
 
+def _recusada_por_limite(resposta: requests.Response) -> bool:
+    """O INMET passou do limite de consultas: respondeu 200 com um aviso curto, e não com o JSON."""
+    texto = resposta.text
+    return len(texto) < 200 and config.AVISO_DE_LIMITE in texto
+
+
 def _consultar(url: str, timeout: int) -> list | dict:
     """Consulta a API e devolve a resposta já convertida de JSON.
 
     Falhas passageiras (conexão encerrada, erro 5xx, resposta cortada) são repetidas até
     config.TENTATIVAS vezes, dobrando a espera a cada uma. Levanta ErroINMET se nenhuma der certo.
+
+    A recusa pelo limite de 100 consultas por minuto não é falha e não gasta tentativa: espera-se,
+    dobrando a espera, até o minuto virar (ver config.AVISO_DE_LIMITE). Antes de 09/10/2026 ela
+    caía como "resposta não é JSON", e três recusas seguidas, em 6 s, davam a estação por perdida.
     """
     espera = config.PAUSA_ENTRE_TENTATIVAS
-    for tentativa in range(1, config.TENTATIVAS + 1):
+    espera_no_limite = config.PAUSA_NO_LIMITE
+    tentativa = recusas = 0
+    while True:
         try:
             # A espera entre tentativas fica fora da vaga: segurá-la enquanto se dorme tiraria
             # do ar uma das oito faixas justamente quando a API está ruim.
@@ -53,9 +65,18 @@ def _consultar(url: str, timeout: int) -> list | dict:
             if 400 <= resposta.status_code < 500:  # token inválido, estação inexistente: repetir não resolve
                 raise ErroINMET(f"HTTP {resposta.status_code}: {_sem_token(resposta.text[:100])}")
             resposta.raise_for_status()
-            return resposta.json()
+            if not _recusada_por_limite(resposta):
+                return resposta.json()
         except (requests.RequestException, ValueError) as erro:
             motivo = _sem_token(erro)
+        else:
+            recusas += 1
+            if recusas > config.RECUSAS_NO_LIMITE:
+                raise ErroINMET(f"o INMET recusou a consulta {recusas} vezes seguidas pelo limite de consultas")
+            time.sleep(espera_no_limite)
+            espera_no_limite = min(espera_no_limite * 2, config.PAUSA_MAXIMA_NO_LIMITE)
+            continue
+        tentativa += 1
         if tentativa == config.TENTATIVAS:
             raise ErroINMET(f"{motivo} (depois de {tentativa} tentativas)")
         print(f"    ⚠️ {motivo} — tentando de novo em {espera:g} s ({tentativa}/{config.TENTATIVAS})")
@@ -72,13 +93,22 @@ def formatar_nome_estacao(nome) -> str:
     )
 
 
+def lista_do_inmet() -> pd.DataFrame:
+    """A lista das estações automáticas como o INMET a devolve: o país todo, as em pane também.
+
+    É o cadastro de que o coletor do banco precisa (altitude, situação, início da operação). Quem
+    vai pedir dados usa as funções de baixo, que tiram as em pane.
+    """
+    return pd.DataFrame(_consultar(config.URL_ESTACOES, config.TIMEOUT_ESTACOES))
+
+
 def _todas_as_estacoes() -> pd.DataFrame:
     """A lista inteira do INMET (o país todo), com coordenadas numéricas e o nome formatado.
 
     Fora as estações em pane: a API as devolve junto com as operantes, e pedir dados delas é
     consulta que sempre volta vazia. Em MS são 3 das 62.
     """
-    estacoes = pd.DataFrame(_consultar(config.URL_ESTACOES, config.TIMEOUT_ESTACOES))
+    estacoes = lista_do_inmet()
     if "CD_SITUACAO" in estacoes:
         estacoes = estacoes[estacoes["CD_SITUACAO"].str.strip().str.casefold() == SITUACAO_OPERANTE]
     estacoes = estacoes.copy()
@@ -129,7 +159,29 @@ def baixar_dados_estacao(codigo: str, inicio: datetime, fim: datetime,
     registros = _consultar(url, config.TIMEOUT_DADOS)
     if not isinstance(registros, list) or not registros:
         return None
+    return _tabelar(registros, fuso)
 
+
+def baixar_hora(momento: datetime) -> pd.DataFrame:
+    """As leituras de todas as estações do INMET numa hora (UTC), numa consulta só.
+
+    É o endereço que o coletor do banco usa: ~740 estações em ~0,8 s. Vêm todas as estações, até
+    as em pane e as que já fecharam, cada uma com as medidas vazias quando não mediu; quem grava
+    é que descarta as linhas vazias. Ele não traz a sensação térmica, a bateria e a temperatura do
+    processador, que só a consulta por estação tem, e manda a radiação com três casas, e não com
+    uma (conferido em 09/10/2026). Devolve uma tabela vazia quando a hora não tem nada.
+    """
+    momento = momento.astimezone(config.FUSO_UTC)
+    url = config.URL_DADOS_DA_HORA.format(data=f"{momento:%Y-%m-%d}", hora=f"{momento:%H%M}",
+                                          token=config.TOKEN_INMET)
+    registros = _consultar(url, config.TIMEOUT_DADOS)
+    if not isinstance(registros, list) or not registros:
+        return pd.DataFrame(columns=["CD_ESTACAO", "dt_utc"])
+    return _tabelar(registros)
+
+
+def _tabelar(registros: list[dict], fuso: ZoneInfo | None = None) -> pd.DataFrame:
+    """Os registros da API numa tabela: as medidas como número e a hora em UTC (e na local, com o fuso)."""
     try:
         dados = pd.DataFrame(registros)
         for coluna in dados.columns.difference(COLUNAS_TEXTO):
@@ -138,7 +190,8 @@ def baixar_dados_estacao(codigo: str, inicio: datetime, fim: datetime,
         # HR_MEDICAO vem como "HHMM" (ex.: "1300"), em UTC
         horas = dados["HR_MEDICAO"].map(lambda hora: f"{str(hora).zfill(4)[:2]}:00")
         dados["dt_utc"] = pd.to_datetime(dados["DT_MEDICAO"] + " " + horas, errors="coerce", utc=True)
-        dados["dt_local"] = dados["dt_utc"].dt.tz_convert(fuso)
+        if fuso is not None:
+            dados["dt_local"] = dados["dt_utc"].dt.tz_convert(fuso)
     except (KeyError, TypeError, ValueError) as erro:
         raise ErroINMET(f"resposta em formato inesperado ({erro})") from erro
 

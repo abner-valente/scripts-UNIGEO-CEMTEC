@@ -106,14 +106,15 @@ das estações, os três modelos, a rodada e os pedidos de até 600 chamadas por
   devem ser criadas pelo usuário que grava, ou passadas para ele.
 - A gravação em lote (`COPY`) e a atualização das últimas 48 h do INMET.
 - **A bateria e a sensação térmica** (`TEN_BAT`, `TEM_SEN`, `TEM_CPU`) não vêm no endereço do
-  INMET por hora. O coletor as busca por estação **uma vez por dia** (decidido em 09/10): umas 740
-  consultas a mais por dia, espalhadas.
+  INMET por hora. O coletor as busca por estação **uma vez por dia** (decidido em 09/10), só nas
+  estações que têm leitura no banco: umas 520 consultas a mais por dia.
 - **Feito em 09/10, na v0.4.1:** o `banco/esquema.sql` e o `modulos/banco.py`, com 15 testes que
   passam contra o `climageo_teste` no servidor de verdade. Uma rodada real da grade do ECMWF
   (59.808 linhas) grava em 1,3 s, volta em 0,2 s e ocupa 12 MB, com o índice: uns 200 bytes por
   linha. Na grade de 0,25° com duas rodadas por dia, os 21 dias ficam em ~4 GB (o escopo
   estimava ~3 GB); com as quatro rodadas de cada modelo, em ~8 GB. O passo 5 decide quais rodadas
-  o coletor guarda.
+  o coletor guarda. No passo 4, as coordenadas da previsão passaram a `double precision`, para as
+  das estações (8 casas) voltarem exatas: a mesma rodada ficou em 13,5 MB, 226 bytes por linha.
 - *Como confirmar:* testes contra um PostgreSQL de verdade, de dois jeitos: o GitHub Actions sobe
   um PostgreSQL 16 com PostGIS só para os testes, e na máquina do programador, que é a mesma do
   DBeaver, os testes usam um schema de teste no servidor de verdade (`climageo_teste`), com a
@@ -126,8 +127,39 @@ das estações, os três modelos, a rodada e os pedidos de até 600 chamadas por
    estação, salvo a radiação, que vem com três casas em vez de uma. Faltam três campos: a
    sensação térmica, a bateria e a temperatura do processador (ver o passo 3).
 2. O coletor de hora em hora, que rebusca as últimas 48 h e atualiza o que mudou.
-3. A carga do histórico. Desde 2018 são umas 75 mil consultas de ~1 s (uma por hora, para o
-   Brasil inteiro): umas 21 horas de execução, uma vez só.
+3. A carga do histórico. Desde 2018 são umas 77 mil consultas (uma por hora, para o
+   Brasil inteiro): umas 22 horas de execução, a uma consulta por segundo, uma vez só.
+
+**Feito em 09/10, na v0.4.1:** o `modulos/coletor_inmet.py` e o `coletar.py` (`python coletar.py
+inmet`, `--extras` e `--historico DATA`), com o `servidor\coletar.bat` para o Agendador. Medido
+contra o INMET de verdade, gravando no `climageo_teste`:
+- as 48 horas, em 49 s: ~24 mil leituras de ~520 estações. Rodando de novo, nada é reescrito;
+- dois dias de histórico, em 50 s. A carga grava dia a dia e, interrompida, retoma pelas horas
+  que faltam;
+- a bateria das 523 estações com leitura, em 8,8 min, sem nenhuma falha;
+- **o banco devolve o mesmo número que a API**: nas 58 estações de MS com dado em 08/10, os 26.388
+  valores do dia (as medidas da consulta por hora e a bateria) voltaram do banco iguais, bit a bit,
+  aos da consulta por estação, que é a que o painel e o `main.py` usam. É o que o passo 7 vai exigir;
+- **196 bytes por linha**, com os índices: o histórico desde 2018 (~38 milhões de linhas) deve
+  ocupar ~7,5 GB, e cada ano a mais, ~0,9 GB;
+- a consulta por hora traz também as estações que já fecharam, e com dado: em 01/01/2018 eram 519
+  estações com leitura, 29 delas fora da lista atual do INMET. Elas entram no cadastro pelo que a
+  consulta por hora traz. Em 2008 já havia 259 estações com dado, e em 2000, 3: cada ano antes de
+  2018 custa ~8.800 consultas (~2,5 h), se a equipe quiser ir mais longe.
+
+Duas descobertas que moldaram o coletor:
+- **O INMET aceita 100 consultas por minuto de cada endereço de rede**, e não por token: esgotadas
+  as 100, até a lista de estações, que nem usa token, é recusada. Passado o limite, ele responde
+  HTTP 200 com um aviso no lugar do JSON, por até um minuto. Tudo o que sai do mesmo endereço
+  divide as 100: o coletor e, se a rede da unidade sair por um endereço só, o `main.py` da equipe.
+  Por isso o coletor faz no máximo uma consulta por segundo (60 das 100), e a recusa espera o
+  minuto virar, sem contar como falha. **A carga do histórico deve rodar à noite ou num fim de
+  semana**: a 60 consultas por minuto, ela deixa só 40 para a equipe. Ela pode ser interrompida e
+  retomada noite após noite.
+- **O servidor do banco derruba a conexão parada no meio de uma transação por 5 minutos, e a
+  parada à toa por 10** (`idle_in_transaction_session_timeout` e `idle_session_timeout`). Por isso
+  as leituras do `banco.py` não deixam transação aberta, e a bateria é gravada de 50 em 50
+  estações.
 
 **5. O coletor do Open-Meteo.** Confere a rodada mais recente de cada modelo, busca se ela ainda
 não está no banco, grava as horas (e, uma vez por dia, as semanas do EC46), e apaga as
@@ -145,8 +177,8 @@ partições que passaram de 21 dias na grade.
 **8. A instalação na VM, direto no Windows, sem Docker** (decidido em 07/10, porque o Docker não
 está rodando na VM).
 - O Python 3.14 e o Git instalados na VM; o repositório clonado numa pasta fixa; um ambiente
-  virtual com o `app/requirements.txt`; o `.env` com o token e, depois, a conexão do banco. É o
-  mesmo jeito de rodar das máquinas de desenvolvimento.
+  virtual com o `requirements.txt` (os coletores) e o `app/requirements.txt` (o painel); o `.env`
+  com o token e as conexões do banco. É o mesmo jeito de rodar das máquinas de desenvolvimento.
 - **O painel** roda com `streamlit run app\explorador.py --server.port 8501 --server.address 0.0.0.0`,
   e a equipe acessa por `http://<nome-da-VM>:8501`. A porta precisa estar liberada no firewall do
   Windows, só para a rede interna.
@@ -154,8 +186,12 @@ está rodando na VM).
   Tarefas do Windows**, "ao iniciar o computador", que roda mesmo sem ninguém conectado e se
   reinicia se cair. A tarefa chama o **`servidor\iniciar_painel.bat`** (pronto desde 07/10), que
   sobe o painel com o observador de arquivos desligado e grava a saída em `logs\painel.log`.
-- **Os coletores** também vão pelo Agendador de Tarefas: o do INMET de hora em hora, o do
-  Open-Meteo duas vezes por dia.
+- **Os coletores** também vão pelo Agendador de Tarefas, pelo `servidor\coletar.bat`, com
+  "Não iniciar uma nova instância" (o padrão): `coletar.bat inmet` de hora em hora, aos 30
+  minutos (a leitura de cada hora chega aos poucos: a das 15:00 de 09/10 tinha ~88% das estações
+  às 15:26, e o que falta a execução seguinte completa); `coletar.bat inmet --extras`
+  uma vez por dia, de madrugada; e o do Open-Meteo duas vezes por dia. Antes da primeira coleta,
+  `python coletar.py esquema` cria as tabelas no `climageo`.
 - **Para atualizar**, o mesmo caminho de sempre (`git fetch`, mudar para a tag escolhida, instalar
   o que faltar) e reiniciar a tarefa do painel, porque o Streamlit não recarrega os módulos sozinho.
 - **O Docker fica para depois**, se a TI ativar containers Linux na VM ou oferecer uma VM Linux. O

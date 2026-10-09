@@ -15,7 +15,13 @@ Três coisas moram aqui:
 
 As horas entram e saem em UTC: a conexão já abre com o fuso UTC, e o fuso do servidor
 (America/Cuiaba) não muda nada nelas.
+
+O servidor derruba a conexão que fica parada no meio de uma transação por 5 minutos, e a que fica
+parada à toa por 10 (`idle_in_transaction_session_timeout` e `idle_session_timeout`, vistos em
+09/10/2026). Os coletores passam minutos nas APIs entre uma consulta ao banco e a gravação: por
+isso as leituras daqui não deixam transação aberta, e quem grava confirma logo.
 """
+import functools
 import os
 import re
 from collections.abc import Iterable, Iterator
@@ -24,6 +30,7 @@ from datetime import date, datetime, time, timedelta, timezone
 import pandas as pd
 import psycopg
 from psycopg import sql
+from psycopg.pq import TransactionStatus
 
 from . import config, openmeteo
 
@@ -261,22 +268,32 @@ def gravar_semanas(conexao: psycopg.Connection, semanal: pd.DataFrame, conjunto:
     return gravadas
 
 
-def gravar_estacoes(conexao: psycopg.Connection, estacoes: pd.DataFrame) -> int:
+def gravar_estacoes(conexao: psycopg.Connection, estacoes: pd.DataFrame, so_as_novas: bool = False) -> int:
     """Grava ou atualiza o cadastro das estações (colunas de `COLUNAS_ESTACAO`, as que houver).
 
-    Um valor que não veio (a consulta por hora não traz a altitude, por exemplo) não apaga o que
-    já estava no cadastro.
+    Devolve quantas entraram ou mudaram: uma estação igual ao que já está no cadastro não é
+    reescrita, e o `atualizada_em` diz quando ela mudou pela última vez. Um valor que não veio
+    (a consulta por hora não traz a altitude, por exemplo) não apaga o que já estava lá.
+
+    `so_as_novas` acrescenta as que faltam e não mexe nas outras. É como entram as estações da
+    consulta por hora, que traz as que já fecharam e saíram da lista do INMET: o cadastro de
+    verdade é o da lista, e a consulta por hora só preenche o buraco.
     """
     if estacoes.empty:
         return 0
     colunas = [coluna for coluna in COLUNAS_ESTACAO if coluna in estacoes]
     _carregar(conexao, "estacao", colunas, _linhas(estacoes.drop_duplicates("codigo"), colunas))
-    atualizar = sql.SQL(", ").join(
-        sql.SQL("{c} = COALESCE(EXCLUDED.{c}, estacao.{c})").format(c=sql.Identifier(coluna))
-        for coluna in colunas if coluna != "codigo")
-    gravadas = conexao.execute(
-        sql.SQL("INSERT INTO estacao ({}) SELECT {} FROM carga ON CONFLICT (codigo) DO UPDATE SET {}, "
-                "atualizada_em = now()").format(_lista(colunas), _lista(colunas), atualizar)).rowcount
+    if so_as_novas:
+        conflito = sql.SQL("DO NOTHING")
+    else:
+        outras = [coluna for coluna in colunas if coluna != "codigo"]
+        novos = [sql.SQL("COALESCE(EXCLUDED.{c}, estacao.{c})").format(c=sql.Identifier(c)) for c in outras]
+        conflito = sql.SQL("DO UPDATE SET {}, atualizada_em = now() WHERE ({}) IS DISTINCT FROM ({})").format(
+            sql.SQL(", ").join(sql.SQL("{} = {}").format(sql.Identifier(c), novo) for c, novo in zip(outras, novos)),
+            sql.SQL(", ").join(sql.SQL("estacao.{}").format(sql.Identifier(c)) for c in outras),
+            sql.SQL(", ").join(novos))
+    gravadas = conexao.execute(sql.SQL("INSERT INTO estacao ({}) SELECT {} FROM carga ON CONFLICT (codigo) {}")
+                               .format(_lista(colunas), _lista(colunas), conflito)).rowcount
     conexao.commit()
     return gravadas
 
@@ -296,9 +313,11 @@ def _gravar_inmet(conexao: psycopg.Connection, leituras: pd.DataFrame, medidas: 
     novos = sql.SQL(", ").join(sql.SQL("{c} = EXCLUDED.{c}").format(c=sql.Identifier(medida)) for medida in medidas)
     antes = sql.SQL(", ").join(sql.SQL("inmet_horaria.{}").format(sql.Identifier(medida)) for medida in medidas)
     depois = sql.SQL(", ").join(sql.SQL("EXCLUDED.{}").format(sql.Identifier(medida)) for medida in medidas)
+    # Em ordem: duas gravações ao mesmo tempo (a carga do histórico e o coletor de hora em hora)
+    # travam as linhas na mesma sequência, e uma espera a outra em vez de as duas se travarem
     gravadas = conexao.execute(
-        sql.SQL("INSERT INTO inmet_horaria ({}) SELECT {} FROM carga ON CONFLICT (estacao, hora_utc) "
-                "DO UPDATE SET {}, coletada_em = now() WHERE ({}) IS DISTINCT FROM ({})")
+        sql.SQL("INSERT INTO inmet_horaria ({}) SELECT {} FROM carga ORDER BY estacao, hora_utc "
+                "ON CONFLICT (estacao, hora_utc) DO UPDATE SET {}, coletada_em = now() WHERE ({}) IS DISTINCT FROM ({})")
         .format(_lista(colunas), _lista(colunas), novos, antes, depois)).rowcount
     conexao.commit()
     return gravadas
@@ -322,6 +341,23 @@ def gravar_extras_inmet(conexao: psycopg.Connection, extras: pd.DataFrame) -> in
 # =====================================================
 # LER
 # =====================================================
+def _sem_deixar_transacao(funcao):
+    """A leitura que encontrou a conexão parada a deixa parada, e não no meio de uma transação.
+
+    O psycopg abre uma transação no primeiro comando, mesmo num SELECT, e ela fica aberta até
+    alguém confirmar. Se a conexão já estava numa transação (uma gravação em curso), ela segue.
+    """
+    @functools.wraps(funcao)
+    def ler(conexao: psycopg.Connection, *args, **kwargs):
+        parada = conexao.info.transaction_status == TransactionStatus.IDLE
+        try:
+            return funcao(conexao, *args, **kwargs)
+        finally:
+            if parada:
+                conexao.rollback()
+    return ler
+
+
 def _tabela(conexao: psycopg.Connection, consulta, argumentos=()) -> pd.DataFrame:
     with conexao.cursor() as cursor:
         cursor.execute(consulta, argumentos)
@@ -342,6 +378,7 @@ def _numeros(tabela: pd.DataFrame, colunas: list[str]) -> pd.DataFrame:
     return tabela
 
 
+@_sem_deixar_transacao
 def rodadas_guardadas(conexao: psycopg.Connection, conjunto: str) -> dict[str, datetime]:
     """A rodada mais nova de cada modelo que está no banco, para a grade ou para as estações."""
     tabela = sql.Identifier(f"previsao_horaria_{_conferir_conjunto(conjunto)}")
@@ -349,6 +386,7 @@ def rodadas_guardadas(conexao: psycopg.Connection, conjunto: str) -> dict[str, d
     return {modelo: pd.Timestamp(rodada).tz_convert("UTC") for modelo, rodada in linhas}
 
 
+@_sem_deixar_transacao
 def ler_previsao(conexao: psycopg.Connection, conjunto: str, modelo: str, rodada=None) -> pd.DataFrame:
     """A previsão horária de um modelo, com as colunas de `openmeteo.buscar`. Sem rodada, a mais nova."""
     tabela = f"previsao_horaria_{_conferir_conjunto(conjunto)}"
@@ -364,6 +402,7 @@ def ler_previsao(conexao: psycopg.Connection, conjunto: str, modelo: str, rodada
     return _horas_em_utc(resultado, ["rodada_utc", "hora_prevista_utc"])[colunas]
 
 
+@_sem_deixar_transacao
 def ler_semanas(conexao: psycopg.Connection, conjunto: str, rodada=None) -> pd.DataFrame:
     """As semanas do EC46, com as colunas de `openmeteo.buscar_semanas`. Sem rodada, a mais nova."""
     _conferir_conjunto(conjunto)
@@ -380,6 +419,26 @@ def ler_semanas(conexao: psycopg.Connection, conjunto: str, rodada=None) -> pd.D
     return _horas_em_utc(resultado, ["rodada_utc"])[colunas]
 
 
+@_sem_deixar_transacao
+def horas_guardadas(conexao: psycopg.Connection, inicio, fim) -> set[pd.Timestamp]:
+    """As horas de [início, fim] (UTC) que já têm alguma leitura do INMET no banco.
+
+    É por elas que a carga do histórico retoma de onde parou, sem buscar de novo o que já tem.
+    """
+    linhas = conexao.execute("SELECT DISTINCT hora_utc FROM inmet_horaria WHERE hora_utc >= %s AND hora_utc <= %s",
+                             (_em_utc(inicio), _em_utc(fim))).fetchall()
+    return {pd.Timestamp(hora).tz_convert("UTC") for (hora,) in linhas}
+
+
+@_sem_deixar_transacao
+def estacoes_com_leituras(conexao: psycopg.Connection, inicio, fim) -> list[str]:
+    """As estações que têm alguma leitura na janela (início, fim], em ordem de código."""
+    linhas = conexao.execute("SELECT DISTINCT estacao FROM inmet_horaria WHERE hora_utc > %s AND hora_utc <= %s "
+                             "ORDER BY estacao", (_em_utc(inicio), _em_utc(fim))).fetchall()
+    return [estacao for (estacao,) in linhas]
+
+
+@_sem_deixar_transacao
 def ler_inmet(conexao: psycopg.Connection, inicio, fim, estacoes: list[str] | None = None) -> pd.DataFrame:
     """As leituras horárias na janela (início, fim], em UTC, de todas as estações ou só das dadas.
 

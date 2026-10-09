@@ -9,6 +9,13 @@
 -- chega por semana. As decisões estão em docs/escopo_v0.3.1.md (decisão 6) e no plano, em
 -- docs/plano_arquitetura.md (passo 3).
 --
+-- As medidas são `real` (4 bytes), e voltam exatas: o PostgreSQL escreve o `real` pela representação
+-- mais curta (889.2, e não 889.2000122), o psycopg o lê em texto, e todo número de até 6 algarismos
+-- faz a volta sem perda (é a garantia do `real`; as medidas do INMET e do Open-Meteo têm até 5).
+-- Conferido em 09/10/2026: uma rodada da grade e um dia das estações de MS voltaram iguais, bit a
+-- bit, ao que as APIs mandam. As coordenadas são a exceção, e vão em `double precision`: as das
+-- estações vêm da lista do INMET com 8 casas (-15.78944444).
+--
 -- As partições não são criadas aqui: quem as cria e apaga é o coletor, por `modulos/banco.py`,
 -- porque o banco não tem pg_partman nem pg_cron. Por isso as tabelas têm de ser do usuário que
 -- grava: o PostgreSQL só deixa o dono da tabela criar e apagar partições dela.
@@ -91,8 +98,8 @@ CREATE TABLE IF NOT EXISTS previsao_horaria_grade (
     modelo            text NOT NULL,
     rodada_utc        timestamptz NOT NULL,
     ponto             text NOT NULL,
-    latitude          real NOT NULL,
-    longitude         real NOT NULL,
+    latitude          double precision NOT NULL,
+    longitude         double precision NOT NULL,
     hora_prevista_utc timestamptz NOT NULL,
     temperatura       real,
     umidade           real,
@@ -130,8 +137,8 @@ CREATE TABLE IF NOT EXISTS previsao_semanal (
     rodada_utc       timestamptz NOT NULL,
     conjunto         text NOT NULL CHECK (conjunto IN ('grade', 'estacao')),
     ponto            text NOT NULL,
-    latitude         real NOT NULL,
-    longitude        real NOT NULL,
+    latitude         double precision NOT NULL,
+    longitude        double precision NOT NULL,
     semana           date NOT NULL,
     temperatura      real,
     anom_temperatura real,

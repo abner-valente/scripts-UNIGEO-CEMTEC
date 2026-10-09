@@ -187,6 +187,74 @@ def test_falha_passageira_e_repetida(monkeypatch):
     assert dados["CHUVA"].tolist() == [1.0]
 
 
+def test_a_recusa_por_limite_espera_e_nao_gasta_tentativa(monkeypatch, capsys):
+    """Passado o limite (~2 consultas por segundo), o INMET responde 200 com um aviso, e não o JSON."""
+    respostas = [RespostaFalsa(status_code=200, text="Você atingiu o limite de requisições.")] * (config.TENTATIVAS + 2)
+    respostas.append(RespostaFalsa([{"DT_MEDICAO": "2026-07-30", "HR_MEDICAO": "1300", "CHUVA": "1"}]))
+    trocar_get(monkeypatch, lambda url, timeout: respostas.pop(0))
+
+    dados = inmet.baixar_dados_estacao("A702", *DIA.janela_busca)
+
+    assert dados["CHUVA"].tolist() == [1.0]
+    assert capsys.readouterr().out == ""        # a recusa é rotina, e não aviso
+
+
+def test_a_espera_no_limite_dobra_ate_o_minuto_virar(monkeypatch):
+    """O limite é de 100 por minuto: insistir a cada segundo só gasta consulta até o minuto virar."""
+    esperas = []
+    monkeypatch.setattr(config, "PAUSA_NO_LIMITE", 1)
+    monkeypatch.setattr(inmet.time, "sleep", esperas.append)
+    respostas = [RespostaFalsa(status_code=200, text="Você atingiu o limite de requisições.")] * 7
+    respostas.append(RespostaFalsa([{"DT_MEDICAO": "2026-07-30", "HR_MEDICAO": "1300", "CHUVA": "1"}]))
+    trocar_get(monkeypatch, lambda url, timeout: respostas.pop(0))
+
+    inmet.baixar_dados_estacao("A702", *DIA.janela_busca)
+
+    assert esperas == [1, 2, 4, 8, 16, 16, 16]
+    assert sum(esperas) > 60
+
+
+def test_a_recusa_por_limite_que_nao_passa_vira_erro(monkeypatch):
+    chamadas = []
+
+    def get_falso(url, timeout):
+        chamadas.append(url)
+        return RespostaFalsa(status_code=200, text="Você atingiu o limite de requisições.")
+
+    trocar_get(monkeypatch, get_falso)
+    with pytest.raises(inmet.ErroINMET, match="limite"):
+        inmet.baixar_dados_estacao("A702", *DIA.janela_busca)
+    assert len(chamadas) == config.RECUSAS_NO_LIMITE + 1
+
+
+def test_a_consulta_por_hora_pede_a_hora_em_utc_e_converte_os_valores(monkeypatch):
+    urls = []
+
+    def get_falso(url, timeout):
+        urls.append(url)
+        return RespostaFalsa([
+            {"CD_ESTACAO": "A702", "DC_NOME": "CAMPO GRANDE", "UF": "MS", "DT_MEDICAO": "2026-10-09",
+             "HR_MEDICAO": "1400", "VL_LATITUDE": "-20.44", "VL_LONGITUDE": "-54.72", "TEM_INS": "31.4",
+             "RAD_GLO": "3523.619"},
+            {"CD_ESTACAO": "A999", "DC_NOME": "EM PANE", "UF": "GO", "DT_MEDICAO": "2026-10-09",
+             "HR_MEDICAO": "1400", "VL_LATITUDE": "-15.0", "VL_LONGITUDE": "-48.0", "TEM_INS": None, "RAD_GLO": None},
+        ])
+
+    trocar_get(monkeypatch, get_falso)
+    # 10:00 em MS é 14:00 UTC
+    dados = inmet.baixar_hora(datetime(2026, 10, 9, 10, tzinfo=config.FUSO_MS))
+
+    assert "/estacao/dados/2026-10-09/1400/" in urls[0]
+    assert dados["dt_utc"].tolist() == [pd.Timestamp("2026-10-09 14:00", tz="UTC")] * 2
+    assert dados["TEM_INS"].iloc[0] == 31.4 and dados["VL_LATITUDE"].iloc[0] == -20.44
+    assert "dt_local" not in dados     # estações de todos os fusos: a hora local não é de ninguém
+
+
+def test_a_consulta_por_hora_sem_nada_devolve_tabela_vazia(monkeypatch):
+    trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa([]))
+    assert inmet.baixar_hora(datetime(2026, 10, 9, 14, tzinfo=FUSO_UTC)).empty
+
+
 def test_erro_de_token_nao_e_repetido(monkeypatch):
     """Erros 4xx (token inválido, estação inexistente) não melhoram com novas tentativas."""
     tentativas = []

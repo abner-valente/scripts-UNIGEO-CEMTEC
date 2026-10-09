@@ -11,12 +11,17 @@ Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
 ## [0.4.1] — em andamento
 
-Ainda não está na `main`. É o começo do banco da UNIGEO e dos coletores (fase 2 de `docs/plano_arquitetura.md`). Para quem usa o painel e o `main.py`, nada muda ainda: os dois seguem buscando nas APIs.
+Ainda não está na `main`. É o começo do banco da UNIGEO e dos coletores (fase 2 de `docs/plano_arquitetura.md`). O painel e o `main.py` seguem buscando nas APIs; muda só o jeito de esperar o INMET quando ele recusa por excesso de consultas (em Corrigido).
 
 ### Novo
 
 - **O esquema do banco** (`banco/esquema.sql`, no schema `climageo` do PostgreSQL 16 da UNIGEO) e o `modulos/banco.py`, a única peça que fala SQL. O banco guarda só as horas, do INMET e da previsão; o dia, a semana e o mês saem delas na leitura. O EC46 fica por semana, como chega.
 - **O `.env.example` ganhou as conexões do banco** (`BANCO_GRAVACAO`, `BANCO_LEITURA` e `BANCO_TESTE`). Por enquanto, só quem programa usa a de teste.
+- **O coletor do INMET** (`python coletar.py inmet`), que grava no banco as leituras horárias de todas as estações automáticas do Brasil. De hora em hora, ele rebusca as últimas 48 horas, com uma consulta por hora que traz todas as estações, e o banco só reescreve o que o INMET mudou. Uma vez por dia (`--extras`), busca por estação a sensação térmica, a bateria e a temperatura do processador, que a consulta por hora não traz. A carga do histórico (`--historico 2018-01-01`) roda uma vez só e retoma de onde parou. No servidor, o Agendador de Tarefas o chama pelo `servidor\coletar.bat`.
+
+### Corrigido
+
+- **Quando o INMET recusa por excesso de consultas, o painel e o `main.py` esperam, em vez de perder a estação.** O INMET aceita 100 consultas por minuto de cada endereço de rede, contando todas as consultas que saem dele (medido em 09/10/2026), e uma carga do painel ou do `main.py` com as estações vizinhas faz umas 100. A recusa vinha contando como falha: três seguidas, em 6 segundos, deixavam a estação de fora, como "Falha na consulta", e o mapa saía sem ela. Agora se espera o minuto virar, com a espera dobrando a cada recusa (até uns 2 minutos).
 
 ## [0.3.1] — 08/10/2026
 

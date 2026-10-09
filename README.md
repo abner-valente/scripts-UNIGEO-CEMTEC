@@ -536,6 +536,8 @@ Ficam em [`modulos/config.py`](modulos/config.py): pastas, endereços, tempos li
 
 Erros de token (HTTP 4xx) não são repetidos, porque novas tentativas não resolvem.
 
+**O INMET aceita 100 consultas por minuto de cada endereço de rede**, contando todas as que saem dele: as de quem está na mesma rede e as do coletor do banco, quando ele rodar no servidor da unidade. Uma consulta de MS com as estações vizinhas faz umas 100. Passado o limite, o INMET recusa até o minuto virar, e a consulta espera, sem contar como falha: quem roda o `main.py` logo depois de outra pessoa pode ver a coleta parar por até um minuto antes de seguir.
+
 ## Testes
 
 Os testes usam uma API do INMET simulada, então não precisam de token nem de internet:
@@ -703,12 +705,14 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 ```
 .
 ├── main.py               # Ponto de entrada: escolha do produto e das datas
+├── coletar.py            # Os coletores do banco da UNIGEO (ex.: python coletar.py inmet), para o servidor
 ├── modulos/              # Peças compartilhadas por todos os produtos
 │   ├── config.py         # Configurações, o Recorte (o estado mapeado) e o Periodo (janelas de tempo)
 │   ├── fonte.py          # De onde vêm os dados: é a ele que os produtos e o painel pedem (hoje, as APIs)
 │   ├── inmet.py          # Acesso à API do INMET (estações e dados horários)
 │   ├── openmeteo.py      # Previsão do Open-Meteo (ECMWF, GFS e ICON), hora a hora, e o dia tirado das horas
 │   ├── banco.py          # O banco da UNIGEO (PostgreSQL): a única peça que fala SQL
+│   ├── coletor_inmet.py  # O coletor do INMET: as horas de todas as estações, do INMET para o banco
 │   ├── calculos.py       # Recorte no tempo, extremos, acumulados e interpolação IDW
 │   ├── mapas.py          # Mapas pontuais, interpolados e de classes (níveis de risco)
 │   ├── graficos.py       # Gráficos de barras e calendário, com o estilo comum aos produtos
@@ -729,7 +733,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │   ├── qualidade.py      # Regras de qualidade das leituras (sem tela, por isso testáveis)
 │   └── requirements.txt  # Dependências só do explorador
 ├── ferramentas/          # Scripts auxiliares (ex.: preparar os shapefiles de um estado)
-├── servidor/             # Para o servidor Windows da unidade: iniciar_painel.bat (logs em logs/)
+├── servidor/             # Para o servidor Windows da unidade: iniciar_painel.bat e coletar.bat (logs em logs/)
 ├── banco/                # O esquema do banco (esquema.sql): as tabelas do schema climageo
 ├── tests/                # Testes automatizados (pytest), com a API do INMET simulada
 ├── .github/workflows/    # Execução automática dos testes no GitHub (GitHub Actions)

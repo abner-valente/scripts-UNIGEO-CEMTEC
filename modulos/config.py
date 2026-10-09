@@ -181,9 +181,25 @@ BANCO_ESQUEMA = RAIZ / "banco" / "esquema.sql"
 # =====================================================
 URL_ESTACOES = "https://apitempo.inmet.gov.br/estacoes/T"
 URL_DADOS = "https://apitempo.inmet.gov.br/token/estacao/{inicio}/{fim}/{codigo}/{token}"
+# Todas as estações de uma hora (UTC) numa consulta só: é o que o coletor do banco usa. Não é
+# documentado; foi conferido contra a consulta por estação em 09/10/2026 (plano, passo 4).
+URL_DADOS_DA_HORA = "https://apitempo.inmet.gov.br/token/estacao/dados/{data}/{hora}/{token}"
 TIMEOUT_ESTACOES = 20          # segundos
 TIMEOUT_DADOS = 60             # segundos
 PAUSA_ENTRE_REQUISICOES = 0.1  # segundos
+# O INMET limita as consultas a 100 por minuto, contadas por endereço de rede, e não por token: a
+# lista de estações, que nem usa token, é recusada junto (medido em 09/10/2026). Tudo o que sai do
+# mesmo endereço divide as 100 — o painel, o main.py, o coletor. Passado o limite, ele responde
+# HTTP 200 com este aviso no lugar do JSON, por até um minuto. A recusa não gasta tentativa:
+# espera-se e pede-se de novo, com a espera dobrando (1, 2, 4, 8, 16, 16... s), até
+# RECUSAS_NO_LIMITE vezes por consulta (~2 min).
+AVISO_DE_LIMITE = "limite de requisi"
+PAUSA_NO_LIMITE = 1            # segundos, a primeira espera
+PAUSA_MAXIMA_NO_LIMITE = 16    # segundos
+RECUSAS_NO_LIMITE = 12
+# O coletor do banco faz no máximo uma consulta por segundo: 60 das 100 do minuto, e sobram 40
+# para a equipe, se ela sair pelo mesmo endereço.
+INTERVALO_DO_COLETOR = 1.0     # segundos entre o começo de uma consulta e o da seguinte
 # Quantas consultas podem correr juntas, no processo inteiro. Medido contra a API: com 8 as
 # 62 estações de uma semana saem em ~8 s (em fila levavam ~50 s); com 16 o INMET derruba a
 # conexão. O limite é global de propósito — o painel é público, e cada pessoa que abre

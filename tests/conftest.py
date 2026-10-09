@@ -1,4 +1,5 @@
-"""Fixtures dos testes: dados horários sintéticos e API do INMET simulada (sem acesso à rede)."""
+"""Fixtures dos testes: dados horários sintéticos, API do INMET simulada (sem acesso à rede) e o banco de teste."""
+import os
 from types import SimpleNamespace
 
 import numpy as np
@@ -6,7 +7,10 @@ import pandas as pd
 import pytest
 import requests
 
-from modulos import config, inmet
+from modulos import banco, config, inmet
+
+# O schema dos testes do banco, apagado e recriado a cada módulo de testes que o usa
+SCHEMA_DE_TESTE = "climageo_teste"
 
 VALORES_PADRAO = {"TEM_MIN": 20.0, "TEM_MAX": 30.0, "UMD_MIN": 50.0, "VEN_RAJ": 5.0, "VEN_DIR": 90.0, "CHUVA": 1.0}
 
@@ -53,6 +57,8 @@ def sem_esperas(monkeypatch):
     """Nenhum teste dorme: as pausas entre requisições e entre tentativas ficam em zero."""
     monkeypatch.setattr(config, "PAUSA_ENTRE_REQUISICOES", 0)
     monkeypatch.setattr(config, "PAUSA_ENTRE_TENTATIVAS", 0)
+    monkeypatch.setattr(config, "PAUSA_NO_LIMITE", 0)
+    monkeypatch.setattr(config, "INTERVALO_DO_COLETOR", 0)
 
 
 @pytest.fixture(autouse=True)
@@ -114,3 +120,29 @@ def api_simulada(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "DPI", 40)  # mapas pequenos, para o teste ser rápido
     return SimpleNamespace(estacoes_com_dados=len(ESTACOES) - 1,
                            vizinhas={nome for nome in vizinhas["Estação"]})
+
+
+@pytest.fixture(scope="module")
+def conexao():
+    """Uma conexão com o banco de teste, no schema `climageo_teste` recriado do zero.
+
+    Na máquina de quem programa, a conexão vem do BANCO_TESTE do .env; na CI, de um PostgreSQL 16
+    com PostGIS que o GitHub Actions sobe só para os testes. Sem ela, o teste é pulado.
+    """
+    if not os.getenv("BANCO_TESTE", "").strip():
+        pytest.skip("sem BANCO_TESTE no .env: os testes do banco ficam para a CI")
+    with banco.conectar("teste", schema=SCHEMA_DE_TESTE) as aberta:
+        banco.recriar_schema_de_teste(aberta, SCHEMA_DE_TESTE)
+        banco.criar_esquema(aberta)
+        yield aberta
+
+
+@pytest.fixture
+def limpa(conexao):
+    """Cada teste começa com as tabelas vazias e sem partições."""
+    for tabela in banco.PARTICOES:
+        for nome in banco.particoes(conexao, tabela):
+            conexao.execute(f'DROP TABLE "{nome}"')
+    conexao.execute("TRUNCATE previsao_semanal, estacao CASCADE")
+    conexao.commit()
+    return conexao

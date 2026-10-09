@@ -1,11 +1,10 @@
 """O banco: o esquema, as partições, a gravação em lote e a leitura de volta.
 
 Rodam contra um PostgreSQL de verdade, no schema `climageo_teste`, que é apagado e recriado a cada
-execução. Na máquina de quem programa, a conexão vem do BANCO_TESTE do .env; na CI, de um
-PostgreSQL 16 com PostGIS que o GitHub Actions sobe só para os testes. Sem a conexão, os testes
-são pulados.
+módulo de testes (as fixtures `conexao` e `limpa`, no conftest.py). Na máquina de quem programa, a
+conexão vem do BANCO_TESTE do .env; na CI, de um PostgreSQL 16 com PostGIS que o GitHub Actions
+sobe só para os testes. Sem a conexão, os testes são pulados.
 """
-import os
 from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
@@ -14,29 +13,9 @@ import pytest
 
 from modulos import banco, openmeteo
 
-SCHEMA = "climageo_teste"
+SCHEMA = "climageo_teste"   # o da fixture `conexao`, no conftest.py
+
 RODADA = datetime(2026, 10, 9, 0, tzinfo=timezone.utc)
-
-
-@pytest.fixture(scope="module")
-def conexao():
-    if not os.getenv("BANCO_TESTE", "").strip():
-        pytest.skip("sem BANCO_TESTE no .env: os testes do banco ficam para a CI")
-    with banco.conectar("teste", schema=SCHEMA) as aberta:
-        banco.recriar_schema_de_teste(aberta, SCHEMA)
-        banco.criar_esquema(aberta)
-        yield aberta
-
-
-@pytest.fixture
-def limpa(conexao):
-    """Cada teste começa com as tabelas vazias e sem partições."""
-    for tabela in banco.PARTICOES:
-        for nome in banco.particoes(conexao, tabela):
-            conexao.execute(f'DROP TABLE "{nome}"')
-    conexao.execute("TRUNCATE previsao_semanal, estacao CASCADE")
-    conexao.commit()
-    return conexao
 
 
 def previsao(pontos=("A702", "A721"), horas=3, rodada=RODADA, modelos=("ecmwf_ifs025", "gfs_seamless")) -> pd.DataFrame:
@@ -46,7 +25,7 @@ def previsao(pontos=("A702", "A721"), horas=3, rodada=RODADA, modelos=("ecmwf_if
         for ponto in pontos:
             for hora in range(horas):
                 linhas.append({"modelo": modelo, "rodada_utc": pd.Timestamp(rodada), "ponto": ponto,
-                               "latitude": -20.45, "longitude": -54.62,
+                               "latitude": -15.78944444, "longitude": -47.92583332,   # como na lista do INMET
                                "hora_prevista_utc": pd.Timestamp(rodada) + pd.Timedelta(hours=hora + 1),
                                "temperatura": 25.5 + hora, "umidade": 60.0, "orvalho": 15.2, "chuva": np.nan,
                                "vento": 10.8, "rajada": 32.4, "direcao": 90.0})
@@ -137,6 +116,7 @@ def test_a_limpeza_da_grade_apaga_so_as_rodadas_com_mais_de_21_dias(limpa):
 # A PREVISÃO
 # =====================================================
 def test_a_previsao_volta_do_banco_como_entrou(limpa):
+    """Bit a bit, as coordenadas das estações (8 casas) inclusive: o passo 7 do plano vai exigir igualdade."""
     enviada = previsao()
 
     gravadas = banco.gravar_previsao(limpa, enviada, "estacao")
@@ -145,7 +125,7 @@ def test_a_previsao_volta_do_banco_como_entrou(limpa):
     assert gravadas == len(enviada)
     esperada = enviada[enviada["modelo"] == "ecmwf_ifs025"].sort_values(["ponto", "hora_prevista_utc"])
     pd.testing.assert_frame_equal(lida.reset_index(drop=True), esperada.reset_index(drop=True),
-                                  check_dtype=False, rtol=1e-6)
+                                  check_dtype=False, check_exact=True)
 
 
 def test_a_mesma_rodada_gravada_de_novo_nao_duplica(limpa):
@@ -183,7 +163,7 @@ def test_as_semanas_do_ec46_voltam_como_entraram(limpa):
     assert banco.gravar_semanas(limpa, semanal, "estacao") == 2
     lida = banco.ler_semanas(limpa, "estacao")
 
-    pd.testing.assert_frame_equal(lida, semanal, check_dtype=False, rtol=1e-6)
+    pd.testing.assert_frame_equal(lida, semanal, check_dtype=False, check_exact=True)
     assert banco.ler_semanas(limpa, "grade").empty
 
 
@@ -233,3 +213,69 @@ def test_a_bateria_e_a_consulta_por_hora_nao_se_apagam(limpa):
     linha = limpa.execute("SELECT tem_ins, ten_bat FROM inmet_horaria WHERE estacao = 'A702'").fetchone()
 
     assert linha == pytest.approx((29.0, 12.6))
+
+
+def test_o_cadastro_so_reescreve_a_estacao_que_mudou(limpa):
+    """A lista do INMET é gravada de hora em hora: o `atualizada_em` diz quando a estação mudou de fato."""
+    assert banco.gravar_estacoes(limpa, estacoes()) == 2
+    antes = limpa.execute("SELECT atualizada_em FROM estacao WHERE codigo = 'A721'").fetchone()[0]
+
+    assert banco.gravar_estacoes(limpa, estacoes()) == 0
+    assert banco.gravar_estacoes(limpa, estacoes().assign(situacao=["Operante", "Pane"])) == 1
+    depois = limpa.execute("SELECT situacao, atualizada_em FROM estacao WHERE codigo = 'A721'").fetchone()
+    assert depois[0] == "Pane" and depois[1] > antes
+
+
+def test_a_consulta_por_hora_so_acrescenta_estacoes_novas(limpa):
+    """O cadastro de verdade é o da lista: a consulta por hora só preenche o buraco das que fecharam."""
+    banco.gravar_estacoes(limpa, estacoes())
+    da_hora = pd.DataFrame({"codigo": ["A702", "A004"], "nome": ["OUTRO NOME", "NIQUELANDIA"], "uf": ["MS", "GO"],
+                            "latitude": [-20.0, -14.47], "longitude": [-54.0, -48.46]})
+
+    assert banco.gravar_estacoes(limpa, da_hora, so_as_novas=True) == 1
+
+    nomes = dict(limpa.execute("SELECT codigo, nome FROM estacao").fetchall())
+    assert nomes == {"A702": "CAMPO GRANDE", "A721": "DOURADOS", "A004": "NIQUELANDIA"}
+
+
+def test_as_horas_guardadas_e_as_estacoes_com_leituras(limpa):
+    banco.gravar_estacoes(limpa, estacoes())
+    banco.gravar_inmet(limpa, leituras(horas=3).query("estacao == 'A702' or hora_utc.dt.hour == 13"))
+
+    horas = banco.horas_guardadas(limpa, pd.Timestamp("2026-10-08 13:00", tz="UTC"),
+                                  pd.Timestamp("2026-10-08 14:00", tz="UTC"))
+    assert horas == {pd.Timestamp("2026-10-08 13:00", tz="UTC"), pd.Timestamp("2026-10-08 14:00", tz="UTC")}
+    assert banco.estacoes_com_leituras(limpa, pd.Timestamp("2026-10-08 13:00", tz="UTC"),
+                                       pd.Timestamp("2026-10-08 16:00", tz="UTC")) == ["A702"]
+
+
+def test_a_leitura_nao_deixa_transacao_aberta(limpa):
+    """O servidor derruba a conexão parada no meio de uma transação por 5 min, e o coletor passa
+    minutos no INMET entre a consulta ao banco e a gravação."""
+    from psycopg.pq import TransactionStatus
+
+    banco.horas_guardadas(limpa, RODADA, RODADA)
+    banco.ler_previsao(limpa, "grade", "ecmwf_ifs025")
+    assert limpa.info.transaction_status == TransactionStatus.IDLE
+
+    # No meio de uma gravação, a leitura não confirma nem desfaz nada
+    limpa.execute("INSERT INTO estacao (codigo, nome, uf, latitude, longitude) VALUES ('A999', 'X', 'MS', -20, -54)")
+    banco.estacoes_com_leituras(limpa, RODADA, RODADA)
+    assert limpa.info.transaction_status == TransactionStatus.INTRANS
+    limpa.rollback()
+
+
+def test_as_medidas_voltam_do_banco_exatas_ate_6_algarismos(limpa):
+    """As colunas são `real` (4 bytes), e voltam iguais, bit a bit, ao que a API mandou: o PostgreSQL
+    escreve o `real` pela representação mais curta, e o psycopg o lê em texto. É o que deixa o passo 7
+    do plano (o banco contra as APIs) exigir igualdade. A garantia do `real` vai até 6 algarismos."""
+    banco.gravar_estacoes(limpa, estacoes())
+    valores = [889.2, 1013.2, 3523.6, -3.5, 12.6, 0.2, 31.4, 359.0, 25.45, 123456.0, 0.123456]
+    enviadas = pd.DataFrame({"estacao": "A702", "hora_utc": [pd.Timestamp("2026-10-08 13:00", tz="UTC")
+                                                               + pd.Timedelta(hours=n) for n in range(len(valores))],
+                             "pre_ins": valores})
+    banco.gravar_inmet(limpa, enviadas)
+
+    lidas = banco.ler_inmet(limpa, pd.Timestamp("2026-10-08 12:00", tz="UTC"), pd.Timestamp("2026-10-09", tz="UTC"))
+
+    assert lidas["pre_ins"].tolist() == valores
