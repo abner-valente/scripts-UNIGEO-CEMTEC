@@ -2,9 +2,10 @@
 
 É o passo 4 de docs/plano_arquitetura.md, e o `coletar.py` chama cada um dos três trabalhos:
 
-- **de hora em hora** (`coletar_ultimas`): atualiza o cadastro pela lista do INMET e busca as
-  últimas 48 horas, uma consulta por hora, com todas as estações em cada uma. Rebuscar 48 h pega
-  a leitura que chegou atrasada ou que o INMET corrigiu; o banco só reescreve a hora que mudou;
+- **de hora em hora** (`coletar_ultimas`): atualiza o cadastro pela lista do INMET e busca os
+  últimos 3 dias (72 horas), uma consulta por hora, com todas as estações em cada uma. Rebuscar
+  os 3 dias pega a leitura que chegou atrasada ou que o INMET corrigiu; o banco só reescreve a
+  hora que mudou;
 - **uma vez por dia** (`coletar_extras`): a sensação térmica, a bateria e a temperatura do
   processador, que a consulta por hora não traz, numa consulta por estação;
 - **uma vez só** (`carregar_historico`): as horas desde 2018, dia a dia, retomando de onde parou.
@@ -25,7 +26,9 @@ import psycopg
 
 from . import banco, config, inmet
 
-HORAS_REBUSCADAS = 48
+# Os últimos 3 dias, rebuscados a cada execução (decidido em 09/10/2026; o plano previa 48 h).
+# Custa 72 consultas por hora, ~75 s no ritmo de uma por segundo.
+HORAS_REBUSCADAS = 72
 INICIO_DO_HISTORICO = datetime(2018, 1, 1, tzinfo=timezone.utc)   # plano, passo 4
 # Os extras gravam a cada tantas estações: uma conexão parada por 10 minutos o servidor derruba, e
 # as ~500 consultas por estação levam uns 9
@@ -207,7 +210,7 @@ def coletar_horas(conexao: psycopg.Connection, horas: list[datetime]) -> Coleta:
 
 def coletar_ultimas(conexao: psycopg.Connection, agora: datetime | None = None,
                     quantas: int = HORAS_REBUSCADAS) -> Coleta:
-    """O trabalho de hora em hora: o cadastro e as últimas 48 horas."""
+    """O trabalho de hora em hora: o cadastro e os últimos 3 dias."""
     comeco = time.monotonic()
     mudadas = atualizar_cadastro(conexao)
     if mudadas is not None:
@@ -223,7 +226,7 @@ def coletar_extras(conexao: psycopg.Connection, agora: datetime | None = None,
                    quantas: int = HORAS_REBUSCADAS) -> Coleta:
     """O trabalho de uma vez por dia: a sensação térmica, a bateria e a temperatura do processador.
 
-    Uma consulta por estação, para as últimas 48 h, e só das estações que têm leitura no banco
+    Uma consulta por estação, para os últimos 3 dias, e só das estações que têm leitura no banco
     nessas horas: as outras não têm o que responder. São umas 500 consultas, uns 9 minutos, que
     vão sendo gravadas de 50 em 50 estações. Só essas três medidas são gravadas; as outras
     continuam as da consulta por hora.

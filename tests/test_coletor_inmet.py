@@ -113,11 +113,13 @@ def test_as_ultimas_horas_vao_ate_a_hora_corrente():
 # =====================================================
 # GRAVANDO
 # =====================================================
-def test_a_coleta_de_hora_em_hora_grava_o_cadastro_e_as_48_horas(limpa, inmet_simulado):
+def test_a_coleta_de_hora_em_hora_grava_o_cadastro_e_os_3_dias(limpa, inmet_simulado):
     coleta = coletor_inmet.coletar_ultimas(limpa, agora=AGORA)
 
-    assert len(inmet_simulado["horas"]) == 48 and coleta.falhas == []
-    assert coleta.leituras == coleta.gravadas == 48 * 3
+    assert coletor_inmet.HORAS_REBUSCADAS == 72
+    assert len(inmet_simulado["horas"]) == 72 and coleta.falhas == []
+    assert inmet_simulado["horas"][0] == datetime(2026, 10, 6, 15, tzinfo=timezone.utc)
+    assert coleta.leituras == coleta.gravadas == 72 * 3
     assert coleta.estacoes_novas == 1                     # a A004, que não está na lista
     cadastro = dict(limpa.execute("SELECT codigo, situacao FROM estacao").fetchall())
     assert cadastro == {"A702": "Operante", "A721": "Pane", "A004": None}
@@ -131,7 +133,7 @@ def test_rebuscar_as_horas_so_reescreve_o_que_o_inmet_mudou(limpa, inmet_simulad
     coleta = coletor_inmet.coletar_ultimas(limpa, agora=AGORA + timedelta(hours=1))
 
     assert coleta.gravadas == 3
-    assert limpa.execute("SELECT count(*) FROM inmet_horaria").fetchone()[0] == 49 * 3
+    assert limpa.execute("SELECT count(*) FROM inmet_horaria").fetchone()[0] == 73 * 3
 
 
 def test_a_hora_que_falha_fica_para_a_proxima(limpa, inmet_simulado):
@@ -141,7 +143,7 @@ def test_a_hora_que_falha_fica_para_a_proxima(limpa, inmet_simulado):
     coleta = coletor_inmet.coletar_ultimas(limpa, agora=AGORA)
 
     assert coleta.falhas == ["09/10/2026 03:00"]
-    assert coleta.gravadas == 47 * 3
+    assert coleta.gravadas == 71 * 3
     inmet_simulado["falhar"].clear()
     assert coletor_inmet.coletar_ultimas(limpa, agora=AGORA).gravadas == 3
 

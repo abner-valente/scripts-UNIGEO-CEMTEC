@@ -335,8 +335,8 @@ Em 07/10 ficaram definidos mais dois pontos:
   07/10, que dava o 11.14, tinha sido feita noutro banco). O particionamento por dia de coleta usa o
   particionamento nativo dele, e é o coletor quem cria e apaga as partições, porque o banco não tem
   `pg_partman` nem `pg_cron` (detalhes em [`plano_arquitetura.md`](plano_arquitetura.md)).
-  As rodadas entram em lote (`COPY`), porque são ~500 mil linhas cada. A atualização das últimas
-  48 h do INMET usa `INSERT ... ON CONFLICT DO UPDATE`.
+  As rodadas entram em lote (`COPY`), porque são ~500 mil linhas cada. A atualização dos últimos
+  3 dias do INMET (eram 48 h até 09/10) usa `INSERT ... ON CONFLICT DO UPDATE`.
 - **O `Dockerfile` e o `docker-compose.yml` ficariam no repositório**, com o painel e os
   coletores. **Adiado no mesmo dia:** a VM é Windows e o Docker não está rodando nela. Por ora, o
   painel e os coletores rodam direto no Windows, pelo Agendador de Tarefas (passo 8 do plano). O

@@ -3,7 +3,7 @@
 Feitos para o Agendador de Tarefas do Windows, pelo servidor\\coletar.bat, e rodam também à mão:
 
     python coletar.py esquema                        # cria as tabelas que faltam (na instalação, e quando o esquema mudar)
-    python coletar.py inmet                          # de hora em hora: o cadastro e as últimas 48 h
+    python coletar.py inmet                          # de hora em hora: o cadastro e os últimos 3 dias
     python coletar.py inmet --extras                 # uma vez por dia: a sensação térmica, a bateria e o processador
     python coletar.py inmet --historico 2018-01-01   # uma vez só: as horas desde a data, retomando de onde parou
 

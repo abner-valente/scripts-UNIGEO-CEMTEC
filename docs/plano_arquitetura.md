@@ -57,7 +57,7 @@ dava o 11.14 com o PostGIS 2.5.3, tinha sido feita noutro banco, que não é o d
 
 **O que a 16 tem e o plano usa:**
 - tabelas particionadas, com chave primária na tabela inteira e `INSERT ... ON CONFLICT`
-  funcionando nelas. É o que permite atualizar as últimas 48 h do INMET;
+  funcionando nelas. É o que permite atualizar os últimos 3 dias do INMET;
 - `COPY` direto na tabela particionada;
 - partições que se desanexam sem travar a tabela (`DETACH PARTITION ... CONCURRENTLY`): a
   limpeza da grade não segura quem está lendo;
@@ -104,7 +104,7 @@ das estações, os três modelos, a rodada e os pedidos de até 600 chamadas por
   **Eles já existem** (09/10), e quem os administra é o programador. Um cuidado: o coletor cria e
   apaga as partições sozinho, e o PostgreSQL só deixa fazer isso o dono da tabela; as tabelas
   devem ser criadas pelo usuário que grava, ou passadas para ele.
-- A gravação em lote (`COPY`) e a atualização das últimas 48 h do INMET.
+- A gravação em lote (`COPY`) e a atualização dos últimos 3 dias do INMET.
 - **A bateria e a sensação térmica** (`TEN_BAT`, `TEM_SEN`, `TEM_CPU`) não vêm no endereço do
   INMET por hora. O coletor as busca por estação **uma vez por dia** (decidido em 09/10), só nas
   estações que têm leitura no banco: umas 520 consultas a mais por dia.
@@ -126,14 +126,16 @@ das estações, os três modelos, a rodada e os pedidos de até 600 chamadas por
    09/10:** com o token, 740 estações de uma hora em 0,8 s. Os valores batem com a consulta por
    estação, salvo a radiação, que vem com três casas em vez de uma. Faltam três campos: a
    sensação térmica, a bateria e a temperatura do processador (ver o passo 3).
-2. O coletor de hora em hora, que rebusca as últimas 48 h e atualiza o que mudou.
+2. O coletor de hora em hora, que rebusca os últimos 3 dias e atualiza o que mudou. **Eram 48 h;
+   em 09/10 passaram a 72**, para pegar a leitura que chega ou é corrigida no terceiro dia.
 3. A carga do histórico. Desde 2018 são umas 77 mil consultas (uma por hora, para o
    Brasil inteiro): umas 22 horas de execução, a uma consulta por segundo, uma vez só.
 
 **Feito em 09/10, na v0.4.1:** o `modulos/coletor_inmet.py` e o `coletar.py` (`python coletar.py
 inmet`, `--extras` e `--historico DATA`), com o `servidor\coletar.bat` para o Agendador. Medido
 contra o INMET de verdade, gravando no `climageo_teste`:
-- as 48 horas, em 49 s: ~24 mil leituras de ~520 estações. Rodando de novo, nada é reescrito;
+- as 48 horas, em 49 s: ~24 mil leituras de ~520 estações. Rodando de novo, nada é reescrito.
+  Com os 3 dias, são 72 consultas a cada hora (1.728 por dia, 576 a mais), em ~75 s;
 - dois dias de histórico, em 50 s. A carga grava dia a dia e, interrompida, retoma pelas horas
   que faltam;
 - a bateria das 523 estações com leitura, em 8,8 min, sem nenhuma falha;
@@ -146,6 +148,18 @@ contra o INMET de verdade, gravando no `climageo_teste`:
   estações com leitura, 29 delas fora da lista atual do INMET. Elas entram no cadastro pelo que a
   consulta por hora traz. Em 2008 já havia 259 estações com dado, e em 2000, 3: cada ano antes de
   2018 custa ~8.800 consultas (~2,5 h), se a equipe quiser ir mais longe.
+
+**Se o terceiro dia compensa, o passo 6 diz.** O banco anota quando cada hora entrou ou mudou
+(`coletada_em`), e a hora que só a rebusca do terceiro dia pegou é a que entrou ou mudou com mais
+de 48 h de idade:
+
+```sql
+SELECT count(*), count(DISTINCT estacao) FROM climageo.inmet_horaria
+WHERE coletada_em - hora_utc BETWEEN interval '48 hours' AND interval '73 hours';
+```
+
+Se depois de alguns dias isso der quase nada, volta-se a 48 h; se der muito, vale olhar até onde
+os atrasos chegam, e talvez uma rebusca mais funda, uma vez por dia.
 
 Duas descobertas que moldaram o coletor:
 - **O INMET aceita 100 consultas por minuto de cada endereço de rede**, e não por token: esgotadas

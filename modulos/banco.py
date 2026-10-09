@@ -327,8 +327,8 @@ def gravar_inmet(conexao: psycopg.Connection, leituras: pd.DataFrame) -> int:
     """Grava as leituras da consulta por hora. Devolve quantas horas entraram ou mudaram.
 
     `leituras` tem `estacao`, `hora_utc` e as medidas de `COLUNAS_INMET`. As estações precisam
-    estar no cadastro (`gravar_estacoes`). Rebuscar as últimas 48 h, como o coletor faz, só reescreve
-    a hora que o INMET mudou.
+    estar no cadastro (`gravar_estacoes`). Rebuscar os últimos 3 dias, como o coletor faz, só
+    reescreve a hora que o INMET mudou.
     """
     return _gravar_inmet(conexao, leituras, COLUNAS_INMET)
 
