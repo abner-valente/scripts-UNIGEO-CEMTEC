@@ -37,14 +37,26 @@ def _sem_token(texto) -> str:
     return texto.replace(config.TOKEN_INMET, "***") if config.TOKEN_INMET else texto
 
 
+def _recusada_por_limite(resposta: requests.Response) -> bool:
+    """O INMET passou do limite de consultas: respondeu 200 com um aviso curto, e não com o JSON."""
+    texto = resposta.text
+    return len(texto) < 200 and config.AVISO_DE_LIMITE in texto
+
+
 def _consultar(url: str, timeout: int) -> list | dict:
     """Consulta a API e devolve a resposta já convertida de JSON.
 
     Falhas passageiras (conexão encerrada, erro 5xx, resposta cortada) são repetidas até
     config.TENTATIVAS vezes, dobrando a espera a cada uma. Levanta ErroINMET se nenhuma der certo.
+
+    A recusa pelo limite de 100 consultas por minuto não é falha e não gasta tentativa: espera-se,
+    dobrando a espera, até o minuto virar (ver config.AVISO_DE_LIMITE). Antes de 09/10/2026 ela
+    caía como "resposta não é JSON", e três recusas seguidas, em 6 s, davam a estação por perdida.
     """
     espera = config.PAUSA_ENTRE_TENTATIVAS
-    for tentativa in range(1, config.TENTATIVAS + 1):
+    espera_no_limite = config.PAUSA_NO_LIMITE
+    tentativa = recusas = 0
+    while True:
         try:
             # A espera entre tentativas fica fora da vaga: segurá-la enquanto se dorme tiraria
             # do ar uma das oito faixas justamente quando a API está ruim.
@@ -53,9 +65,18 @@ def _consultar(url: str, timeout: int) -> list | dict:
             if 400 <= resposta.status_code < 500:  # token inválido, estação inexistente: repetir não resolve
                 raise ErroINMET(f"HTTP {resposta.status_code}: {_sem_token(resposta.text[:100])}")
             resposta.raise_for_status()
-            return resposta.json()
+            if not _recusada_por_limite(resposta):
+                return resposta.json()
         except (requests.RequestException, ValueError) as erro:
             motivo = _sem_token(erro)
+        else:
+            recusas += 1
+            if recusas > config.RECUSAS_NO_LIMITE:
+                raise ErroINMET(f"o INMET recusou a consulta {recusas} vezes seguidas pelo limite de consultas")
+            time.sleep(espera_no_limite)
+            espera_no_limite = min(espera_no_limite * 2, config.PAUSA_MAXIMA_NO_LIMITE)
+            continue
+        tentativa += 1
         if tentativa == config.TENTATIVAS:
             raise ErroINMET(f"{motivo} (depois de {tentativa} tentativas)")
         print(f"    ⚠️ {motivo} — tentando de novo em {espera:g} s ({tentativa}/{config.TENTATIVAS})")

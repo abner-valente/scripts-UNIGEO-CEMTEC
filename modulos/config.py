@@ -178,6 +178,16 @@ URL_DADOS = "https://apitempo.inmet.gov.br/token/estacao/{inicio}/{fim}/{codigo}
 TIMEOUT_ESTACOES = 20          # segundos
 TIMEOUT_DADOS = 60             # segundos
 PAUSA_ENTRE_REQUISICOES = 0.1  # segundos
+# O INMET limita as consultas a 100 por minuto, contadas por endereço de rede, e não por token: a
+# lista de estações, que nem usa token, é recusada junto (medido em 09/10/2026). Tudo o que sai do
+# mesmo endereço divide as 100 — o painel e o main.py de quem estiver na mesma rede. Passado o
+# limite, ele responde HTTP 200 com este aviso no lugar do JSON, por até um minuto. A recusa não
+# gasta tentativa: espera-se e pede-se de novo, com a espera dobrando (1, 2, 4, 8, 16, 16... s),
+# até RECUSAS_NO_LIMITE vezes por consulta (~2 min).
+AVISO_DE_LIMITE = "limite de requisi"
+PAUSA_NO_LIMITE = 1            # segundos, a primeira espera
+PAUSA_MAXIMA_NO_LIMITE = 16    # segundos
+RECUSAS_NO_LIMITE = 12
 # Quantas consultas podem correr juntas, no processo inteiro. Medido contra a API: com 8 as
 # 62 estações de uma semana saem em ~8 s (em fila levavam ~50 s); com 16 o INMET derruba a
 # conexão. O limite é global de propósito — o painel é público, e cada pessoa que abre

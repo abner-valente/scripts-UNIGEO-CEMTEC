@@ -313,3 +313,44 @@ def test_os_titulos_dos_mapas_sao_os_que_a_equipe_publica():
     assert (horas.titulo, horas.ranking, horas.decimais) == (
         "Horas Agregadas de risco alto de fogo em SC", "5 MAIORES EXPOSIÇÕES", 0)
     assert (da_hora.titulo, da_hora.subtitulo) == ("Risco de Fogo em SC", "03/09/2026 11:00 GMT-03")
+
+
+# ---------- Os gráficos do período ----------
+
+def horas_de_teste() -> pd.DataFrame:
+    """A tabela horária do produto, pequena: Alfa mede nos dois dias, Beta só no segundo."""
+    linhas = [("Alfa", date(2026, 10, 6), 3), ("Alfa", date(2026, 10, 6), 1), ("Alfa", date(2026, 10, 7), 0),
+              ("Beta", date(2026, 10, 7), 2), ("Beta", date(2026, 10, 7), 2)]
+    return pd.DataFrame(linhas, columns=["Estação", "dia", risco_fogo.COLUNA_NIVEL_HORA])
+
+
+def test_as_horas_por_nivel_vao_do_alto_para_o_baixo():
+    """Pedido da equipe (13/10/2026): a estação que chegou ao risco alto mostra o vermelho primeiro."""
+    por_nivel = risco_fogo.horas_por_nivel(horas_de_teste())
+
+    assert list(por_nivel.columns) == [risco_fogo.NIVEL_ALTO, risco_fogo.NIVEL_MEDIO, 1]
+    assert por_nivel.loc["Alfa"].tolist() == [1, 0, 1]
+    assert por_nivel.loc["Beta"].tolist() == [0, 2, 0]
+
+
+def test_o_dia_sem_dado_fica_vazio_no_calendario_e_nao_vira_sem_condicao():
+    """Zero é "mediu, e nenhuma condição valeu". Até 13/10/2026 o dia sem dado virava zero."""
+    calendario = risco_fogo.calendario_de_niveis(horas_de_teste(), ["Beta", "Alfa"])
+
+    assert list(calendario.index) == ["Beta", "Alfa"]
+    assert np.isnan(calendario.loc["Beta", date(2026, 10, 6)])        # Beta não mediu no dia 6
+    assert calendario.loc["Alfa", date(2026, 10, 7)] == 0               # Alfa mediu, e nada valeu
+    assert calendario.loc["Alfa", date(2026, 10, 6)] == 3
+
+
+def test_a_legenda_do_calendario_vai_do_alto_e_explica_o_branco(monkeypatch, tmp_path):
+    from modulos import graficos
+    figuras = []
+    monkeypatch.setattr(graficos, "salvar", lambda fig, caminho: figuras.append(fig))
+    tabela = pd.DataFrame({"06/10": [3.0, np.nan], "07/10": [0.0, 2.0]}, index=["Alfa", "Beta"])
+
+    graficos.calendario(tabela, config.CORES_RISCO, config.ROTULOS_RISCO, "Título", "Subtítulo",
+                        tmp_path / "calendario.png", sem_dado="Sem dado")
+
+    rotulos = [texto.get_text() for texto in figuras[0].axes[0].get_legend().get_texts()]
+    assert rotulos == ["Risco alto", "Risco médio", "Risco baixo", "Sem condição", "Sem dado"]
