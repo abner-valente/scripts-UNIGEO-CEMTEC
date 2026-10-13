@@ -172,8 +172,9 @@ Duas descobertas que moldaram o coletor:
   retomada noite após noite.
 - **O servidor do banco derruba a conexão parada no meio de uma transação por 5 minutos, e a
   parada à toa por 10** (`idle_in_transaction_session_timeout` e `idle_session_timeout`). Por isso
-  as leituras do `banco.py` não deixam transação aberta, e a bateria é gravada de 50 em 50
-  estações.
+  as leituras do `banco.py` não deixam transação aberta, a bateria é gravada de 50 em 50
+  estações, e a carga do histórico, se a conexão cair mesmo assim (o INMET lento por 10 minutos,
+  a máquina dormindo), reconecta e retoma pelas horas que faltam.
 
 **5. O coletor do Open-Meteo.** Confere a rodada mais recente de cada modelo, busca se ela ainda
 não está no banco, grava as horas (e, uma vez por dia, as semanas do EC46), e apaga as
@@ -204,7 +205,8 @@ está rodando na VM).
   "Não iniciar uma nova instância" (o padrão): `coletar.bat inmet` de hora em hora, aos 30
   minutos (a leitura de cada hora chega aos poucos: a das 15:00 de 09/10 tinha ~88% das estações
   às 15:26, e o que falta a execução seguinte completa); `coletar.bat inmet --extras`
-  uma vez por dia, de madrugada; e o do Open-Meteo duas vezes por dia. Antes da primeira coleta,
+  uma vez por dia, às 03:00 (leva ~10 min e termina antes da execução das 03:30: as duas juntas
+  passariam das 100 consultas por minuto); e o do Open-Meteo duas vezes por dia. Antes da primeira coleta,
   `python coletar.py esquema` cria as tabelas no `climageo`.
 - **Para atualizar**, o mesmo caminho de sempre (`git fetch`, mudar para a tag escolhida, instalar
   o que faltar) e reiniciar a tarefa do painel, porque o Streamlit não recarrega os módulos sozinho.

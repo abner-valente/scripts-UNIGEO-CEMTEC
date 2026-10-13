@@ -4,10 +4,12 @@ O INMET é simulado (`inmet.baixar_hora`, `lista_do_inmet` e `baixar_dados_estac
 dados do teste). Os testes que gravam usam o banco de teste (as fixtures `conexao` e `limpa`, no
 conftest.py) e são pulados sem ele.
 """
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
+import psycopg
 import pytest
 
 import coletar
@@ -160,6 +162,24 @@ def test_sem_a_lista_a_coleta_segue(limpa, inmet_simulado, monkeypatch, capsys):
     assert "Sem a lista" in capsys.readouterr().out
 
 
+def test_a_estacao_sem_como_cadastrar_fica_de_fora_e_nao_derruba_as_outras(limpa, inmet_simulado, monkeypatch,
+                                                                            capsys):
+    """Fora da lista e sem UF na consulta por hora: a leitura dela quebraria a chave do cadastro, e
+    a gravação das outras cairia junto, toda hora, até o INMET mudar."""
+    simulada = inmet.baixar_hora
+
+    def com_uma_sem_uf(momento):
+        dados = simulada(momento)
+        return pd.concat([dados, dados.iloc[[0]].assign(CD_ESTACAO="A555", UF=None)], ignore_index=True)
+
+    monkeypatch.setattr(inmet, "baixar_hora", com_uma_sem_uf)
+
+    coleta = coletor_inmet.coletar_ultimas(limpa, agora=AGORA, quantas=2)
+
+    assert coleta.gravadas == 6
+    assert "ficaram de fora: A555" in capsys.readouterr().out
+
+
 def test_os_extras_vem_por_estacao_e_nao_apagam_a_consulta_por_hora(limpa, inmet_simulado):
     coletor_inmet.coletar_ultimas(limpa, agora=AGORA, quantas=2)
 
@@ -227,6 +247,14 @@ def test_o_historico_retoma_de_onde_parou(limpa, inmet_simulado):
     assert list(banco.particoes(limpa, "inmet_horaria")) == ["inmet_horaria_202609", "inmet_horaria_202610"]
 
 
+def test_o_historico_nao_pede_horas_do_futuro(limpa, inmet_simulado):
+    agora = coletor_inmet._hora_cheia(None)
+
+    coletor_inmet.carregar_historico(limpa, agora - timedelta(hours=2), agora + timedelta(days=2))
+
+    assert max(inmet_simulado["horas"]) == agora
+
+
 def test_o_historico_para_quando_o_inmet_sai_do_ar(limpa, inmet_simulado, monkeypatch, capsys):
     def fora_do_ar(momento):
         inmet_simulado["horas"].append(momento)
@@ -277,3 +305,59 @@ def test_o_coletar_no_banco_de_teste(conexao, limpa, inmet_simulado, monkeypatch
     inmet_simulado["falhar"].add(datetime(2026, 10, 9, 13, tzinfo=timezone.utc))
     assert coletar.main(["inmet", "--teste"]) == 1
     assert limpa.execute("SELECT count(*) FROM inmet_horaria").fetchone()[0] == 9
+
+
+@pytest.fixture
+def historico_simulado(monkeypatch):
+    """O coletar.py sem banco: a conexão é de mentira, e a carga anota com que datas foi chamada."""
+    monkeypatch.setattr(config, "TOKEN_INMET", "token-de-teste")
+    monkeypatch.setattr(coletar, "ESPERA_PARA_RECONECTAR", 0)
+    monkeypatch.setattr(banco, "conectar", lambda *args, **kwargs: nullcontext("conexão"))
+    chamadas = {"datas": [], "quedas": 0}
+
+    def carregar(conexao, desde, ate):
+        chamadas["datas"].append((desde, ate))
+        if len(chamadas["datas"]) <= chamadas["quedas"]:
+            raise psycopg.OperationalError("terminating connection due to idle-session timeout")
+        return coletor_inmet.Coleta(consultas=24)
+
+    monkeypatch.setattr(coletor_inmet, "carregar_historico", carregar)
+    return chamadas
+
+
+def test_o_historico_reconecta_e_retoma_quando_a_conexao_cai(historico_simulado, capsys):
+    """São ~22 horas sem ninguém olhando: o servidor derruba a conexão parada por 10 minutos."""
+    historico_simulado["quedas"] = 1
+
+    assert coletar.main(["inmet", "--historico", "2018-01-01", "--ate", "2018-01-01"]) == 0
+
+    assert len(historico_simulado["datas"]) == 2
+    assert "Reconectando" in capsys.readouterr().out
+
+
+def test_o_historico_desiste_depois_de_tantas_quedas(historico_simulado, monkeypatch, capsys):
+    monkeypatch.setattr(coletar, "RECONEXOES_NO_HISTORICO", 2)
+    historico_simulado["quedas"] = 99
+
+    assert coletar.main(["inmet", "--historico", "2018-01-01"]) == 1
+
+    assert len(historico_simulado["datas"]) == 3
+    assert "❌ Banco" in capsys.readouterr().out
+
+
+def test_o_ate_inclui_o_ultimo_dia_inteiro(historico_simulado):
+    """--ate 2018-12-31 é até o fim do dia 31: a 00:00 de 01/01 fecha a última hora dele."""
+    coletar.main(["inmet", "--historico", "2018-01-01", "--ate", "2018-12-31"])
+
+    assert historico_simulado["datas"] == [(datetime(2018, 1, 1, tzinfo=timezone.utc),
+                                            datetime(2019, 1, 1, tzinfo=timezone.utc))]
+
+
+def test_o_ctrl_c_diz_como_retomar(monkeypatch, capsys):
+    def interromper(opcoes):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(coletar, "executar", interromper)
+
+    assert coletar.main(["inmet"]) == 130
+    assert "retoma de onde parou" in capsys.readouterr().out

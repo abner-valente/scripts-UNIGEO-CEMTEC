@@ -6,23 +6,32 @@ Feitos para o Agendador de Tarefas do Windows, pelo servidor\\coletar.bat, e rod
     python coletar.py inmet                          # de hora em hora: o cadastro e os últimos 3 dias
     python coletar.py inmet --extras                 # uma vez por dia: a sensação térmica, a bateria e o processador
     python coletar.py inmet --historico 2018-01-01   # uma vez só: as horas desde a data, retomando de onde parou
+    python coletar.py inmet --historico 2018-01-01 --ate 2018-12-31   # só um trecho (o último dia entra inteiro)
 
 A conexão é a BANCO_GRAVACAO do .env, no schema BANCO_SCHEMA (padrão: climageo). Com --teste
 (`python coletar.py inmet --teste`), é a BANCO_TESTE, no schema climageo_teste, que os testes
 apagam e recriam: para experimentar sem tocar no banco de verdade.
 
 Sai com código 1 quando o banco ou alguma consulta falham, para o Agendador marcar a execução.
+A carga do histórico pode ser interrompida com Ctrl+C e retomada com o mesmo comando; se a conexão
+com o banco cair no meio dela, ela reconecta e retoma sozinha.
 O plano está em docs/plano_arquitetura.md (passos 4 e 5).
 """
 import argparse
 import sys
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 
 import psycopg
 
 from modulos import banco, coletor_inmet, config, inmet
 
 SCHEMA_DE_TESTE = "climageo_teste"
+# A carga do histórico leva ~22 horas sem ninguém olhando. Se a conexão cair (o servidor derruba a
+# parada por 10 minutos, e o INMET pode demorar isso numa fase ruim; a máquina pode dormir), ela
+# reconecta e retoma pelas horas que faltam, até tantas vezes
+RECONEXOES_NO_HISTORICO = 5
+ESPERA_PARA_RECONECTAR = 60    # segundos
 
 
 def _saida_em_utf8() -> None:
@@ -57,11 +66,36 @@ def argumentos(linha: list[str] | None = None) -> argparse.Namespace:
     modo.add_argument("--historico", type=ler_data, metavar="DATA",
                       help="as horas desde DATA (UTC), pulando as que já estão no banco")
     do_inmet.add_argument("--ate", type=ler_data, metavar="DATA",
-                          help="com --historico: até a 00:00 UTC de DATA (padrão: agora)")
+                          help="com --historico: até o fim do dia DATA (UTC), inclusive (padrão: agora)")
     opcoes = parser.parse_args(linha)
     if getattr(opcoes, "ate", None) and not opcoes.historico:
         parser.error("--ate só vale com --historico")
     return opcoes
+
+
+def _primeira_linha(erro: Exception) -> str:
+    texto = str(erro).strip()
+    return texto.splitlines()[0] if texto else type(erro).__name__
+
+
+def carregar_historico(papel: str, schema: str, desde: datetime, ate: datetime | None) -> coletor_inmet.Coleta:
+    """A carga do histórico, que reconecta e retoma quando a conexão com o banco cai.
+
+    Como a carga pula as horas que já estão no banco, retomar é só chamá-la de novo: o dia que
+    estava no meio, e que o banco desfez, volta inteiro.
+    """
+    total = coletor_inmet.Coleta()
+    for vez in range(RECONEXOES_NO_HISTORICO + 1):
+        try:
+            with banco.conectar(papel, schema=schema) as conexao:
+                total.somar(coletor_inmet.carregar_historico(conexao, desde, ate))
+            return total
+        except (banco.ErroBanco, psycopg.OperationalError) as erro:
+            if vez == RECONEXOES_NO_HISTORICO:
+                raise
+            print(f"⚠️ A conexão com o banco caiu ({_primeira_linha(erro)}). Reconectando em "
+                  f"{ESPERA_PARA_RECONECTAR} s para retomar de onde parou ({vez + 1}/{RECONEXOES_NO_HISTORICO})...")
+            time.sleep(ESPERA_PARA_RECONECTAR)
 
 
 def executar(opcoes: argparse.Namespace) -> int:
@@ -71,6 +105,10 @@ def executar(opcoes: argparse.Namespace) -> int:
         return 1
     papel, schema = ("teste", SCHEMA_DE_TESTE) if opcoes.teste else ("gravacao", config.BANCO_SCHEMA)
     try:
+        if opcoes.trabalho == "inmet" and opcoes.historico:
+            # --ate é o último dia, inteiro: até a 00:00 do dia seguinte, que fecha a última hora dele
+            ate = opcoes.ate + timedelta(days=1) if opcoes.ate else None
+            return 1 if carregar_historico(papel, schema, opcoes.historico, ate).falhas else 0
         with banco.conectar(papel, schema=schema) as conexao:
             if opcoes.trabalho == "esquema":
                 banco.criar_esquema(conexao)
@@ -78,8 +116,6 @@ def executar(opcoes: argparse.Namespace) -> int:
                 return 0
             if opcoes.extras:
                 coleta = coletor_inmet.coletar_extras(conexao)
-            elif opcoes.historico:
-                coleta = coletor_inmet.carregar_historico(conexao, opcoes.historico, opcoes.ate)
             else:
                 coleta = coletor_inmet.coletar_ultimas(conexao)
     except (banco.ErroBanco, psycopg.Error) as erro:
@@ -93,7 +129,12 @@ def executar(opcoes: argparse.Namespace) -> int:
 
 def main(linha: list[str] | None = None) -> int:
     _saida_em_utf8()
-    return executar(argumentos(linha))
+    try:
+        return executar(argumentos(linha))
+    except KeyboardInterrupt:
+        print("\n⏹️ Interrompido. O que já foi gravado fica no banco; a hora ou o dia que estava no "
+              "meio é desfeito. Rodando o mesmo comando, a carga do histórico retoma de onde parou.")
+        return 130
 
 
 if __name__ == "__main__":

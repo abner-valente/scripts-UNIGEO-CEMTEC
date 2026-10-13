@@ -431,6 +431,15 @@ def horas_guardadas(conexao: psycopg.Connection, inicio, fim) -> set[pd.Timestam
 
 
 @_sem_deixar_transacao
+def fora_do_cadastro(conexao: psycopg.Connection, codigos: Iterable[str]) -> list[str]:
+    """Os códigos dados que não estão no cadastro das estações, em ordem."""
+    linhas = conexao.execute("SELECT codigo FROM unnest(%s::text[]) AS codigo "
+                             "WHERE codigo NOT IN (SELECT codigo FROM estacao) ORDER BY codigo",
+                             (list(codigos),)).fetchall()
+    return [codigo for (codigo,) in linhas]
+
+
+@_sem_deixar_transacao
 def estacoes_com_leituras(conexao: psycopg.Connection, inicio, fim) -> list[str]:
     """As estações que têm alguma leitura na janela (início, fim], em ordem de código."""
     linhas = conexao.execute("SELECT DISTINCT estacao FROM inmet_horaria WHERE hora_utc > %s AND hora_utc <= %s "

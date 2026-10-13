@@ -203,6 +203,14 @@ def coletar_horas(conexao: psycopg.Connection, horas: list[datetime]) -> Coleta:
     # estações de que o banco tem dado.
     com_leitura = dados[dados["CD_ESTACAO"].isin(leituras["estacao"])]
     coleta.estacoes_novas = banco.gravar_estacoes(conexao, estacoes_das_leituras(com_leitura), so_as_novas=True)
+    # A que nem assim entrou (fora da lista e sem nome, UF ou coordenadas na consulta por hora)
+    # fica de fora, com aviso: a leitura dela quebraria a chave do cadastro e derrubaria a gravação
+    # de todas as outras. Em 09 e 13/10/2026, de 2010 a 2026, nenhuma estava nesse caso.
+    sem_cadastro = banco.fora_do_cadastro(conexao, leituras["estacao"].unique())
+    if sem_cadastro:
+        print(f"    ⚠️ {len(sem_cadastro)} estações com leitura e sem como cadastrar (sem nome, UF ou "
+              f"coordenadas) ficaram de fora: {', '.join(sem_cadastro[:10])}")
+        leituras = leituras[~leituras["estacao"].isin(sem_cadastro)]
     coleta.leituras = len(leituras)
     coleta.gravadas = banco.gravar_inmet(conexao, leituras)
     return coleta
@@ -269,7 +277,7 @@ def carregar_historico(conexao: psycopg.Connection, desde: datetime = INICIO_DO_
     vez de passar a noite falhando.
     """
     comeco = time.monotonic()
-    desde, ate = _hora_cheia(desde), _hora_cheia(ate)
+    desde, ate = _hora_cheia(desde), min(_hora_cheia(ate), _hora_cheia(None))   # nada do futuro
     mudadas = atualizar_cadastro(conexao)
     if mudadas is not None:
         print(f"🗂️ Cadastro: {mudadas} estações novas ou mudadas na lista do INMET")
