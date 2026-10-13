@@ -391,6 +391,27 @@ def momentos(leituras: pd.DataFrame, modo: str) -> list:
     return sorted(_fatias(leituras, modo).unique())
 
 
+# Acima disto, a linha do tempo fica riscada demais, e só a virada do mês é marcada
+MAX_MARCAS_DE_DIA = 62
+
+
+def marcas_dos_dias(paradas: list, dia_de=lambda parada: pd.Timestamp(parada).date()) -> list[float]:
+    """Onde riscar a virada de cada dia na linha do tempo do deslizante, em % da largura dele.
+
+    O deslizante põe a parada i em i/(n-1) da largura, e o risco vai na primeira parada de cada
+    dia novo. As paradas podem ser horas ou dias, e não precisam ser seguidas: no risco de fogo,
+    o deslizante pode parar só nas horas de risco alto. `dia_de` diz o dia de cada parada, no
+    fuso do estado. Num período longo, com dia demais, risca só a virada do mês.
+    """
+    if len(paradas) < 2:
+        return []
+    dias = [dia_de(parada) for parada in paradas]
+    viradas = [i for i in range(1, len(dias)) if dias[i] != dias[i - 1]]
+    if len(viradas) > MAX_MARCAS_DE_DIA:
+        viradas = [i for i in viradas if (dias[i].year, dias[i].month) != (dias[i - 1].year, dias[i - 1].month)]
+    return [100 * i / (len(paradas) - 1) for i in viradas]
+
+
 def recorte(leituras: pd.DataFrame, modo: str, momento=None) -> pd.DataFrame:
     """Só as leituras daquela hora, daquele dia — ou todas, no período inteiro."""
     if modo == PERIODO or momento is None:

@@ -102,6 +102,26 @@ ESTILO_BALAO = """<style>
 #vg-tooltip-element table tr td.key { max-width: 20rem; }
 #vg-tooltip-element table tr:has(td.value:empty) { display: none; }
 </style>"""
+# A linha do tempo dos mapas (ver linha_do_tempo). O deslizante do Streamlit pinta o trilho do
+# começo até o ponto escolhido, e a equipe lia isso como acumulado (13/10/2026). Aqui o trilho
+# fica neutro, com um risco em cada virada de dia, e as datas das pontas ficam sempre à mostra (o
+# Streamlit só as mostra com o mouse em cima). Vale só para os deslizantes com essas chaves: se um
+# dia o Streamlit mudar o desenho dele, eles voltam a ser o deslizante de sempre, e nada quebra.
+COR_DA_LINHA_DO_TEMPO = "rgba(128, 128, 128, 0.35)"   # cinza translúcido: serve ao tema claro e ao escuro
+COR_DO_RISCO_DO_DIA = "rgba(128, 128, 128, 0.75)"
+
+
+def _estilo_da_linha_do_tempo(chave: str, marcas: list[float]) -> str:
+    deslizante = f".st-key-{chave} [data-testid='stSlider']"
+    riscos = ", ".join(
+        f"linear-gradient(to right, transparent calc({p:.3f}% - 1px), {COR_DO_RISCO_DO_DIA} calc({p:.3f}% - 1px), "
+        f"{COR_DO_RISCO_DO_DIA} calc({p:.3f}% + 1px), transparent calc({p:.3f}% + 1px))" for p in marcas)
+    # Os riscos vão no fundo da caixa do trilho, 14 px de altura em volta dele
+    dias = (f"{deslizante} [role='group'] > div {{ background-image: {riscos}; background-size: 100% 14px; "
+            "background-repeat: no-repeat; background-position: 0 13px; }") if marcas else ""
+    return (f"<style>{deslizante} [role='group'] > div > div:first-child {{ background-image: none !important; "
+            f"background-color: {COR_DA_LINHA_DO_TEMPO} !important; }} "
+            f"{deslizante} [data-testid='stSliderTickBar'] {{ opacity: 1 !important; }} {dias}</style>")
 
 # O streamlit redireciona a saída dos módulos, e no Windows ela vai em cp1252: sem isto, o
 # primeiro aviso com emoji (uma nova tentativa na API, por exemplo) derruba a tela inteira.
@@ -587,6 +607,19 @@ def _vizinhas_do_mapa(apoio: pd.Series | None, nome: str, uf: str, quando: str):
     if apoio is None or apoio.dropna().empty:
         return None
     return mapas.preparar_pontos(_com_coordenadas(apoio, nome, uf), nome, quando)
+
+
+def linha_do_tempo(rotulo: str, paradas: list, chave: str, formatar, dia_de=None):
+    """O deslizante que escolhe uma hora ou um dia, desenhado como linha do tempo.
+
+    É o `st.select_slider` de sempre, começando na última parada, sem o trilho pintado até o ponto
+    (que a equipe lia como acumulado) e com um risco na virada de cada dia. `dia_de` diz o dia de
+    cada parada no fuso do estado; sem ele, vale a data da própria parada.
+    """
+    marcas = (variaveis.marcas_dos_dias(paradas, dia_de) if dia_de
+              else variaveis.marcas_dos_dias(paradas))
+    st.html(_estilo_da_linha_do_tempo(chave, marcas))   # só estilo: o Streamlit não reserva espaço para ele
+    return st.select_slider(rotulo, options=paradas, value=paradas[-1], format_func=formatar, key=chave)
 
 
 def botao_do_boletim(medida: str, chave: str, arquivo: str, desenhar) -> None:
@@ -1878,8 +1911,7 @@ with aba_mapa:
                 else:
                     formatar = ((lambda marca: f"{marca:%d/%m/%Y}") if modo == variaveis.DIA
                                 else (lambda marca: f"{marca:%d/%m %H:%M}"))
-                    momento = st.select_slider("Quando", options=paradas, value=paradas[-1],
-                                               format_func=formatar, key=f"quando_{modo}")
+                    momento = linha_do_tempo("Quando", paradas, f"quando_{modo}", formatar)
                     rotulo = formatar(momento)
                     carimbo = (f"{momento:%Y%m%d}" if modo == variaveis.DIA else f"{momento:%Y%m%d_%H}h")
 
@@ -2178,9 +2210,10 @@ with aba_risco:
                             "em hora nenhuma do período. Desligue a caixa acima para ver todas as horas.")
                 else:
                     quando = list(mostradas)
-                    hora = st.select_slider(
-                        "Quando", options=quando, value=quando[-1], key="quando_risco",
-                        format_func=lambda marca: f"{marca.tz_convert(recorte.fuso):%d/%m %H:%M}")
+                    hora = linha_do_tempo(
+                        "Quando", quando, "quando_risco",
+                        lambda marca: f"{marca.tz_convert(recorte.fuso):%d/%m %H:%M}",
+                        dia_de=lambda marca: marca.tz_convert(recorte.fuso).date())
                     avaliada = mostradas[hora]
                     # As de apoio já entraram na grade; nos pontos e na contagem, só as do estado
                     do_estado_na_hora = avaliada.estacoes[avaliada.estacoes["Estação"].isin(nomes_do_estado)]
@@ -2227,8 +2260,7 @@ with aba_risco:
             # --- por dia --------------------------------------------------------------------
             elif modo_risco == variaveis.DIA:
                 dias = risco.por_dia(avaliadas)
-                dia = st.select_slider("Dia", options=list(dias), value=list(dias)[-1],
-                                       key="dia_risco", format_func=lambda data: f"{data:%d/%m/%Y}")
+                dia = linha_do_tempo("Dia", list(dias), "dia_risco", lambda data: f"{data:%d/%m/%Y}")
                 _, meio, _ = st.columns([1, 3, 1])
                 with meio:
                     do_dia = risco.estacoes_do_dia(avaliadas, dia)
@@ -2305,9 +2337,8 @@ with aba_risco:
 
             st.subheader("Condições atendidas")
             dias_com_dado = sorted(horaria["dia"].unique())
-            dia_condicoes = st.select_slider(
-                "Dia", options=dias_com_dado, value=dias_com_dado[-1], key="dia_condicoes",
-                format_func=lambda data: f"{data:%d/%m/%Y}")
+            dia_condicoes = linha_do_tempo("Dia", dias_com_dado, "dia_condicoes",
+                                           lambda data: f"{data:%d/%m/%Y}")
             st.caption("Quantas horas cada condição valeu naquele dia. É o gráfico que responde se "
                        "o risco veio do calor, da secura ou do vento — o que o nível sozinho não diz.")
             st.altair_chart(condicoes_do_dia(horaria, dia_condicoes, ordem), width="stretch")

@@ -9,6 +9,14 @@ Cada versão separa as mudanças em até quatro grupos:
 
 Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
+## [0.3.2] — em andamento
+
+Ajustes pedidos pela unidade depois da apresentação do projeto (13/10/2026).
+
+### Mudou
+
+- **Painel: o deslizante "Quando" das abas Mapas Boletim e Risco de Fogo virou uma linha do tempo.** O trilho vinha pintado do começo do período até o ponto escolhido, e a equipe lia isso como acumulado, o que não é: cada mapa dessas abas é de uma hora ou de um dia. Agora o trilho fica sem cor, com um risco em cada virada de dia, e as datas do começo e do fim ficam sempre à mostra. Vale também para os deslizantes "Dia" do Risco de Fogo. Os da aba Chuva, que mostra acumulados de verdade, continuam como eram.
+
 ## [0.3.1] — 08/10/2026
 
 Levada à `main` em 08/10/2026. As decisões desta versão estão em `docs/escopo_v0.3.1.md`, e o plano até o servidor da unidade, em `docs/plano_arquitetura.md`.

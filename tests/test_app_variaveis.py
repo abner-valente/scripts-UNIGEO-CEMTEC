@@ -368,3 +368,55 @@ def test_o_padrao_traz_temperatura_umidade_e_vento_em_toda_agregacao():
     for modo, nomes in variaveis.PADRAO_MAPA.items():
         grandezas = {variaveis.por_nome(nome).grandeza for nome in nomes}
         assert grandezas == {"Temperatura", "Umidade", "Vento"}, f"{modo}: {grandezas}"
+
+
+# =====================================================
+# A LINHA DO TEMPO DO DESLIZANTE
+# =====================================================
+def test_a_linha_do_tempo_risca_a_virada_de_cada_dia():
+    """O deslizante põe a parada i em i/(n-1) da largura; o risco vai na primeira hora do dia novo."""
+    horas = list(pd.date_range("2026-10-06 22:00", "2026-10-08 02:00", freq="h", tz="America/Campo_Grande"))
+
+    marcas = variaveis.marcas_dos_dias(horas)
+
+    assert len(horas) == 29
+    assert marcas == pytest.approx([100 * 2 / 28, 100 * 26 / 28])     # as 00:00 de 07/10 e de 08/10
+
+
+def test_a_linha_do_tempo_dos_dias_risca_cada_dia():
+    dias = list(pd.date_range("2026-10-01", "2026-10-05", freq="D").date)
+
+    assert variaveis.marcas_dos_dias(dias) == pytest.approx([25.0, 50.0, 75.0, 100.0])
+
+
+def test_a_linha_do_tempo_com_paradas_salteadas():
+    """No risco de fogo o deslizante pode parar só nas horas de risco alto."""
+    horas = [pd.Timestamp(marca, tz="America/Campo_Grande")
+             for marca in ("2026-10-06 14:00", "2026-10-06 15:00", "2026-10-08 13:00")]
+
+    assert variaveis.marcas_dos_dias(horas) == pytest.approx([100.0])
+
+
+def test_a_linha_do_tempo_vira_o_dia_no_fuso_do_estado():
+    """As paradas do risco de fogo vêm em UTC: 04:00 UTC é a meia-noite de MS."""
+    horas = list(pd.date_range("2026-10-07 02:00", "2026-10-07 06:00", freq="h", tz="UTC"))
+
+    em_utc = variaveis.marcas_dos_dias(horas)
+    em_ms = variaveis.marcas_dos_dias(horas, dia_de=lambda marca: marca.tz_convert("America/Campo_Grande").date())
+
+    assert em_utc == []                       # tudo no mesmo dia UTC
+    assert em_ms == pytest.approx([50.0])     # a das 04:00 UTC, que é 00:00 em MS
+
+
+def test_num_periodo_longo_so_a_virada_do_mes_e_riscada():
+    dias = list(pd.date_range("2026-07-15", "2026-10-15", freq="D").date)
+
+    marcas = variaveis.marcas_dos_dias(dias)
+
+    assert len(marcas) == 3                   # 01/08, 01/09 e 01/10
+    assert marcas[0] == pytest.approx(100 * 17 / (len(dias) - 1))
+
+
+@pytest.mark.parametrize("paradas", [[], [pd.Timestamp("2026-10-06")]])
+def test_sem_paradas_bastantes_nao_ha_o_que_riscar(paradas):
+    assert variaveis.marcas_dos_dias(paradas) == []
