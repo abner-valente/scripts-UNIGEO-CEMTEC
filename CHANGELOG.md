@@ -11,7 +11,7 @@ Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
 ## [0.4.1] — em andamento
 
-Ainda não está na `main`. É o começo do banco da UNIGEO e dos coletores (fase 2 de `docs/plano_arquitetura.md`). O painel e o `main.py` seguem buscando nas APIs; muda só o jeito de esperar o INMET quando ele recusa por excesso de consultas (em Corrigido).
+Ainda não está na `main`. É o começo do banco da UNIGEO e dos coletores (fase 2 de `docs/plano_arquitetura.md`). O painel e o `main.py` seguem buscando nas APIs. A correção do limite de consultas do INMET, feita aqui, já foi para a `main` na 0.3.2.
 
 ### Novo
 
@@ -19,9 +19,27 @@ Ainda não está na `main`. É o começo do banco da UNIGEO e dos coletores (fas
 - **O `.env.example` ganhou as conexões do banco** (`BANCO_GRAVACAO`, `BANCO_LEITURA` e `BANCO_TESTE`). Por enquanto, só quem programa usa a de teste.
 - **O coletor do INMET** (`python coletar.py inmet`), que grava no banco as leituras horárias de todas as estações automáticas do Brasil. De hora em hora, ele rebusca os últimos 3 dias, com uma consulta por hora que traz todas as estações, e o banco só reescreve o que o INMET mudou. Uma vez por dia (`--extras`), busca por estação a sensação térmica, a bateria e a temperatura do processador, que a consulta por hora não traz. A carga do histórico (`--historico 2018-01-01`) roda uma vez só: pode ser interrompida com Ctrl+C e retomada com o mesmo comando, e se a conexão com o banco cair no meio, reconecta e retoma sozinha. No servidor, o Agendador de Tarefas o chama pelo `servidor\coletar.bat`.
 
+## [0.3.2] — 13/10/2026
+
+Levada à `main` em 13/10/2026. Ajustes pedidos pela unidade depois da apresentação do projeto, e uma correção que veio da 0.4.
+
+### Atenção ao atualizar
+
+- **Quem roda o painel na própria máquina precisa reiniciá-lo** (Ctrl+C e `streamlit run app/explorador.py` de novo) depois de atualizar: mudaram arquivos que o Streamlit não relê sozinho. As dependências não mudaram. No Streamlit Cloud, é o Reboot.
+- **O calendário do produto `risco_fogo` pode mudar para um período já gerado:** o dia em que uma estação ficou sem dado, que saía cinza ("Sem condição"), agora sai em branco ("Sem dado"). Os números da planilha e os mapas não mudam.
+
+### Mudou
+
+- **Painel: o deslizante "Quando" das abas Mapas Boletim e Risco de Fogo virou uma linha do tempo.** O trilho vinha pintado do começo do período até o ponto escolhido, e a equipe lia isso como acumulado, o que não é: cada mapa dessas abas é de uma hora ou de um dia. Agora o trilho fica sem cor, com um risco em cada virada de dia, e as datas do começo e do fim ficam sempre à mostra. Vale também para os deslizantes "Dia" do Risco de Fogo e para o "Quando" do Mapa Navegação. Os da aba Chuva, que mostra acumulados de verdade, continuam como eram.
+- **Painel, Risco de Fogo: a caixa "Mostrar o nível e as condições de cada estação" vem ligada.** Desligue para ler só as cores.
+- **Painel, Risco de Fogo: os níveis vão do alto para o baixo.** No gráfico "Horas em cada nível", cada barra começa pelo vermelho (risco alto), depois o laranja e o amarelo; as legendas das barras e do calendário seguem a mesma ordem.
+- **Painel, Risco de Fogo: o calendário explica o dia vazio.** É o dia em que a estação não teve nenhuma hora com as três medidas (temperatura máxima, umidade mínima e rajada): ficou sem transmitir, ou um dos sensores ficou sem dado. É diferente do cinza, em que ela mediu e nenhuma condição valeu.
+- **Produto `risco_fogo`: o gráfico de horas em cada nível também vai do alto para o baixo**, como no painel: cada barra começa pelo vermelho, e a legenda segue a mesma ordem. A legenda do calendário também passou a começar pelo risco alto.
+
 ### Corrigido
 
-- **Quando o INMET recusa por excesso de consultas, o painel e o `main.py` esperam, em vez de perder a estação.** O INMET aceita 100 consultas por minuto de cada endereço de rede, contando todas as consultas que saem dele (medido em 09/10/2026), e uma carga do painel ou do `main.py` com as estações vizinhas faz umas 100. A recusa vinha contando como falha: três seguidas, em 6 segundos, deixavam a estação de fora, como "Falha na consulta", e o mapa saía sem ela. Agora se espera o minuto virar, com a espera dobrando a cada recusa (até uns 2 minutos).
+- **Produto `risco_fogo`: no calendário, o dia sem dado não sai mais como "Sem condição".** O dia em que a estação não teve nenhuma hora com as três medidas virava zero e saía cinza, como se ela tivesse medido e nenhuma condição tivesse valido. Agora ele fica em branco, e a legenda ganha "Sem dado" quando há dia assim. Na semana de 06 a 12/10/2026, por exemplo, Nova Andradina (06 e 07/10) e Bataguassu (11/10) saíam cinza.
+- **Quando o INMET recusa por excesso de consultas, o painel e o `main.py` esperam, em vez de perder a estação.** O INMET aceita 100 consultas por minuto de cada endereço de rede, contando todas as consultas que saem dele (medido em 09/10/2026), e uma carga do painel ou do `main.py` com as estações vizinhas faz umas 100. A recusa vinha contando como falha: três seguidas, em 6 segundos, deixavam a estação de fora, como "Falha na consulta", e o mapa saía sem ela. Rodando o `relatorio_inmet` e logo depois o `risco_fogo`, por exemplo, o segundo perdia as primeiras estações de MS. Agora se espera o minuto virar, com a espera dobrando a cada recusa (até uns 2 minutos).
 
 ## [0.3.1] — 08/10/2026
 

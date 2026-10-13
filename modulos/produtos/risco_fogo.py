@@ -356,6 +356,32 @@ def tabela_horaria(completas: list, fuso=None) -> pd.DataFrame:
     return tabela
 
 
+# Do pior nível para o mais brando, nas barras e nas legendas: a estação que chegou ao risco alto
+# mostra o vermelho primeiro (pedido da equipe, 13/10/2026)
+NIVEIS_DO_PIOR = [NIVEL_ALTO, NIVEL_MEDIO, 1]
+
+
+def horas_por_nivel(horas: pd.DataFrame) -> pd.DataFrame:
+    """Quantas horas cada estação passou em cada nível, com as colunas do alto para o baixo.
+
+    Sem filtrar as linhas: reindexar as colunas já descarta o nível 0 e mantém as estações que
+    não atenderam condição nenhuma, que precisam aparecer (em cinza) no calendário.
+    """
+    return (horas.pivot_table(index="Estação", columns=COLUNA_NIVEL_HORA, values="dia", aggfunc="count")
+            .reindex(columns=NIVEIS_DO_PIOR).fillna(0))
+
+
+def calendario_de_niveis(horas: pd.DataFrame, ordem) -> pd.DataFrame:
+    """O pior nível de cada estação em cada dia, com as estações na ordem dada.
+
+    O dia em que a estação não teve nenhuma hora com as três medidas fica vazio, e não zero: zero
+    é "mediu, e nenhuma condição valeu". Até 13/10/2026 ele virava zero, e uma estação parada saía
+    no calendário como se tivesse medido.
+    """
+    return (horas.pivot_table(index="Estação", columns="dia", values=COLUNA_NIVEL_HORA, aggfunc="max")
+            .reindex(ordem))
+
+
 def gerar_graficos(horas: pd.DataFrame, periodo: Periodo, pasta: Path,
                    recorte: config.Recorte = config.RECORTE) -> None:
     """Três gráficos do período: horas por nível, calendário dos dias e as condições de cada dia."""
@@ -364,24 +390,22 @@ def gerar_graficos(horas: pd.DataFrame, periodo: Periodo, pasta: Path,
 
     # Ordem das estações: quem passou mais horas em risco alto primeiro. Vale para os três gráficos,
     # para dar para comparar um com o outro.
-    # Sem filtrar as linhas: reindexar as colunas já descarta o nível 0 e mantém as estações que
-    # não atenderam condição nenhuma, que precisam aparecer (em cinza) no calendário.
-    por_nivel = (horas.pivot_table(index="Estação", columns=COLUNA_NIVEL_HORA, values="dia", aggfunc="count")
-                 .reindex(columns=[1, NIVEL_MEDIO, NIVEL_ALTO]).fillna(0))
+    por_nivel = horas_por_nivel(horas)
     ordem = por_nivel.sort_values([NIVEL_ALTO, NIVEL_MEDIO, 1]).index
 
     graficos.barras_empilhadas(
-        por_nivel.loc[ordem], config.CORES_RISCO[1:], config.ROTULOS_RISCO[1:], titulo,
+        por_nivel.loc[ordem], [config.CORES_RISCO[nivel] for nivel in NIVEIS_DO_PIOR],
+        [config.ROTULOS_RISCO[nivel] for nivel in NIVEIS_DO_PIOR], titulo,
         f"Horas em cada nível de risco · {janela}", "Horas",
         pasta / f"Grafico_Risco_Fogo_Niveis_{recorte.uf}_{periodo.identificador}.png",
-        cores_do_texto=[graficos.TINTA, graficos.TINTA, "white"])
+        cores_do_texto=["white", graficos.TINTA, graficos.TINTA])
 
-    calendario = (horas.pivot_table(index="Estação", columns="dia", values=COLUNA_NIVEL_HORA, aggfunc="max")
-                  .fillna(0).reindex(ordem[::-1]))
+    calendario = calendario_de_niveis(horas, ordem[::-1])
     calendario.columns = [f"{dia:%d/%m}" for dia in calendario.columns]
     graficos.calendario(
         calendario, config.CORES_RISCO, config.ROTULOS_RISCO, titulo, f"Pior nível de cada dia · {janela}",
-        pasta / f"Grafico_Risco_Fogo_Calendario_{recorte.uf}_{periodo.identificador}.png")
+        pasta / f"Grafico_Risco_Fogo_Calendario_{recorte.uf}_{periodo.identificador}.png",
+        sem_dado="Sem dado (nenhuma hora com as três medidas)")
 
     for dia, leituras in horas.groupby("dia"):
         # Mesma ordem dos outros dois gráficos: barras horizontais crescem de baixo para cima
