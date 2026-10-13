@@ -11,11 +11,18 @@ Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
 ## [0.3.2] — em andamento
 
-Ajustes pedidos pela unidade depois da apresentação do projeto (13/10/2026).
+Ajustes pedidos pela unidade depois da apresentação do projeto (13/10/2026), e uma correção que veio da 0.4.
 
 ### Mudou
 
-- **Painel: o deslizante "Quando" das abas Mapas Boletim e Risco de Fogo virou uma linha do tempo.** O trilho vinha pintado do começo do período até o ponto escolhido, e a equipe lia isso como acumulado, o que não é: cada mapa dessas abas é de uma hora ou de um dia. Agora o trilho fica sem cor, com um risco em cada virada de dia, e as datas do começo e do fim ficam sempre à mostra. Vale também para os deslizantes "Dia" do Risco de Fogo. Os da aba Chuva, que mostra acumulados de verdade, continuam como eram.
+- **Painel: o deslizante "Quando" das abas Mapas Boletim e Risco de Fogo virou uma linha do tempo.** O trilho vinha pintado do começo do período até o ponto escolhido, e a equipe lia isso como acumulado, o que não é: cada mapa dessas abas é de uma hora ou de um dia. Agora o trilho fica sem cor, com um risco em cada virada de dia, e as datas do começo e do fim ficam sempre à mostra. Vale também para os deslizantes "Dia" do Risco de Fogo e para o "Quando" do Mapa Navegação. Os da aba Chuva, que mostra acumulados de verdade, continuam como eram.
+- **Painel, Risco de Fogo: a caixa "Mostrar o nível e as condições de cada estação" vem ligada.** Desligue para ler só as cores.
+- **Painel, Risco de Fogo: os níveis vão do alto para o baixo.** No gráfico "Horas em cada nível", cada barra começa pelo vermelho (risco alto), depois o laranja e o amarelo; as legendas das barras e do calendário seguem a mesma ordem.
+- **Painel, Risco de Fogo: o calendário explica o dia vazio.** É o dia em que a estação não teve nenhuma hora com as três medidas (temperatura máxima, umidade mínima e rajada): ficou sem transmitir, ou um dos sensores ficou sem dado. É diferente do cinza, em que ela mediu e nenhuma condição valeu.
+
+### Corrigido
+
+- **Quando o INMET recusa por excesso de consultas, o painel e o `main.py` esperam, em vez de perder a estação.** O INMET aceita 100 consultas por minuto de cada endereço de rede, contando todas as consultas que saem dele (medido em 09/10/2026), e uma carga do painel ou do `main.py` com as estações vizinhas faz umas 100. A recusa vinha contando como falha: três seguidas, em 6 segundos, deixavam a estação de fora, como "Falha na consulta", e o mapa saía sem ela. Rodando o `relatorio_inmet` e logo depois o `risco_fogo`, por exemplo, o segundo perdia as primeiras estações de MS. Agora se espera o minuto virar, com a espera dobrando a cada recusa (até uns 2 minutos).
 
 ## [0.3.1] — 08/10/2026
 

@@ -536,6 +536,8 @@ Ficam em [`modulos/config.py`](modulos/config.py): pastas, endereços, tempos li
 
 Erros de token (HTTP 4xx) não são repetidos, porque novas tentativas não resolvem.
 
+**O INMET aceita 100 consultas por minuto de cada endereço de rede**, contando todas as que saem dele: as de quem está na mesma rede, no painel ou no `main.py`. Uma consulta de MS com as estações vizinhas faz umas 100. Passado o limite, o INMET recusa até o minuto virar, e a consulta espera, sem contar como falha: quem roda o `main.py` logo depois de outra pessoa pode ver a coleta parar por até um minuto antes de seguir. Até a 0.3.1, a recusa contava como falha, e a estação ficava de fora.
+
 ## Testes
 
 Os testes usam uma API do INMET simulada, então não precisam de token nem de internet:
@@ -620,7 +622,8 @@ produto trabalha com uma lista de `(estação, leituras)`, o painel com uma tabe
 | **Hora a hora** | Deslizante + o mapa em quatro classes, com o botão de GIF. A caixa **"só as horas em que alguma estação chegou ao risco alto"** faz o deslizante parar só nelas. O critério é o nível **medido**: a superfície pode mostrar nível 2 numa célula onde nenhuma estação chegou a 2 |
 | **Por dia** | O **pior** nível que cada lugar alcançou no dia — um dia é de risco alto se houve uma hora em que as três condições valeram juntas |
 | **Período inteiro** | O pior nível da janela, as **horas em risco alto** célula a célula, e a tabela por estação com as mesmas colunas da planilha do produto (CSV) |
-| **Três gráficos** | Horas em cada nível, o calendário do pior nível de cada dia, e as condições atendidas de um dia — o gráfico que responde se o risco veio do calor, da secura ou do vento. A ordem das estações é a mesma nos três, para dar para comparar |
+| **Três gráficos** | Horas em cada nível, o calendário do pior nível de cada dia, e as condições atendidas de um dia — o gráfico que responde se o risco veio do calor, da secura ou do vento. A ordem das estações é a mesma nos três, para dar para comparar. Nas barras e nas legendas, os níveis vão do **alto para o baixo**: a estação que chegou ao risco alto mostra o vermelho primeiro. No calendário, **dia vazio** é dia sem nenhuma hora com as três medidas (estação sem transmitir, ou um sensor sem dado), e **cinza** é dia medido em que nenhuma condição valeu |
+| **Nível de cada estação** | A caixa "Mostrar o nível e as condições de cada estação" vem **ligada**: o nível escrito sobre cada estação e, no hora a hora, um ponto para cada condição atendida. Desligue para ler só as cores |
 | **Interpolação** | As três variáveis são interpoladas **separadas** e a regra é aplicada célula a célula. Interpolar o nível 0–3 direto produziria "1,7 condições" e espalharia risco médio onde estação nenhuma o registrou |
 | **Custo** | Três interpolações por hora, 31 ms cada: uma semana sai em ~5 s, com barra de progresso, e fica em cache |
 

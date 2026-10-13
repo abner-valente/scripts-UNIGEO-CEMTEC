@@ -918,8 +918,19 @@ def ordem_das_estacoes(horaria: pd.DataFrame) -> list[str]:
                                       ascending=False).index)
 
 
+# Do pior nível para o mais brando, nas barras e nas legendas: a estação que chegou ao risco alto
+# mostra o vermelho primeiro (pedido da equipe, 13/10/2026)
+NIVEIS_DO_PIOR = [risco.NIVEL_ALTO, risco.NIVEL_MEDIO, 1]
+NOMES_DOS_NIVEIS = {0: "Sem condição", 1: "Baixo", risco.NIVEL_MEDIO: "Médio", risco.NIVEL_ALTO: "Alto"}
+
+
+def _legenda_dos_niveis(niveis: list[int]) -> alt.Legend:
+    nomes = ", ".join(f"'{nivel}': '{NOMES_DOS_NIVEIS[nivel]}'" for nivel in niveis)
+    return alt.Legend(orient="bottom", labelExpr=f"{{{nomes}}}[datum.label]")
+
+
 def barras_de_niveis(horaria: pd.DataFrame, ordem: list[str]) -> alt.Chart:
-    """Quantas horas cada estação passou em cada nível, empilhadas."""
+    """Quantas horas cada estação passou em cada nível, empilhadas do alto para o baixo."""
     contagem = (horaria[horaria[risco_fogo.COLUNA_NIVEL_HORA] > 0]
                 .groupby(["Estação", risco_fogo.COLUNA_NIVEL_HORA]).size().reset_index(name="Horas"))
     return (alt.Chart(contagem)
@@ -929,10 +940,11 @@ def barras_de_niveis(horaria: pd.DataFrame, ordem: list[str]) -> alt.Chart:
                     y=alt.Y("Estação:N", sort=ordem, title=None,
                             axis=alt.Axis(labelFontSize=13, labelOverlap=False, labelLimit=230)),
                     color=alt.Color(f"{risco_fogo.COLUNA_NIVEL_HORA}:O", title="Nível",
-                                    scale=alt.Scale(domain=[1, risco.NIVEL_MEDIO, risco.NIVEL_ALTO],
-                                                    range=config.CORES_RISCO[1:]),
-                                    legend=alt.Legend(orient="bottom",
-                                                      labelExpr="{'1': 'Baixo', '2': 'Médio', '3': 'Alto'}[datum.label]")),
+                                    scale=alt.Scale(domain=NIVEIS_DO_PIOR,
+                                                    range=[config.CORES_RISCO[nivel] for nivel in NIVEIS_DO_PIOR]),
+                                    legend=_legenda_dos_niveis(NIVEIS_DO_PIOR)),
+                    # A ordem do empilhamento: o alto encostado no nome da estação
+                    order=alt.Order(f"{risco_fogo.COLUNA_NIVEL_HORA}:Q", sort="descending"),
                     tooltip=["Estação", alt.Tooltip(f"{risco_fogo.COLUNA_NIVEL_HORA}:O", title="Nível"),
                              "Horas"])
             .properties(height=22 * max(contagem["Estação"].nunique(), 1) + 60))
@@ -948,11 +960,9 @@ def calendario_de_risco(horaria: pd.DataFrame, ordem: list[str]) -> alt.Chart:
                     y=alt.Y("Estação:N", sort=ordem, title=None,
                             axis=alt.Axis(labelFontSize=12, labelOverlap=False, labelLimit=230)),
                     color=alt.Color(f"{risco_fogo.COLUNA_NIVEL_HORA}:O", title="Pior nível do dia",
-                                    scale=alt.Scale(domain=[0, 1, risco.NIVEL_MEDIO, risco.NIVEL_ALTO],
-                                                    range=config.CORES_RISCO),
-                                    legend=alt.Legend(orient="bottom",
-                                                      labelExpr="{'0': 'Sem condição', '1': 'Baixo', "
-                                                                "'2': 'Médio', '3': 'Alto'}[datum.label]")),
+                                    scale=alt.Scale(domain=[*NIVEIS_DO_PIOR, 0],
+                                                    range=[config.CORES_RISCO[nivel] for nivel in [*NIVEIS_DO_PIOR, 0]]),
+                                    legend=_legenda_dos_niveis([*NIVEIS_DO_PIOR, 0])),
                     tooltip=["Estação", alt.Tooltip("dia:O", title="Dia"),
                              alt.Tooltip(f"{risco_fogo.COLUNA_NIVEL_HORA}:O", title="Pior nível")])
             .properties(height=20 * max(por_dia["Estação"].nunique(), 1) + 60))
@@ -2187,13 +2197,16 @@ with aba_risco:
             ordem = ordem_das_estacoes(horaria)
             modo_risco = MODOS_MAPA[st.radio("Agregação", list(MODOS_MAPA), horizontal=True,
                                              key="modo_risco")]
-            detalhes = st.checkbox("Mostrar o nível e as condições de cada estação", value=False,
+            # Ligada por padrão desde 13/10/2026, a pedido da equipe: o nível de cada estação é o
+            # que se procura primeiro no mapa
+            detalhes = st.checkbox("Mostrar o nível e as condições de cada estação", value=True,
                                    key="detalhes_risco",
                                    help="O nível escrito em cada estação e, no hora a hora, um "
                                         "ponto abaixo dela para cada condição atendida. Por dia e "
                                         "no período inteiro sai só o nível: eles juntam horas "
                                         "diferentes, e as condições de uma hora não representam o "
-                                        "dia. Lado a lado eles se cobrem; ligue ao ampliar um mapa.")
+                                        "dia. Lado a lado eles se cobrem: desligue para ler só as "
+                                        "cores, ou amplie o mapa.")
 
             # --- hora a hora ---------------------------------------------------------------
             if modo_risco == variaveis.HORA:
@@ -2332,7 +2345,10 @@ with aba_risco:
             st.altair_chart(barras_de_niveis(horaria, ordem), width="stretch")
 
             st.subheader("Calendário")
-            st.caption("O pior nível de cada estação em cada dia.")
+            st.caption("O pior nível de cada estação em cada dia. **Dia vazio, sem cor:** a estação "
+                       "não teve nenhuma hora com as três medidas (temperatura máxima, umidade mínima "
+                       "e rajada) — ficou sem transmitir, ou um dos sensores ficou sem dado. É "
+                       "diferente do **cinza**, em que ela mediu e nenhuma das condições valeu.")
             st.altair_chart(calendario_de_risco(horaria, ordem), width="stretch")
 
             st.subheader("Condições atendidas")
@@ -2389,8 +2405,7 @@ with aba_navegavel:
             else:
                 formatar_nav = ((lambda marca: f"{marca:%d/%m/%Y}") if modo_nav == variaveis.DIA
                                 else (lambda marca: f"{marca:%d/%m %H:%M}"))
-                momento_nav = st.select_slider("Quando", options=paradas_nav, value=paradas_nav[-1],
-                                               format_func=formatar_nav, key=f"quando_nav_{modo_nav}")
+                momento_nav = linha_do_tempo("Quando", paradas_nav, f"quando_nav_{modo_nav}", formatar_nav)
                 rotulo_nav = formatar_nav(momento_nav)
 
             fatia_nav = variaveis.recorte(leituras_navegavel, modo_nav, momento_nav)
