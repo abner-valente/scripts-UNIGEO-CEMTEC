@@ -20,8 +20,11 @@ Ajustes pedidos pela unidade depois da apresentação do projeto (13/10/2026), e
 - **Painel, Risco de Fogo: os níveis vão do alto para o baixo.** No gráfico "Horas em cada nível", cada barra começa pelo vermelho (risco alto), depois o laranja e o amarelo; as legendas das barras e do calendário seguem a mesma ordem.
 - **Painel, Risco de Fogo: o calendário explica o dia vazio.** É o dia em que a estação não teve nenhuma hora com as três medidas (temperatura máxima, umidade mínima e rajada): ficou sem transmitir, ou um dos sensores ficou sem dado. É diferente do cinza, em que ela mediu e nenhuma condição valeu.
 
+- **Produto `risco_fogo`: o gráfico de horas em cada nível também vai do alto para o baixo**, como no painel: cada barra começa pelo vermelho, e a legenda segue a mesma ordem. A legenda do calendário também passou a começar pelo risco alto.
+
 ### Corrigido
 
+- **Produto `risco_fogo`: no calendário, o dia sem dado não sai mais como "Sem condição".** O dia em que a estação não teve nenhuma hora com as três medidas virava zero e saía cinza, como se ela tivesse medido e nenhuma condição tivesse valido. Agora ele fica em branco, e a legenda ganha "Sem dado" quando há dia assim. Na semana de 06 a 12/10/2026, por exemplo, Nova Andradina (06 e 07/10) e Bataguassu (11/10) saíam cinza.
 - **Quando o INMET recusa por excesso de consultas, o painel e o `main.py` esperam, em vez de perder a estação.** O INMET aceita 100 consultas por minuto de cada endereço de rede, contando todas as consultas que saem dele (medido em 09/10/2026), e uma carga do painel ou do `main.py` com as estações vizinhas faz umas 100. A recusa vinha contando como falha: três seguidas, em 6 segundos, deixavam a estação de fora, como "Falha na consulta", e o mapa saía sem ela. Rodando o `relatorio_inmet` e logo depois o `risco_fogo`, por exemplo, o segundo perdia as primeiras estações de MS. Agora se espera o minuto virar, com a espera dobrando a cada recusa (até uns 2 minutos).
 
 ## [0.3.1] — 08/10/2026

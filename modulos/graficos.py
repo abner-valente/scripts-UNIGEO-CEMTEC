@@ -94,10 +94,16 @@ def barras_agrupadas(tabela: pd.DataFrame, cores: list[str], rotulos: list[str],
 
 
 def calendario(tabela: pd.DataFrame, cores: list[str], rotulos: list[str], titulo: str, subtitulo: str,
-               caminho: Path) -> None:
-    """Um quadrado para cada cruzamento de linha (ex.: estação) e coluna (ex.: dia), colorido pela classe."""
+               caminho: Path, sem_dado: str | None = None) -> None:
+    """Um quadrado para cada cruzamento de linha (ex.: estação) e coluna (ex.: dia), colorido pela classe.
+
+    A classe i tem a cor `cores[i]`, e a legenda vai da classe mais alta para a mais baixa: a que
+    mais pesa vem primeiro. O cruzamento sem valor fica em branco; com `sem_dado`, a legenda diz o
+    que o branco quer dizer.
+    """
     fig, ax = nova_figura(titulo, subtitulo, 11, 0.21 * len(tabela) + 2)
-    ax.imshow(tabela.to_numpy(), aspect="auto", cmap=ListedColormap(cores), vmin=-0.5, vmax=len(cores) - 0.5)
+    paleta = ListedColormap(cores).with_extremes(bad="white")
+    ax.imshow(tabela.to_numpy(dtype=float), aspect="auto", cmap=paleta, vmin=-0.5, vmax=len(cores) - 0.5)
 
     ax.set_xticks(range(len(tabela.columns)), tabela.columns, fontsize=9.5)
     ax.set_yticks(range(len(tabela)), tabela.index, fontsize=8.5)
@@ -106,6 +112,8 @@ def calendario(tabela: pd.DataFrame, cores: list[str], rotulos: list[str], titul
     ax.set_yticks(np.arange(len(tabela)) - 0.5, minor=True)
     ax.grid(which="minor", color="white", linewidth=1.5)
     ax.spines["bottom"].set_visible(False)
-    ax.legend(handles=[Patch(facecolor=cor, label=rotulo) for cor, rotulo in zip(cores, rotulos)],
-              loc="upper left", bbox_to_anchor=(1.01, 1), frameon=False, fontsize=10)
+    legenda = [Patch(facecolor=cor, label=rotulo) for cor, rotulo in zip(cores[::-1], rotulos[::-1])]
+    if sem_dado and tabela.isna().to_numpy().any():
+        legenda.append(Patch(facecolor="white", edgecolor=TINTA_FRACA, linewidth=0.8, label=sem_dado))
+    ax.legend(handles=legenda, loc="upper left", bbox_to_anchor=(1.01, 1), frameon=False, fontsize=10)
     salvar(fig, caminho)

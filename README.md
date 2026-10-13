@@ -318,8 +318,8 @@ saida/risco_fogo/dia/20260903/
 | `Mapa_Risco_Fogo_Horas_MS_<datas>.png` | **Horas em risco alto — pontual:** quantas horas cada estação passou no nível 3 |
 | `Mapa_Risco_Fogo_Horas_MS_<datas>_interpolado.png` | **Horas em risco alto — interpolado:** o mesmo, sobre o estado inteiro |
 | `horas/Mapa_Risco_Fogo_MS_<data>_<hora>h.png` | **Mapa horário** (só interpolado): o nível de risco naquela hora, com o nível de cada estação e os pontos das condições que ela atendeu |
-| `Grafico_Risco_Fogo_Niveis_MS_<datas>.png` | **Só no período.** Horas que cada estação passou em cada nível, com o total ao lado da barra |
-| `Grafico_Risco_Fogo_Calendario_MS_<datas>.png` | **Só no período.** Um quadrado por dia de cada estação, na cor do pior nível daquele dia |
+| `Grafico_Risco_Fogo_Niveis_MS_<datas>.png` | **Só no período.** Horas que cada estação passou em cada nível, com o total ao lado da barra. Cada barra vai do risco alto para o baixo: a estação que chegou ao alto mostra o vermelho primeiro |
+| `Grafico_Risco_Fogo_Calendario_MS_<datas>.png` | **Só no período.** Um quadrado por dia de cada estação, na cor do pior nível daquele dia. **Em branco** fica o dia sem nenhuma hora com as três medidas (estação sem transmitir, ou um sensor sem dado), que a legenda chama de "Sem dado"; **cinza** é o dia medido em que nenhuma condição valeu |
 | `graficosDeCondicoes/Grafico_Risco_Fogo_Condicoes_MS_<data>.png` | **Só no período.** Um arquivo por dia: horas em que cada estação atendeu cada condição |
 
 O **nível máximo** mostra o pico; as **horas em risco alto** mostram a duração — ficar 6 horas em 30-30-30 é bem diferente de ficar 1 hora. Em dias em que nenhuma estação chega ao nível 3, os mapas de horas ficam zerados.
