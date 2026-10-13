@@ -53,6 +53,7 @@ def sem_esperas(monkeypatch):
     """Nenhum teste dorme: as pausas entre requisições e entre tentativas ficam em zero."""
     monkeypatch.setattr(config, "PAUSA_ENTRE_REQUISICOES", 0)
     monkeypatch.setattr(config, "PAUSA_ENTRE_TENTATIVAS", 0)
+    monkeypatch.setattr(config, "PAUSA_NO_LIMITE", 0)
 
 
 @pytest.fixture(autouse=True)
