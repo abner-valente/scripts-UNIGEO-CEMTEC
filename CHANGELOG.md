@@ -9,9 +9,14 @@ Cada versão separa as mudanças em até quatro grupos:
 
 Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
-## [0.3.2] — em andamento
+## [0.3.2] — 13/10/2026
 
-Ajustes pedidos pela unidade depois da apresentação do projeto (13/10/2026), e uma correção que veio da 0.4.
+Levada à `main` em 13/10/2026. Ajustes pedidos pela unidade depois da apresentação do projeto, e uma correção que veio da 0.4.
+
+### Atenção ao atualizar
+
+- **Quem roda o painel na própria máquina precisa reiniciá-lo** (Ctrl+C e `streamlit run app/explorador.py` de novo) depois de atualizar: mudaram arquivos que o Streamlit não relê sozinho. As dependências não mudaram. No Streamlit Cloud, é o Reboot.
+- **O calendário do produto `risco_fogo` pode mudar para um período já gerado:** o dia em que uma estação ficou sem dado, que saía cinza ("Sem condição"), agora sai em branco ("Sem dado"). Os números da planilha e os mapas não mudam.
 
 ### Mudou
 
@@ -19,7 +24,6 @@ Ajustes pedidos pela unidade depois da apresentação do projeto (13/10/2026), e
 - **Painel, Risco de Fogo: a caixa "Mostrar o nível e as condições de cada estação" vem ligada.** Desligue para ler só as cores.
 - **Painel, Risco de Fogo: os níveis vão do alto para o baixo.** No gráfico "Horas em cada nível", cada barra começa pelo vermelho (risco alto), depois o laranja e o amarelo; as legendas das barras e do calendário seguem a mesma ordem.
 - **Painel, Risco de Fogo: o calendário explica o dia vazio.** É o dia em que a estação não teve nenhuma hora com as três medidas (temperatura máxima, umidade mínima e rajada): ficou sem transmitir, ou um dos sensores ficou sem dado. É diferente do cinza, em que ela mediu e nenhuma condição valeu.
-
 - **Produto `risco_fogo`: o gráfico de horas em cada nível também vai do alto para o baixo**, como no painel: cada barra começa pelo vermelho, e a legenda segue a mesma ordem. A legenda do calendário também passou a começar pelo risco alto.
 
 ### Corrigido
