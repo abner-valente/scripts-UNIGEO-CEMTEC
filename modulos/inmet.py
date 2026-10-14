@@ -96,13 +96,16 @@ def _todas_as_estacoes() -> pd.DataFrame:
     return estacoes.dropna(subset=["VL_LATITUDE", "VL_LONGITUDE"])
 
 
-def estacoes_do_recorte(recorte: config.Recorte = config.RECORTE,
-                        margem: float = config.MARGEM_RECORTE) -> pd.DataFrame:
+def _no_recorte(estacoes: pd.DataFrame, recorte: config.Recorte, margem: float) -> pd.DataFrame:
     oeste, leste, sul, norte = recorte.limites
-    estacoes = _todas_as_estacoes()
     dentro = (estacoes["VL_LONGITUDE"].between(oeste - margem, leste + margem)
               & estacoes["VL_LATITUDE"].between(sul - margem, norte + margem))
     return estacoes[dentro].copy()
+
+
+def estacoes_do_recorte(recorte: config.Recorte = config.RECORTE,
+                        margem: float = config.MARGEM_RECORTE) -> pd.DataFrame:
+    return _no_recorte(_todas_as_estacoes(), recorte, margem)
 
 
 def listar_estacoes(uf: str = config.UF) -> pd.DataFrame:
@@ -155,7 +158,7 @@ def baixar_estacoes(inicio: datetime, fim: datetime, uf: str = config.UF,
     estacoes = listar_estacoes(uf)
     print(f"✅ Encontradas {len(estacoes)} estações em {uf}")
     coletados, sem_dados, com_falha = baixar_lista(estacoes, inicio, fim, fuso)
-    _resumir_coleta(len(estacoes), len(coletados), sem_dados, com_falha)
+    resumir_coleta(len(estacoes), len(coletados), sem_dados, com_falha)
     return coletados
 
 
@@ -185,8 +188,11 @@ def baixar_lista(estacoes: pd.DataFrame, inicio: datetime, fim: datetime,
     return coletados, sem_dados, com_falha
 
 
-def estacoes_de_apoio(recorte: config.Recorte, lon_celulas, lat_celulas) -> pd.DataFrame:
-    vizinhanca = estacoes_do_recorte(recorte)
+def estacoes_de_apoio(recorte: config.Recorte, lon_celulas, lat_celulas,
+                      estacoes: pd.DataFrame | None = None) -> pd.DataFrame:
+    # `estacoes` é a lista de onde escolher, quando ela não vem do INMET (a fonte "banco")
+    vizinhanca = (estacoes_do_recorte(recorte) if estacoes is None
+                  else _no_recorte(estacoes, recorte, config.MARGEM_RECORTE))
     fora = vizinhanca[vizinhanca["SG_ESTADO"] != recorte.uf]
     dele = vizinhanca[vizinhanca["SG_ESTADO"] == recorte.uf]
     entram = calculos.apoio_que_entra(fora["VL_LONGITUDE"].values, fora["VL_LATITUDE"].values,
@@ -212,7 +218,7 @@ def baixar_apoio(recorte: config.Recorte, lon_celulas, lat_celulas, inicio: date
     return coletados
 
 
-def _resumir_coleta(total: int, com_dados: int, sem_dados: list[str], com_falha: list[str]) -> None:
+def resumir_coleta(total: int, com_dados: int, sem_dados: list[str], com_falha: list[str]) -> None:
     print(f"\n📊 Estações com dados: {com_dados} de {total}")
     if sem_dados:
         print(f"   ⚠️ Sem leituras no período ({len(sem_dados)}): {', '.join(sem_dados)}")

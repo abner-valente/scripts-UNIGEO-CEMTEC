@@ -1,32 +1,33 @@
-"""De onde vêm os dados: hoje as APIs públicas; depois, o banco da UNIGEO ou a API de leitura.
+"""De onde vêm os dados: as APIs públicas ou o banco da UNIGEO; depois, a API de leitura.
 
 Os produtos e o painel pedem as estações e as leituras a este módulo, e não direto a quem as
 busca. Cada instalação escolhe a fonte pela configuração (`FONTE_DADOS`, no `.env` do servidor
 ou nos Secrets do Streamlit Cloud), e o resto do código não muda: as contas, os mapas e as
 planilhas não sabem de onde as leituras vieram. É a costura descrita em
-docs/plano_arquitetura.md, que permite levar o painel para o servidor da unidade sem mexer nos
-produtos.
+docs/plano_arquitetura.md (passo 7).
 
-Por enquanto há uma fonte só, "apis": cada função repassa o pedido ao `inmet.py`, exatamente
-como o código fazia antes. As outras ("banco" e "api_leitura") entram nas próximas versões, com
-as mesmas funções e o mesmo formato de resposta.
+- "apis": cada função repassa o pedido ao `inmet.py`.
+- "banco": lê o cadastro e as leituras do `climageo`, com o usuário que só lê, e devolve as mesmas
+  tabelas que o `inmet.py` devolveria, coluna por coluna.
 
 As funções procuram o `inmet` na hora de cada chamada, sem guardar referência às funções dele.
 É o que deixa os testes trocarem a API do INMET por dados sintéticos, como sempre fizeram.
 """
-from datetime import datetime
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import psycopg
 
-from . import config, inmet
+from . import banco, config, inmet
 
 # As fontes que esta versão sabe usar
-FONTES = ("apis",)
+FONTES = ("apis", "banco")
 
-# Por enquanto o único erro de fonte é o do INMET. Quando o banco chegar, este nome passa a ser a
-# classe-mãe dos erros das duas fontes, e quem trata ErroFonte não precisa mudar.
-ErroFonte = inmet.ErroINMET
+# O erro que os produtos e o painel tratam, venha de qual fonte vier
+ErroFonte = (inmet.ErroINMET, banco.ErroBanco)
 
 
 def _conferir_fonte() -> None:
@@ -35,29 +36,131 @@ def _conferir_fonte() -> None:
                          f"as fontes disponíveis são: {', '.join(FONTES)}")
 
 
-def estacoes(uf: str = config.UF) -> pd.DataFrame:
+def _do_banco() -> bool:
     _conferir_fonte()
+    return config.FONTE_DADOS == "banco"
+
+
+def estacoes(uf: str = config.UF) -> pd.DataFrame:
+    if _do_banco():
+        todas = _estacoes_do_banco()
+        return todas[todas["SG_ESTADO"] == uf].reset_index(drop=True)
     return inmet.listar_estacoes(uf)
 
 
 def estacoes_de_apoio(recorte: config.Recorte, lon_celulas, lat_celulas) -> pd.DataFrame:
-    _conferir_fonte()
+    if _do_banco():
+        return inmet.estacoes_de_apoio(recorte, lon_celulas, lat_celulas, estacoes=_estacoes_do_banco())
     return inmet.estacoes_de_apoio(recorte, lon_celulas, lat_celulas)
 
 
 def leituras_da_estacao(codigo: str, inicio: datetime, fim: datetime,
                         fuso: ZoneInfo = config.FUSO_MS) -> pd.DataFrame | None:
-    _conferir_fonte()
+    if _do_banco():
+        cadastro = _estacoes_do_banco(so_em_operacao=False)
+        return _leituras_do_banco(cadastro[cadastro["CD_ESTACAO"] == codigo], inicio, fim, fuso).get(codigo)
     return inmet.baixar_dados_estacao(codigo, inicio, fim, fuso)
 
 
 def leituras_do_estado(inicio: datetime, fim: datetime, uf: str = config.UF,
                        fuso: ZoneInfo = config.FUSO_MS) -> list[tuple[pd.Series, pd.DataFrame]]:
-    _conferir_fonte()
+    if _do_banco():
+        do_estado = estacoes(uf)
+        print(f"✅ Encontradas {len(do_estado)} estações em {uf} (no banco)")
+        coletados, sem_dados = _por_estacao(do_estado, inicio, fim, fuso)
+        inmet.resumir_coleta(len(do_estado), len(coletados), sem_dados, [])
+        return coletados
     return inmet.baixar_estacoes(inicio, fim, uf=uf, fuso=fuso)
 
 
 def leituras_de_apoio(recorte: config.Recorte, lon_celulas, lat_celulas, inicio: datetime,
                       fim: datetime, fuso: ZoneInfo = config.FUSO_MS) -> list[tuple[pd.Series, pd.DataFrame]]:
-    _conferir_fonte()
+    if _do_banco():
+        try:
+            vizinhas = estacoes_de_apoio(recorte, lon_celulas, lat_celulas)
+            if vizinhas.empty:
+                return []
+            coletados, sem_dados = _por_estacao(vizinhas, inicio, fim, fuso)
+        except banco.ErroBanco as erro:
+            print(f"⚠️ Sem as estações vizinhas ({erro}); a borda sai só com as do estado.")
+            return []
+        estados = ", ".join(vizinhas["SG_ESTADO"].value_counts().index)
+        print(f"🧭 {len(vizinhas)} estações vizinhas para a borda ({estados}), do banco: {len(coletados)} com dados"
+              + (f", {len(sem_dados)} sem" if sem_dados else ""))
+        return coletados
     return inmet.baixar_apoio(recorte, lon_celulas, lat_celulas, inicio, fim, fuso=fuso)
+
+
+# =====================================================
+# A FONTE "BANCO"
+# =====================================================
+def _conectar() -> psycopg.Connection:
+    return banco.conectar("leitura")
+
+
+@contextmanager
+def _conexao() -> Iterator[psycopg.Connection]:
+    try:
+        with _conectar() as conexao:
+            yield conexao
+    except psycopg.Error as erro:
+        motivo = str(erro).strip().splitlines()[0] if str(erro).strip() else type(erro).__name__
+        raise banco.ErroBanco(f"falha ao ler o banco: {motivo}") from None
+
+
+def _estacoes_do_banco(so_em_operacao: bool = True) -> pd.DataFrame:
+    with _conexao() as conexao:
+        cadastro = banco.ler_estacoes(conexao)
+    # Na ordem da lista do INMET, pelo nome: é ela que desempata os rankings dos produtos
+    cadastro = cadastro.sort_values(["nome", "codigo"], kind="stable")
+    # As colunas da lista do INMET que o painel e os produtos usam
+    tabela = pd.DataFrame({
+        "CD_ESTACAO": cadastro["codigo"], "DC_NOME": cadastro["nome"], "SG_ESTADO": cadastro["uf"],
+        "VL_LATITUDE": cadastro["latitude"], "VL_LONGITUDE": cadastro["longitude"],
+        "VL_ALTITUDE": cadastro["altitude"], "CD_SITUACAO": cadastro["situacao"],
+    })
+    if so_em_operacao:   # como o inmet.listar_estacoes: só as que a lista dá como operantes
+        tabela = tabela[tabela["CD_SITUACAO"].fillna("").str.strip().str.casefold() == inmet.SITUACAO_OPERANTE]
+    tabela = tabela.assign(Estação=tabela["DC_NOME"].map(inmet.formatar_nome_estacao))
+    return tabela.reset_index(drop=True)
+
+
+def _leituras_do_banco(estacoes: pd.DataFrame, inicio: datetime, fim: datetime,
+                       fuso: ZoneInfo) -> dict[str, pd.DataFrame]:
+    # Como a consulta por estação do INMET: os dias UTC inteiros, de inicio a fim, com uma linha
+    # por hora, mesmo as que não chegaram (vazias). A estação sem nenhuma leitura fica de fora.
+    primeiro = pd.Timestamp(inicio.astimezone(config.FUSO_UTC).date(), tz="UTC")
+    ultimo = pd.Timestamp(fim.astimezone(config.FUSO_UTC).date(), tz="UTC") + pd.Timedelta(hours=23)
+    if estacoes.empty:
+        return {}
+    with _conexao() as conexao:
+        lidas = banco.ler_inmet(conexao, primeiro - timedelta(hours=1), ultimo, list(estacoes["CD_ESTACAO"]))
+    horas = pd.DataFrame({"dt_utc": pd.date_range(primeiro, ultimo, freq="h")})
+    medidas = {coluna: coluna.upper() for coluna in [*banco.COLUNAS_INMET, *banco.COLUNAS_INMET_EXTRAS]}
+    resultado = {}
+    for estacao in estacoes.itertuples(index=False):
+        dela = lidas[lidas["estacao"] == estacao.CD_ESTACAO]
+        if dela.empty:
+            continue
+        dados = horas.merge(dela.drop(columns="estacao").rename(columns={"hora_utc": "dt_utc", **medidas}),
+                            on="dt_utc", how="left")
+        dados = dados.assign(CD_ESTACAO=estacao.CD_ESTACAO, DC_NOME=estacao.DC_NOME, UF=estacao.SG_ESTADO,
+                             VL_LATITUDE=estacao.VL_LATITUDE, VL_LONGITUDE=estacao.VL_LONGITUDE,
+                             DT_MEDICAO=dados["dt_utc"].dt.strftime("%Y-%m-%d"),
+                             HR_MEDICAO=dados["dt_utc"].dt.strftime("%H%M"),
+                             dt_local=dados["dt_utc"].dt.tz_convert(fuso))
+        resultado[estacao.CD_ESTACAO] = dados
+    return resultado
+
+
+def _por_estacao(estacoes: pd.DataFrame, inicio: datetime, fim: datetime,
+                 fuso: ZoneInfo) -> tuple[list[tuple[pd.Series, pd.DataFrame]], list[str]]:
+    lidas = _leituras_do_banco(estacoes, inicio, fim, fuso)
+    coletados, sem_dados = [], []
+    for _, estacao in estacoes.iterrows():
+        dados = lidas.get(estacao["CD_ESTACAO"])
+        if dados is None:
+            sem_dados.append(estacao["Estação"])
+        else:
+            coletados.append((estacao, dados))
+    return coletados, sem_dados

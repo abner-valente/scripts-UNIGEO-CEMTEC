@@ -46,11 +46,22 @@ def normalizar(nome: str) -> str:
 
 
 def declarados() -> set[str]:
+    import importlib.metadata as meta
+
     nomes = set()
     for linha in REQUISITOS.read_text(encoding="utf-8").splitlines():
-        limpa = linha.strip()
-        if limpa and not limpa.startswith("#"):
-            nomes.add(normalizar(re.split(r"[<>=!~#\s]", limpa)[0]))
+        limpa = linha.split("#")[0].strip()
+        if not limpa:
+            continue
+        nome = normalizar(re.split(r"[<>=!~\s\[]", limpa)[0])
+        nomes.add(nome)
+        # "pacote[extra]" declara também o que o extra traz (o psycopg[binary] traz o psycopg-binary)
+        pedidos = re.search(r"\[([^\]]*)\]", limpa)
+        if pedidos:
+            extras = {extra.strip() for extra in pedidos.group(1).split(",")}
+            for exigencia in meta.requires(nome) or []:
+                if any(f'extra == "{extra}"' in exigencia for extra in extras):
+                    nomes.add(normalizar(re.split(r"[<>=!;\s\[]", exigencia.strip())[0]))
     return nomes
 
 

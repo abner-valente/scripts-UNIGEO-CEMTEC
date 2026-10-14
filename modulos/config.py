@@ -143,8 +143,8 @@ TOKEN_INMET = os.getenv("TOKEN_INMET", "").strip()
 TOKEN_EXEMPLO = "seu_token_aqui"  # valor do .env.example, tratado como "não configurado"
 
 # De onde vêm os dados (modulos/fonte.py), escolhido por instalação: no .env do servidor ou nos
-# Secrets do Streamlit Cloud. Por enquanto só existe "apis", as APIs públicas; o banco da UNIGEO
-# e a API de leitura chegam nas próximas versões (docs/plano_arquitetura.md).
+# Secrets do Streamlit Cloud: "apis", as APIs públicas, ou "banco", o banco da UNIGEO (com a conexão
+# BANCO_LEITURA). A API de leitura chega na v0.5 (docs/plano_arquitetura.md).
 FONTE_DADOS = os.getenv("FONTE_DADOS", "apis").strip().lower()
 
 # O banco da UNIGEO (PostgreSQL 16, com PostGIS): o schema das tabelas e o nome da variável do .env
