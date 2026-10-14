@@ -49,11 +49,6 @@ ORDEM_DAS_COLUNAS = [
 
 def leituras(codigo: str, inicio: datetime, fim: datetime,
              fuso: ZoneInfo = config.FUSO_MS) -> pd.DataFrame:
-    """Série horária de uma estação na janela (início, fim], vinda do cache quando ele já a cobre.
-
-    As horas mais recentes são sempre reconsultadas: elas chegam da API com a linha criada e as
-    medidas ainda vazias, e só se enchem mais tarde.
-    """
     guardadas = _ler(codigo)
     faltando = _faltando(guardadas, inicio, fim)
     for comeco, termino in faltando:
@@ -71,16 +66,6 @@ def leituras(codigo: str, inicio: datetime, fim: datetime,
 
 def varias(codigos: tuple[str, ...], nomes: tuple[str, ...], inicio: datetime, fim: datetime,
            aviso=None, fuso: ZoneInfo = config.FUSO_MS) -> tuple[pd.DataFrame, list[str]]:
-    """Séries de várias estações e os nomes das que não vieram.
-
-    É uma consulta por estação, e são 62: uma atrás da outra, uma semana levava ~50 s. Em
-    paralelo, ~8 s. Quantas correm juntas é limite do processo inteiro (`modulos/inmet`), e não
-    deste lote — o painel é público, e duas pessoas consultando ao mesmo tempo dobrariam o
-    assédio à API.
-
-    A tabela sai na ordem em que as estações foram pedidas, e não na ordem em que chegaram: a
-    ordem de chegada muda a cada consulta, e com ela mudariam as cores do gráfico.
-    """
     chegaram, falharam = {}, []
     with ThreadPoolExecutor(max_workers=config.DOWNLOADS_SIMULTANEOS) as equipe:
         tarefas = {equipe.submit(leituras, codigo, inicio, fim, fuso): nome
@@ -106,26 +91,12 @@ def varias(codigos: tuple[str, ...], nomes: tuple[str, ...], inicio: datetime, f
 
 
 def _sem_leituras(fuso: ZoneInfo) -> pd.DataFrame:
-    """Uma tabela vazia, mas com as colunas que todo mundo procura: a estação e as duas horas.
-
-    Acontece quando nenhuma estação veio, como quando o INMET não devolve a lista das vizinhas,
-    ou devolve e todas falham. Uma tabela sem coluna nenhuma derrubava quem filtrava pelo
-    horário (`leituras["dt_local"]`), e o painel caía por falta de dado que ele nem ia desenhar.
-    """
     return pd.DataFrame({"Estação": pd.Series(dtype=object),
                          "dt_utc": pd.Series(dtype=pd.DatetimeTZDtype(tz="UTC")),
                          "dt_local": pd.Series(dtype=pd.DatetimeTZDtype(tz=fuso))})
 
 
 def planilha(leituras: pd.DataFrame, uf: str = config.UF) -> pd.DataFrame:
-    """A tabela inteira, como a API a entrega, pronta para ver e baixar.
-
-    **Todas** as colunas, e não só as das grandezas escolhidas na barra lateral: quem baixa o
-    dado costuma querer o bruto — para conferir uma suspeita, levar para outro programa ou olhar
-    a bateria da estação —, e ter de voltar ao filtro para isso é atrito à toa.
-
-    `dt_utc` fica de fora porque DT_MEDICAO e HR_MEDICAO já dizem o mesmo, do jeito do INMET.
-    """
     if leituras.empty:
         return leituras
     data_local = f"{DATA_LOCAL} ({uf})"
@@ -138,7 +109,6 @@ def planilha(leituras: pd.DataFrame, uf: str = config.UF) -> pd.DataFrame:
 
 
 def limpar_cache() -> int:
-    """Apaga o cache e devolve quantos arquivos foram removidos."""
     arquivos = list(PASTA_CACHE.glob("*.pkl")) if PASTA_CACHE.exists() else []
     for arquivo in arquivos:
         arquivo.unlink()
@@ -146,22 +116,12 @@ def limpar_cache() -> int:
 
 
 def tamanho_do_cache() -> tuple[int, float]:
-    """Quantidade de estações no cache e o tamanho total em MB."""
     arquivos = list(PASTA_CACHE.glob("*.pkl")) if PASTA_CACHE.exists() else []
     return len(arquivos), sum(arquivo.stat().st_size for arquivo in arquivos) / (1024 * 1024)
 
 
 def _faltando(guardadas: pd.DataFrame | None, inicio: datetime,
               fim: datetime) -> list[tuple[datetime, datetime]]:
-    """Os pedaços da janela que o cache ainda não tem.
-
-    Baixar só o que falta é o que faz alargar o período sair barato: antes, pedir duas semanas
-    tendo uma guardada jogava a guardada fora e baixava as duas — o dobro do dado e, numa janela
-    longa, o dobro do tempo de resposta da API.
-
-    O cache é julgado pelos extremos, como sempre foi: um buraco no meio (estação fora do ar)
-    não se distingue de ausência de leitura, e pedir de novo não o preencheria.
-    """
     if guardadas is None or guardadas.empty:
         return [(inicio, fim)]
     tem_desde = guardadas["dt_utc"].min()
@@ -182,7 +142,6 @@ def _faltando(guardadas: pd.DataFrame | None, inicio: datetime,
 
 
 def _ultima_com_medida(guardadas: pd.DataFrame):
-    """A última hora guardada que trouxe alguma medição — até onde o cache é de confiança."""
     medidas = [coluna for coluna in guardadas.columns if coluna not in IDENTIFICACAO]
     if not medidas:
         return None
@@ -191,7 +150,6 @@ def _ultima_com_medida(guardadas: pd.DataFrame):
 
 
 def _juntar(guardadas: pd.DataFrame | None, baixadas: pd.DataFrame | None) -> pd.DataFrame | None:
-    """Junta o que já havia com o que acabou de ser baixado, sem repetir horas."""
     partes = [parte for parte in (guardadas, baixadas) if parte is not None and not parte.empty]
     if not partes:
         return None

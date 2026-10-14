@@ -32,12 +32,6 @@ PRODUTOS = {produto.NOME: produto for produto in (relatorio_inmet, risco_fogo)}
 
 
 def _saida_em_utf8() -> None:
-    """Garante que as mensagens saiam em UTF-8, mesmo quando não vão para o terminal.
-
-    No Windows, a saída redirecionada (um arquivo de log, uma tarefa agendada, o servidor do
-    Streamlit) vai em cp1252, que não sabe escrever os emojis dos avisos. Sem isto, o primeiro
-    "⚠️" derruba a execução inteira — a mensagem mata justamente o que ela ia avisar.
-    """
     for fluxo in (sys.stdout, sys.stderr):
         if hasattr(fluxo, "reconfigure"):
             fluxo.reconfigure(encoding="utf-8", errors="replace")
@@ -54,7 +48,6 @@ HORA_FINAL = None    # hora de fim (0 a 24, horário de MS); None = 24 h da data
 
 
 def ler_data(texto: str) -> date:
-    """Converte 'DD/MM/AAAA' ou 'AAAA-MM-DD' em data."""
     for formato in ("%d/%m/%Y", "%Y-%m-%d"):
         try:
             return datetime.strptime(texto, formato).date()
@@ -64,7 +57,6 @@ def ler_data(texto: str) -> date:
 
 
 def ler_hora(texto: str) -> int:
-    """Converte '8', '08', '8h', '08h' ou '08:00' em hora cheia (0 a 24)."""
     limpo = texto.strip().lower().removesuffix("h").removesuffix(":00")
     if limpo.isdigit() and 0 <= int(limpo) <= 24:
         return int(limpo)
@@ -72,11 +64,6 @@ def ler_hora(texto: str) -> int:
 
 
 def ler_consulta(argumentos: list[str] | None = None) -> tuple[ModuleType, Periodo, dict]:
-    """Produto, período e opções da linha de comando ou, no que ela não informar, das variáveis acima.
-
-    As opções são os argumentos que valem só para alguns produtos (ex.: --hrtodas, do risco_fogo);
-    cada produto usa as que conhece e ignora o resto.
-    """
     parser = argparse.ArgumentParser(description="Produtos meteorológicos a partir das estações do INMET.")
     parser.add_argument("--produto", choices=sorted(PRODUTOS), help=f"produto a gerar (padrão: {PRODUTO})")
     parser.add_argument("--uf", choices=config.ufs_disponiveis(), default=config.UF,
@@ -119,7 +106,6 @@ def ler_consulta(argumentos: list[str] | None = None) -> tuple[ModuleType, Perio
 
 
 def executar(produto: ModuleType, periodo: Periodo, opcoes: dict | None = None) -> int:
-    """Confere o token e gera o produto. Retorna o código de saída do programa."""
     if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
         print("❌ Token do INMET não configurado.")
         print("   Copie o arquivo .env.example para .env e preencha TOKEN_INMET.")

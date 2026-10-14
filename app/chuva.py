@@ -23,44 +23,29 @@ TODO_O_ESTADO = "Todo o estado"
 
 
 def rotulos() -> list[str]:
-    """Nome de cada acumulado, na ordem em que aparecem na tela."""
     return [f"{horas} h" for horas in JANELAS_HORAS] + [MENSAL]
 
 
 def inicio_necessario(fim: datetime) -> datetime:
-    """A partir de quando é preciso ter dado para todos os acumulados fecharem.
-
-    O mais antigo entre o começo do mês e 96 h atrás. É por isso que a aba da chuva carrega mais
-    do que o período escolhido — e é a razão de ela ser uma aba à parte.
-    """
     return min(_comeco_do_mes(fim), fim - timedelta(hours=max(JANELAS_HORAS)))
 
 
 def _comeco_do_mes(fim: datetime) -> datetime:
-    """A 00 h do dia 1º do mês que `fim` fecha.
-
-    A leitura das 00:00 fecha o dia anterior, como em todo o projeto: "até 01/10 00:00" é o fim
-    de 30/09, e o mensal dali é setembro inteiro. Tomar o mês do próprio instante dava a janela
-    vazia de 01/10 00:00 a 01/10 00:00, e o mapa mensal saía zerado em todas as estações.
-    """
     return (fim - timedelta(microseconds=1)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
 def janela(fim: datetime, rotulo: str) -> tuple[datetime, datetime]:
-    """O intervalo `(início, fim]` de um acumulado."""
     if rotulo == MENSAL:
         return _comeco_do_mes(fim), fim
     return fim - timedelta(hours=int(rotulo.split()[0])), fim
 
 
 def horas_da_janela(fim: datetime, rotulo: str) -> float:
-    """Quantas horas a janela cobre — é o que escolhe a escala de cores do mapa."""
     comeco, termino = janela(fim, rotulo)
     return (termino - comeco).total_seconds() / 3600
 
 
 def acumulado(leituras: pd.DataFrame, fim: datetime, rotulo: str) -> pd.Series:
-    """Chuva somada por estação na janela, em milímetros."""
     if leituras.empty or COLUNA not in leituras:
         return pd.Series(dtype=float)
     comeco, termino = janela(fim, rotulo)
@@ -71,11 +56,6 @@ def acumulado(leituras: pd.DataFrame, fim: datetime, rotulo: str) -> pd.Series:
 
 
 def cobre(leituras: pd.DataFrame, fim: datetime, rotulo: str) -> bool:
-    """Se o dado carregado alcança o começo da janela.
-
-    Sem isto, um acumulado de 96 h feito com 48 h de dado mostraria metade da chuva como se
-    fosse o total — o erro silencioso mais fácil de cometer aqui.
-    """
     if leituras.empty:
         return False
     comeco, _ = janela(fim, rotulo)
@@ -83,14 +63,6 @@ def cobre(leituras: pd.DataFrame, fim: datetime, rotulo: str) -> bool:
 
 
 def cascata(leituras: pd.DataFrame, por_dia: bool, ultimas_horas: int = 24) -> pd.DataFrame:
-    """Uma barra por passo, empilhada no acumulado que vinha antes, e uma barra de total.
-
-    É a leitura que o boletim quer da chuva: quanto choveu em cada hora (ou em cada dia) e quanto
-    isso somou no fim. Cada barra começa onde a anterior terminou, então a altura da última diz
-    o acumulado sem ninguém precisar somar de cabeça.
-
-    Devolve uma linha por estação e passo, com `base` e `topo` prontos para o desenho.
-    """
     if leituras.empty or COLUNA not in leituras:
         return pd.DataFrame(columns=["Estação", "Passo", "ordem", "valor", "base", "topo", "tipo"])
 
@@ -125,16 +97,6 @@ def cascata(leituras: pd.DataFrame, por_dia: bool, ultimas_horas: int = 24) -> p
 
 
 def cascata_do_estado(leituras: pd.DataFrame, por_dia: bool, ultimas_horas: int = 24) -> pd.DataFrame:
-    """A mesma cascata, numa linha só: o que todas as estações mediram em cada passo, somado.
-
-    **É soma de milímetro de estações diferentes, e não a chuva de um lugar.** No MT, numa
-    semana em que a estação mais molhada recebeu 74,8 mm, a soma das 51 dá 742,8. O número
-    serve para ler o ritmo do período — quando choveu, e quanto do total veio de cada dia;
-    para saber quanto caiu onde, o mapa é que responde.
-
-    Trocar o nome da estação por um só faz o agrupamento de `cascata` somar tudo junto: o
-    empilhamento, a barra de total e a ordem saem de lá sem repetição de código.
-    """
     if leituras.empty or COLUNA not in leituras:
         return cascata(leituras, por_dia, ultimas_horas)
     return cascata(leituras.assign(**{"Estação": TODO_O_ESTADO}), por_dia, ultimas_horas)

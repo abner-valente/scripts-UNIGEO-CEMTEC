@@ -24,11 +24,6 @@ CORES = 256           # o GIF não vai além disso; abaixo, o degradê do mapa c
 
 
 def passos(paradas: list, maximo: int = QUADROS_MAXIMOS) -> list:
-    """As paradas que entram no GIF, pulando de tantas em tantas quando há mais que o teto.
-
-    O salto é sempre inteiro e começa na primeira parada, então o intervalo entre quadros é
-    constante — um GIF que pula 1 h aqui e 3 h ali mentiria sobre a velocidade do que se vê.
-    """
     if len(paradas) <= maximo:
         return list(paradas)
     salto = math.ceil(len(paradas) / maximo)
@@ -36,21 +31,14 @@ def passos(paradas: list, maximo: int = QUADROS_MAXIMOS) -> list:
 
 
 def intervalo(paradas: list, escolhidas: list) -> int:
-    """De quantas em quantas paradas o GIF anda — 1 quando nenhuma foi pulada."""
     return max(1, math.ceil(len(paradas) / len(escolhidas))) if escolhidas else 1
 
 
 def carimbo(momento, por_dia: bool) -> str:
-    """O instante como ele aparece dentro do quadro.
-
-    No diário só a data: escrever "00:00" num mapa que resume o dia inteiro faria pensar que o
-    valor é da meia-noite.
-    """
     return f"{momento:%d/%m/%Y}" if por_dia else f"{momento:%d/%m/%Y %H:%M}"
 
 
 def montar(quadros: list[tuple[bytes, str]], ms_por_quadro: int = MS_POR_QUADRO) -> bytes:
-    """GIF animado dos PNGs, cada um carimbado com o seu instante."""
     imagens = []
     for png, instante in quadros:
         imagem = Image.open(io.BytesIO(png)).convert("RGB")
@@ -64,12 +52,6 @@ def montar(quadros: list[tuple[bytes, str]], ms_por_quadro: int = MS_POR_QUADRO)
 
 
 def _carimbar(imagem: Image.Image, texto: str) -> None:
-    """Escreve o instante no alto à esquerda, sobre uma tarja clara.
-
-    Ali o desenho não chega: em MS e em MT o canto noroeste do enquadramento é vazio, então o
-    carimbo não cobre dado nenhum. Vale conferir ao acrescentar um estado cujo contorno encoste
-    nesse canto. A tarja existe porque sem ela o texto sumiria sobre as cores claras da escala.
-    """
     desenho = ImageDraw.Draw(imagem)
     fonte = _fonte(max(14, imagem.width // 28))
     margem = imagem.width // 40
@@ -81,6 +63,4 @@ def _carimbar(imagem: Image.Image, texto: str) -> None:
 
 
 def _fonte(tamanho: int) -> ImageFont.FreeTypeFont:
-    """A DejaVu vem dentro do matplotlib, então existe em qualquer instalação — inclusive na
-    nuvem, onde não há fonte nenhuma do sistema garantida."""
     return ImageFont.truetype(font_manager.findfont("DejaVu Sans"), tamanho)

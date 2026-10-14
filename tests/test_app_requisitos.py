@@ -42,7 +42,6 @@ print("\\n".join(sorted(pacotes)))
 
 
 def normalizar(nome: str) -> str:
-    """O nome do pacote como o PEP 503 o escreve: `et_xmlfile` e `et-xmlfile` são o mesmo."""
     return re.sub(r"[-_.]+", "-", nome).lower()
 
 
@@ -56,7 +55,6 @@ def declarados() -> set[str]:
 
 
 def com_as_dependencias(pacotes: set[str]) -> set[str]:
-    """Os declarados mais o que vem junto com eles — quem declara pandas não declara numpy."""
     import importlib.metadata as meta
 
     vistos, fila = set(), list(pacotes)
@@ -89,21 +87,10 @@ def test_o_painel_declara_tudo_o_que_seus_modulos_importam():
 
 
 def test_a_regra_do_risco_arrasta_o_escritor_de_planilha():
-    """O caso concreto que derrubou o app, fixado: não é óbvio que o painel precise de openpyxl."""
     assert "openpyxl" in declarados()
 
 
 def test_todo_cache_resource_tem_teto_de_entradas():
-    """`cache_resource` guarda o objeto, e não uma cópia: sem teto ele vive enquanto o processo.
-
-    Com um estado isso era uma entrada de shapefile, carregada uma vez e usada para sempre — o
-    comportamento que se queria. Com 25, visitar todos prende ~740 MB, e o Streamlit Community
-    Cloud corta o app perto de 1 GB. Quando isso acontece cai a sessão de **todo mundo**, porque
-    esses caches são do processo e um contêiner serve a equipe inteira.
-
-    `cache_data` não entra aqui: ele serializa e devolve cópia, e quem guarda coisa grande nele
-    já tem max_entries declarado caso a caso.
-    """
     arvore = ast.parse((RAIZ / "app" / "explorador.py").read_text(encoding="utf-8"))
 
     sem_teto = [

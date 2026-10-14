@@ -23,7 +23,6 @@ class Resposta:
 
 
 def corpo_da_previsao(dados: dict) -> list:
-    """O que o Open-Meteo devolve para um pedido de vários pontos e vários modelos."""
     latitudes = [float(v) for v in dados["latitude"].split(",")]
     modelos = dados["models"].split(",")
     horas = int(dados["forecast_days"]) * 24
@@ -45,7 +44,6 @@ SEGUNDAS = ["2026-10-05", "2026-10-12", "2026-10-19", "2026-10-26", "2026-11-02"
 
 
 def corpo_das_semanas(dados: dict) -> list:
-    """O que a API sazonal devolve: uma lista por variável, com a última semana vazia (passa do dia 46)."""
     latitudes = [float(v) for v in dados["latitude"].split(",")]
     locais = []
     for latitude in latitudes:
@@ -58,7 +56,6 @@ def corpo_das_semanas(dados: dict) -> list:
 
 @pytest.fixture
 def open_meteo(monkeypatch):
-    """Troca o Open-Meteo por respostas sintéticas e anota cada pedido."""
     pedidos = []
 
     def falso(metodo, url, timeout=None, data=None, **kwargs):
@@ -94,7 +91,6 @@ def test_o_custo_segue_a_regra_medida():
 
 @pytest.mark.parametrize("passo, esperados", [(0.5, 178), (0.25, 607)])
 def test_a_grade_de_ms_tem_os_pontos_medidos(passo, esperados):
-    """Os números do escopo: 178 pontos a 0,5° e 607 a 0,25°, com uma fileira além da divisa."""
     grade = openmeteo.pontos_da_grade(config.recorte_de("MS"), passo)
 
     assert len(grade) == esperados
@@ -140,7 +136,6 @@ def test_o_pedido_leva_as_variaveis_os_modelos_e_as_unidades(open_meteo):
 
 
 def test_pedidos_grandes_vao_em_lotes_que_cabem_no_minuto(open_meteo):
-    """607 pontos a 2,1 por ponto não cabem em 600 por minuto: três lotes, um minuto entre eles."""
     pedidos, esperas = open_meteo
 
     tabela = openmeteo.previsao_horaria(pontos(607))
@@ -153,7 +148,6 @@ def test_pedidos_grandes_vao_em_lotes_que_cabem_no_minuto(open_meteo):
 
 
 def test_a_rodada_e_a_anterior_ate_completar_a_margem(open_meteo):
-    """Disponível às 14:00 UTC: até 14:10 o que está servindo ainda é a rodada das 06."""
     antes = openmeteo.rodadas(("ecmwf_ifs025",), agora=datetime(2026, 10, 7, 14, 5, tzinfo=timezone.utc))
     depois = openmeteo.rodadas(("ecmwf_ifs025",), agora=datetime(2026, 10, 7, 14, 11, tzinfo=timezone.utc))
 
@@ -162,7 +156,6 @@ def test_a_rodada_e_a_anterior_ate_completar_a_margem(open_meteo):
 
 
 def test_se_a_rodada_muda_no_meio_busca_de_novo(open_meteo, monkeypatch):
-    """Parte dos números da rodada velha e parte da nova não pode levar o carimbo de nenhuma."""
     pedidos, _ = open_meteo
     velha, nova = (datetime(2026, 10, 7, hora, tzinfo=timezone.utc) for hora in (6, 12))
     sequencia = iter([velha, nova, nova, nova])
@@ -185,7 +178,6 @@ def test_se_a_rodada_muda_duas_vezes_desiste(open_meteo, monkeypatch):
 
 
 def test_cota_esgotada_falha_de_primeira(monkeypatch):
-    """Repetir um 429 não resolve, e ainda gastaria mais da cota."""
     chamadas = []
 
     def falso(*args, **kwargs):
@@ -220,7 +212,6 @@ def test_falha_passageira_e_repetida(monkeypatch, open_meteo):
 # O DIA
 # =====================================================
 def horas_locais(inicio: str, quantas: int, **colunas) -> pd.DataFrame:
-    """Horas seguidas a partir de `inicio`, no horário de MS, já em UTC como vem do Open-Meteo."""
     locais = pd.date_range(inicio, periods=quantas, freq="h", tz=config.FUSO_MS)
     padrao = {nome: 0.0 for nome in openmeteo.VARIAVEIS.values()}
     return pd.DataFrame({"modelo": "ecmwf_ifs025", "ponto": "A702", "latitude": -20.45, "longitude": -54.62,
@@ -228,7 +219,6 @@ def horas_locais(inicio: str, quantas: int, **colunas) -> pd.DataFrame:
 
 
 def test_a_leitura_da_meia_noite_fecha_o_dia_anterior():
-    """Da hora das 01:00 de 17/09 à das 00:00 de 18/09 é o dia 17, como no INMET."""
     temperatura = [20.0] * 23 + [35.0]                       # a mais quente é a das 00:00 de 18/09
     horas = horas_locais("2026-09-17 01:00", 24, temperatura=temperatura, chuva=[1.0] * 24)
 
@@ -295,7 +285,6 @@ def test_o_pedido_semanal_leva_as_previsoes_as_anomalias_e_os_46_dias(open_meteo
 
 
 def test_a_rodada_do_ec46_vem_dos_metadados_da_api_sazonal(open_meteo):
-    """A média dos membros tem metadados com intervalo de 744 h; vale o do EC46 com os membros."""
     pedidos, _ = open_meteo
 
     openmeteo.rodadas((config.MODELO_SEMANAS,))
@@ -304,7 +293,6 @@ def test_a_rodada_do_ec46_vem_dos_metadados_da_api_sazonal(open_meteo):
 
 
 def test_muitos_pontos_nas_semanas_vao_em_lotes_que_cabem_no_minuto(open_meteo):
-    """Cada ponto custa 3,3 pela regra (46 dias pesam 46/14): 400 pontos viram três lotes."""
     pedidos, esperas = open_meteo
 
     tabela = openmeteo.anomalias_semanais(pontos(400))

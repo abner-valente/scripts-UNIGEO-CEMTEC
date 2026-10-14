@@ -82,12 +82,11 @@ ESPERA_ENTRE_LOTES = 61        # segundos: um minuto inteiro, para o limite por 
 
 
 class ErroOpenMeteo(Exception):
-    """Falha ao consultar o Open-Meteo."""
+    pass
 
 
 def custo(pontos: int, variaveis: int = len(VARIAVEIS), modelos: int = len(config.MODELOS_PREVISAO),
           dias: int = config.DIAS_PREVISAO) -> float:
-    """Quantas chamadas da cota um pedido gasta, pela regra medida em 05 e 06/10/2026."""
     return pontos * max(1.0, variaveis * modelos / 10) * max(1.0, dias / 14)
 
 
@@ -101,16 +100,6 @@ def _contorno(caminho_shape: str):
 
 def pontos_da_grade(recorte: config.Recorte = config.RECORTE,
                     passo: float = config.GRADE_PREVISAO) -> pd.DataFrame:
-    """Os pontos da grade que cobrem o estado, com uma fileira além da divisa.
-
-    A margem é igual ao espaçamento: sem nenhum ponto do lado de fora, a cor do mapa para no último
-    ponto de dentro, que pode estar a meio passo da divisa, e a borda fica sem cor. Mais que uma
-    fileira só gastaria cota, porque o mapa é recortado no contorno do estado. Em MS são 178 pontos
-    a 0,5° e 607 a 0,25°.
-
-    Os pontos ficam em múltiplos do espaçamento, que é onde o ECMWF e o GFS calculam: a 0,25°, o
-    valor de cada ponto é o do próprio modelo, sem interpolação no meio.
-    """
     contorno = _contorno(str(recorte.shape_uf))
     oeste, sul, leste, norte = contorno.bounds
     lons = np.arange(np.floor(oeste / passo) - 1, np.ceil(leste / passo) + 2) * passo
@@ -123,10 +112,6 @@ def pontos_da_grade(recorte: config.Recorte = config.RECORTE,
 
 
 def pontos_das_estacoes(estacoes: pd.DataFrame) -> pd.DataFrame:
-    """As estações como pontos de previsão, identificadas pelo código do INMET.
-
-    É o que permite comparar, mais tarde, o previsto com o que a estação mediu no mesmo lugar.
-    """
     return pd.DataFrame({"ponto": estacoes["CD_ESTACAO"].astype(str).to_numpy(),
                          "latitude": pd.to_numeric(estacoes["VL_LATITUDE"]).to_numpy(),
                          "longitude": pd.to_numeric(estacoes["VL_LONGITUDE"]).to_numpy()})
@@ -143,12 +128,6 @@ def _motivo(resposta: requests.Response) -> str:
 
 
 def _pedir(metodo: str, url: str, **kwargs) -> dict | list:
-    """Uma chamada ao Open-Meteo, repetida quando a falha é passageira.
-
-    Conexão perdida, erro 5xx e resposta cortada valem nova tentativa, com a espera dobrando como
-    no INMET. Cota esgotada (429) e pedido recusado (4xx) falham de primeira: repetir não resolve,
-    e no caso da cota só gastaria mais.
-    """
     motivo = ""
     for tentativa in range(1, config.TENTATIVAS + 1):
         try:
@@ -173,22 +152,11 @@ def _pedir(metodo: str, url: str, **kwargs) -> dict | list:
 
 
 def _dormir(segundos: float) -> None:
-    """A espera entre lotes, separada para os testes poderem trocá-la."""
     time.sleep(segundos)
 
 
 def rodadas(modelos: tuple[str, ...] = config.MODELOS_PREVISAO,
             agora: datetime | None = None) -> dict[str, datetime]:
-    """A rodada que o Open-Meteo está servindo de cada modelo, em UTC.
-
-    É a chave do que se guarda: a previsão só muda quando sai uma rodada nova, e não com o relógio.
-    Os metadados não contam na cota.
-
-    Enquanto a rodada mais nova não completa a margem de 10 minutos que o Open-Meteo recomenda, o
-    que está servindo ainda é a anterior, um intervalo de atualização antes. O ECMWF publica de 6
-    em 6 horas, e as rodadas das 06 e das 18 UTC vão só até alguns dias à frente; os dias seguintes
-    seguem vindo da rodada anterior. A hora devolvida aqui é a da rodada mais nova.
-    """
     agora = agora or datetime.now(timezone.utc)
     resultado = {}
     for modelo in modelos:
@@ -203,7 +171,6 @@ def rodadas(modelos: tuple[str, ...] = config.MODELOS_PREVISAO,
 
 
 def _buscar_lote(lote: pd.DataFrame, modelos: tuple[str, ...], dias: int) -> pd.DataFrame:
-    """Um pedido só, para os pontos do lote, com os modelos lado a lado."""
     resposta = _pedir("POST", config.URL_OPENMETEO, data={
         "latitude": ",".join(f"{valor:.4f}" for valor in lote["latitude"]),
         "longitude": ",".join(f"{valor:.4f}" for valor in lote["longitude"]),
@@ -241,12 +208,6 @@ def _buscar_lote(lote: pd.DataFrame, modelos: tuple[str, ...], dias: int) -> pd.
 
 def previsao_horaria(pontos: pd.DataFrame, modelos: tuple[str, ...] = config.MODELOS_PREVISAO,
                      dias: int = config.DIAS_PREVISAO) -> pd.DataFrame:
-    """A previsão hora a hora dos pontos, uma linha por modelo, ponto e hora, sem a rodada.
-
-    Os pontos vão em lotes que cabem no limite por minuto, com um minuto inteiro entre um lote e
-    outro. A 0,5°, os 178 pontos de MS cabem num lote só; a 0,25°, os 607 viram três, e a busca
-    leva uns dois minutos, o que só serve para a busca agendada.
-    """
     por_lote = max(1, int(config.OPENMETEO_POR_MINUTO // custo(1, modelos=len(modelos), dias=dias)))
     partes = []
     for inicio in range(0, len(pontos), por_lote):
@@ -260,12 +221,6 @@ def previsao_horaria(pontos: pd.DataFrame, modelos: tuple[str, ...] = config.MOD
 
 def _na_mesma_rodada(modelos: tuple[str, ...], buscar_tabela: Callable[[], pd.DataFrame],
                      colunas: list[str]) -> pd.DataFrame:
-    """A tabela que `buscar_tabela` trouxer, com a rodada de cada modelo carimbada em cada linha.
-
-    A rodada é conferida antes e depois da busca. Se ela mudou no meio, parte dos números pode ser
-    da rodada nova e parte da velha, e carimbar uma das duas seria mentir: busca de novo. Se mudar
-    outra vez, desiste com erro, e quem chamou tenta mais tarde.
-    """
     for _ in range(2):
         antes = rodadas(modelos)
         tabela = buscar_tabela()
@@ -278,7 +233,6 @@ def _na_mesma_rodada(modelos: tuple[str, ...], buscar_tabela: Callable[[], pd.Da
 
 def buscar(pontos: pd.DataFrame, modelos: tuple[str, ...] = config.MODELOS_PREVISAO,
            dias: int = config.DIAS_PREVISAO) -> pd.DataFrame:
-    """A previsão hora a hora dos pontos, com a rodada de cada modelo carimbada em cada linha."""
     return _na_mesma_rodada(modelos, lambda: previsao_horaria(pontos, modelos, dias), COLUNAS_HORARIAS)
 
 
@@ -286,7 +240,6 @@ def buscar(pontos: pd.DataFrame, modelos: tuple[str, ...] = config.MODELOS_PREVI
 # AS SEMANAS
 # =====================================================
 def _buscar_lote_semanal(lote: pd.DataFrame, modelo: str, dias: int) -> pd.DataFrame:
-    """Um pedido à API sazonal, para os pontos do lote: uma linha por ponto e semana."""
     resposta = _pedir("POST", config.URL_OPENMETEO_SAZONAL, data={
         "latitude": ",".join(f"{valor:.4f}" for valor in lote["latitude"]),
         "longitude": ",".join(f"{valor:.4f}" for valor in lote["longitude"]),
@@ -315,13 +268,6 @@ def _buscar_lote_semanal(lote: pd.DataFrame, modelo: str, dias: int) -> pd.DataF
 
 def anomalias_semanais(pontos: pd.DataFrame, modelo: str = config.MODELO_SEMANAS,
                        dias: int = config.DIAS_SEMANAS) -> pd.DataFrame:
-    """As anomalias semanais dos pontos, sem a rodada, em lotes que cabem no limite por minuto.
-
-    A semana começa na segunda-feira, em UTC, e o valor vem pronto do Open-Meteo: a média da semana
-    (ou a soma, na chuva) menos a normal do modelo para a mesma semana, tirada das reprevisões do
-    ECMWF. Cada ponto custa 3,3 chamadas pela regra (46 dias pesam 46/14), e os 178 da grade de
-    0,5° cabem num lote.
-    """
     por_lote = max(1, int(config.OPENMETEO_POR_MINUTO
                           // custo(1, variaveis=len(VARIAVEIS_SEMANAIS), modelos=1, dias=dias)))
     partes = []
@@ -336,7 +282,6 @@ def anomalias_semanais(pontos: pd.DataFrame, modelo: str = config.MODELO_SEMANAS
 
 def buscar_semanas(pontos: pd.DataFrame, modelo: str = config.MODELO_SEMANAS,
                    dias: int = config.DIAS_SEMANAS) -> pd.DataFrame:
-    """As anomalias semanais dos pontos, com a rodada do EC46 carimbada em cada linha."""
     return _na_mesma_rodada((modelo,), lambda: anomalias_semanais(pontos, modelo, dias), COLUNAS_SEMANAIS)
 
 
@@ -344,17 +289,6 @@ def buscar_semanas(pontos: pd.DataFrame, modelo: str = config.MODELO_SEMANAS,
 # O DIA
 # =====================================================
 def diario(horaria: pd.DataFrame, fuso: ZoneInfo = config.FUSO_MS) -> pd.DataFrame:
-    """O dia de cada modelo, rodada e ponto, tirado das horas pela regra do projeto.
-
-    A leitura das 00:00 fecha o dia anterior, como no INMET: o dia 17 vai da hora das 01:00 de 17
-    à das 00:00 de 18, no fuso do estado. Somando as horas aqui, e não pedindo o diário pronto do
-    Open-Meteo (que vai das 00 às 23 h), o previsto e o observado ficam comparáveis.
-
-    Dias que não estão inteiros na previsão (o de hoje, que começou antes da rodada, e o último)
-    saem com `horas` menor que 24, para quem usa decidir. A direção dominante é a resultante das
-    horas, pesada pela velocidade, a mesma regra do painel (`app/variaveis._direcao_resultante`):
-    a média dos ângulos daria rumos que não sopraram.
-    """
     local = horaria["hora_prevista_utc"].dt.tz_convert(fuso)
     angulos = np.radians(horaria["direcao"])
     tabela = horaria.assign(dia_previsto=(local - pd.Timedelta(hours=1)).dt.date,

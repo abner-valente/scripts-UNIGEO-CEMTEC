@@ -7,13 +7,11 @@ from app import variaveis
 
 
 def leituras(estacao: str, inicio: str, horas: int, **colunas) -> pd.DataFrame:
-    """Leituras horárias de uma estação a partir de `inicio` (horário de MS)."""
     marcas = pd.date_range(inicio, periods=horas, freq="h", tz="America/Campo_Grande")
     return pd.DataFrame({"Estação": estacao, "dt_local": marcas, **colunas})
 
 
 def um_dia(estacao: str = "Bonito", **colunas) -> pd.DataFrame:
-    """As 24 horas do dia 17/09: da leitura das 01 h à das 00 h do dia seguinte."""
     return leituras(estacao, "2026-09-17 01:00", 24, **colunas)
 
 
@@ -21,7 +19,6 @@ def um_dia(estacao: str = "Bonito", **colunas) -> pd.DataFrame:
 # AS REGRAS DE CADA PRODUTO
 # =====================================================
 def test_a_maxima_do_dia_e_a_maior_horaria_e_nao_a_media_delas():
-    """O erro que motivou o catálogo: a média das máximas não é a máxima do dia."""
     horarias = [20.0] * 23 + [30.3]  # um dia morno com uma hora quente
     dia = um_dia(TEM_MAX=horarias)
 
@@ -56,7 +53,6 @@ def test_rajada_do_dia_e_a_maior_rajada_horaria():
 
 
 def test_vento_medio_e_a_media_das_horarias():
-    """VEN_VEL já é a média da hora, então a média do dia é a média das médias."""
     dia = um_dia(VEN_VEL=[10.0] * 12 + [20.0] * 12)
     assert variaveis.calcular(variaveis.por_nome("Vento médio"), dia) == pytest.approx(15.0)
 
@@ -67,7 +63,6 @@ def test_chuva_do_dia_soma_as_horas():
 
 
 def test_radiacao_zera_o_ruido_negativo_antes_de_somar():
-    """À noite o sensor devolve algo como -3,5: somado, viraria um desconto que não houve."""
     dia = um_dia(RAD_GLO=[-3.5] * 12 + [1000.0] * 12)
     acumulada = variaveis.por_nome("Radiação acumulada")
     assert variaveis.calcular(acumulada, dia) == pytest.approx(12000.0)
@@ -88,7 +83,6 @@ def test_compensada_usa_as_9h_e_as_21h_do_horario_de_ms():
 
 
 def test_compensada_sem_a_leitura_das_21h_fica_em_branco():
-    """Melhor um buraco no gráfico do que um número inventado."""
     dia = um_dia(TEM_INS=[15.0] * 24, TEM_MAX=[30.0] * 24, TEM_MIN=[10.0] * 24)
     dia.loc[dia["dt_local"].dt.hour == 21, "TEM_INS"] = np.nan
 
@@ -96,14 +90,12 @@ def test_compensada_sem_a_leitura_das_21h_fica_em_branco():
 
 
 def test_direcao_do_vento_nao_vira_mapa():
-    """Interpolar ângulo não funciona: entre 350° e 10° a média daria 180°, o rumo oposto."""
     direcao = variaveis.por_nome("Direção na hora")
     assert direcao.onde == (variaveis.GRAFICO,)
     assert direcao not in variaveis.disponiveis(variaveis.HORA, variaveis.MAPA)
 
 
 def test_compensada_do_periodo_e_a_media_das_diarias():
-    """Aplicar a fórmula ao período inteiro casaria as 9 h de um dia com a máxima de outro."""
     dois_dias = pd.concat([
         um_dia(TEM_INS=[20.0] * 24, TEM_MAX=[30.0] * 24, TEM_MIN=[10.0] * 24),
         leituras("Bonito", "2026-09-18 01:00", 24,
@@ -128,7 +120,6 @@ def test_dia_incompleto_sai_da_media_do_periodo_em_vez_de_zera_la():
 
 
 def test_a_media_do_periodo_e_a_compensada_e_nao_a_media_das_horas_cheias():
-    """A compensada é a que fecha a média de um mês no INMET e compara com a normal."""
     do_periodo = {produto.nome for produto in variaveis.disponiveis(variaveis.PERIODO, variaveis.MAPA)}
 
     assert "Temperatura média compensada" in do_periodo
@@ -148,7 +139,6 @@ def test_umidade_media_sai_da_hora_cheia_no_dia_e_no_periodo():
 # A SETA DA DIREÇÃO
 # =====================================================
 def test_a_seta_da_rajada_aponta_a_direcao_da_hora_da_rajada():
-    """É a rajada daquela hora que está no mapa; a direção tem de ser a mesma hora."""
     dia = um_dia(VEN_RAJ=[10.0] * 23 + [80.0], VEN_DIR=[180.0] * 23 + [45.0])
 
     setas = variaveis.direcoes(variaveis.por_nome("Rajada máxima"), dia)
@@ -157,7 +147,6 @@ def test_a_seta_da_rajada_aponta_a_direcao_da_hora_da_rajada():
 
 
 def test_a_seta_do_vento_medio_e_a_resultante_e_nao_a_media_dos_angulos():
-    """12 h de norte e 12 h de sul não sopraram de leste: elas se cancelam."""
     dia = um_dia(VEN_VEL=[10.0] * 24, VEN_DIR=[0.0] * 12 + [180.0] * 12)
 
     assert np.isnan(variaveis.direcoes(variaveis.por_nome("Vento médio"), dia)["Bonito"])
@@ -170,7 +159,6 @@ def test_a_resultante_pesa_cada_hora_pela_velocidade():
 
 
 def test_a_resultante_atravessa_o_norte_sem_apontar_para_o_sul():
-    """O caso que a média dos ângulos erra: 350° e 10° dão 0°, e não 180°."""
     dia = um_dia(VEN_VEL=[10.0] * 24, VEN_DIR=[350.0] * 12 + [10.0] * 12)
     assert variaveis.direcoes(variaveis.por_nome("Vento médio"), dia)["Bonito"] == pytest.approx(0.0)
 
@@ -199,7 +187,6 @@ def test_por_estacao_devolve_um_numero_por_estacao():
 
 
 def test_no_tempo_diario_respeita_o_fechamento_do_dia():
-    """A leitura das 00:00 fecha o dia anterior: sete dias continuam sete."""
     semana = leituras("Bonito", "2026-09-17 01:00", 24 * 7, TEM_MAX=np.arange(24.0 * 7))
 
     serie = variaveis.no_tempo(variaveis.por_nome("Temperatura máxima"), semana, variaveis.DIA)
@@ -216,7 +203,6 @@ def test_no_tempo_horario_mantem_uma_linha_por_hora():
 
 
 def test_a_mesma_regra_serve_ao_mapa_e_ao_grafico():
-    """É o ponto do catálogo: máxima do dia no mapa e no gráfico não podem discordar."""
     dia = um_dia(TEM_MAX=[20.0] * 23 + [31.4])
     maxima = variaveis.por_nome("Temperatura máxima")
 
@@ -236,7 +222,6 @@ def test_cada_modo_oferece_os_produtos_daquele_modo():
 
 
 def test_nao_existe_soma_de_temperatura():
-    """A combinação errada não está escrita — é o que o catálogo garante."""
     calculos = {produto.calculo for produto in variaveis.PRODUTOS if produto.grandeza == "Temperatura"}
     assert "soma" not in calculos and "soma_sem_negativos" not in calculos
 
@@ -278,7 +263,6 @@ def test_o_periodo_inteiro_nao_tem_paradas():
 
 
 def test_recorte_do_dia_pega_da_uma_da_manha_a_meia_noite_seguinte():
-    """É a janela do dia em MS: a leitura das 00:00 do dia seguinte ainda é deste dia."""
     dois_dias = leituras("Bonito", "2026-09-17 01:00", 48, TEM_MAX=np.arange(48.0))
     primeiro = variaveis.momentos(dois_dias, variaveis.DIA)[0]
 
@@ -298,13 +282,11 @@ def test_recorte_do_periodo_devolve_tudo():
 # RÓTULOS DA LEGENDA
 # =====================================================
 def test_rotulo_curto_nao_repete_a_grandeza():
-    """Num gráfico de Temperatura, a legenda não precisa dizer "Temperatura" quatro vezes."""
     assert variaveis.rotulo_curto(variaveis.por_nome("Temperatura máxima da hora")) == "Máxima da hora"
     assert variaveis.rotulo_curto(variaveis.por_nome("Temperatura média compensada")) == "Média compensada"
 
 
 def test_rotulo_que_ficaria_so_em_preposicao_mantem_o_nome_inteiro():
-    """"Chuva na hora" viraria "Na hora", que não nomeia coisa alguma."""
     assert variaveis.rotulo_curto(variaveis.por_nome("Chuva na hora")) == "Chuva na hora"
 
 
@@ -313,7 +295,6 @@ def test_rotulo_de_produto_que_nao_cita_a_grandeza_fica_igual():
 
 
 def test_rotulos_curtos_nao_colidem_dentro_da_mesma_grandeza():
-    """Duas séries com o mesmo rótulo se confundiriam na legenda."""
     for modo in (variaveis.HORA, variaveis.DIA):
         por_grandeza = {}
         for produto in variaveis.disponiveis(modo, variaveis.GRAFICO):
@@ -326,20 +307,16 @@ def test_rotulos_curtos_nao_colidem_dentro_da_mesma_grandeza():
 # ESCALA DE CORES
 # =====================================================
 def test_grandezas_com_faixa_fixa_nao_dependem_do_dado():
-    """A mesma cor tem de querer dizer o mesmo valor em qualquer mapa."""
     assert variaveis.escala(variaveis.por_nome("Temperatura máxima")) == ("faixa", (0.0, 45.0))
     assert variaveis.escala(variaveis.por_nome("Umidade mínima")) == ("faixa", (0.0, 100.0))
     assert variaveis.escala(variaveis.por_nome("Rajada máxima")) == ("faixa", (0.0, 130.0))
 
 
 def test_pressao_fica_ajustada_ao_dado():
-    """A API manda a pressão da estação, sem reduzir ao nível do mar: uma faixa fixa entre
-    altitudes diferentes desenharia o relevo, não o tempo."""
     assert variaveis.escala(variaveis.por_nome("Pressão média")) is None
 
 
 def test_classe_da_chuva_muda_com_a_duracao_da_janela():
-    """O acumulado de uma hora e o de um mês não cabem na mesma régua."""
     chuva = variaveis.por_nome("Chuva acumulada")
     _, curta = variaveis.escala(chuva, horas_janela=24)
     _, longa = variaveis.escala(chuva, horas_janela=24 * 30)
@@ -349,13 +326,11 @@ def test_classe_da_chuva_muda_com_a_duracao_da_janela():
 
 
 def test_a_chuva_nao_pinta_o_chao_da_escala():
-    """A primeira classe começa acima de zero: onde não choveu, o mapa fica branco."""
     _, classes = variaveis.escala(variaveis.por_nome("Chuva na hora"), horas_janela=1)
     assert min(classes) > 0
 
 
 def test_o_que_vem_escolhido_existe_no_catalogo():
-    """Um produto renomeado deixaria o mapa abrir vazio: o seletor descarta o nome que não acha."""
     for modo, nomes in variaveis.PADRAO_MAPA.items():
         catalogo = {produto.nome for produto in variaveis.disponiveis(modo, variaveis.MAPA)}
         faltam = [nome for nome in nomes if nome not in catalogo]
@@ -363,7 +338,6 @@ def test_o_que_vem_escolhido_existe_no_catalogo():
 
 
 def test_o_padrao_traz_temperatura_umidade_e_vento_em_toda_agregacao():
-    """É o trio do boletim; se um sair, quem abre a aba deixa de ver a grandeza inteira."""
     assert set(variaveis.PADRAO_MAPA) == {variaveis.HORA, variaveis.DIA, variaveis.PERIODO}
     for modo, nomes in variaveis.PADRAO_MAPA.items():
         grandezas = {variaveis.por_nome(nome).grandeza for nome in nomes}
@@ -374,7 +348,6 @@ def test_o_padrao_traz_temperatura_umidade_e_vento_em_toda_agregacao():
 # A LINHA DO TEMPO DO DESLIZANTE
 # =====================================================
 def test_a_linha_do_tempo_risca_a_virada_de_cada_dia():
-    """O deslizante põe a parada i em i/(n-1) da largura; o risco vai na primeira hora do dia novo."""
     horas = list(pd.date_range("2026-10-06 22:00", "2026-10-08 02:00", freq="h", tz="America/Campo_Grande"))
 
     marcas = variaveis.marcas_dos_dias(horas)
@@ -390,7 +363,6 @@ def test_a_linha_do_tempo_dos_dias_risca_cada_dia():
 
 
 def test_a_linha_do_tempo_com_paradas_salteadas():
-    """No risco de fogo o deslizante pode parar só nas horas de risco alto."""
     horas = [pd.Timestamp(marca, tz="America/Campo_Grande")
              for marca in ("2026-10-06 14:00", "2026-10-06 15:00", "2026-10-08 13:00")]
 
@@ -398,7 +370,6 @@ def test_a_linha_do_tempo_com_paradas_salteadas():
 
 
 def test_a_linha_do_tempo_vira_o_dia_no_fuso_do_estado():
-    """As paradas do risco de fogo vêm em UTC: 04:00 UTC é a meia-noite de MS."""
     horas = list(pd.date_range("2026-10-07 02:00", "2026-10-07 06:00", freq="h", tz="UTC"))
 
     em_utc = variaveis.marcas_dos_dias(horas)

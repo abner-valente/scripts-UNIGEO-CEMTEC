@@ -27,11 +27,6 @@ class RespostaFalsa:
 
 
 def trocar_get(monkeypatch, resposta) -> None:
-    """Troca a consulta HTTP pelos dados do teste.
-
-    O inmet passou a falar por uma sessão reaproveitada (uma conexão por thread, em vez de uma
-    por estação), então é o `get` dela que os testes precisam interceptar.
-    """
     monkeypatch.setattr(requests.Session, "get", lambda self, url, timeout: resposta(url, timeout))
 
 
@@ -50,7 +45,6 @@ def estacao(codigo, nome, uf, lat, lon, situacao="Operante") -> dict:
 
 
 def test_estacoes_em_pane_ficam_de_fora(monkeypatch):
-    """Pedir dados de uma estação em pane é consulta que sempre volta vazia. Em MS são 3 das 62."""
     trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa([
         estacao("A702", "CAMPO GRANDE", "MS", -20.4, -54.7),
         estacao("A999", "ESTACAO MORTA", "MS", -21.0, -55.0, situacao="Pane"),
@@ -60,7 +54,6 @@ def test_estacoes_em_pane_ficam_de_fora(monkeypatch):
 
 
 def test_o_recorte_traz_as_vizinhas_de_outros_estados(monkeypatch):
-    """A estação do outro lado da divisa descreve a borda tão bem quanto a de cá."""
     trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa([
         estacao("A702", "CAMPO GRANDE", "MS", -20.4, -54.7),
         estacao("A001", "VIZINHA DE GOIAS", "GO", -18.0, -52.0),      # logo acima do enquadramento
@@ -74,7 +67,6 @@ def test_o_recorte_traz_as_vizinhas_de_outros_estados(monkeypatch):
 
 
 def test_o_recorte_respeita_a_margem(monkeypatch):
-    """Sem margem, os 8 vizinhos de uma célula da divisa ficam todos para dentro."""
     logo_fora = {"CD_ESTACAO": "A003", "DC_NOME": "PERTO", "SG_ESTADO": "PR", "CD_SITUACAO": "Operante",
                  "VL_LATITUDE": "-25.5", "VL_LONGITUDE": "-53.0"}   # 1° abaixo do enquadramento
     trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa([logo_fora]))
@@ -84,7 +76,6 @@ def test_o_recorte_respeita_a_margem(monkeypatch):
 
 
 def test_o_recorte_recebido_escolhe_quem_entra(monkeypatch):
-    """O enquadramento vem do recorte da chamada, não de uma constante do módulo."""
     trocar_get(monkeypatch, lambda url, timeout: RespostaFalsa([
         estacao("A702", "CAMPO GRANDE", "MS", -20.4, -54.7),
         estacao("A800", "SINOP", "MT", -11.9, -55.5),     # 5° acima do enquadramento de MS
@@ -171,7 +162,6 @@ def test_estacao_sem_leituras_no_periodo_retorna_none(monkeypatch):
 
 
 def test_falha_passageira_e_repetida(monkeypatch):
-    """A API do INMET às vezes encerra a conexão sem responder; a tentativa seguinte costuma funcionar."""
     tentativas = []
 
     def get_falso(url, timeout):
@@ -188,7 +178,6 @@ def test_falha_passageira_e_repetida(monkeypatch):
 
 
 def test_a_recusa_por_limite_espera_e_nao_gasta_tentativa(monkeypatch, capsys):
-    """Passado o limite (~2 consultas por segundo), o INMET responde 200 com um aviso, e não o JSON."""
     respostas = [RespostaFalsa(status_code=200, text="Você atingiu o limite de requisições.")] * (config.TENTATIVAS + 2)
     respostas.append(RespostaFalsa([{"DT_MEDICAO": "2026-07-30", "HR_MEDICAO": "1300", "CHUVA": "1"}]))
     trocar_get(monkeypatch, lambda url, timeout: respostas.pop(0))
@@ -200,7 +189,6 @@ def test_a_recusa_por_limite_espera_e_nao_gasta_tentativa(monkeypatch, capsys):
 
 
 def test_a_espera_no_limite_dobra_ate_o_minuto_virar(monkeypatch):
-    """O limite é de 100 por minuto: insistir a cada segundo só gasta consulta até o minuto virar."""
     esperas = []
     monkeypatch.setattr(config, "PAUSA_NO_LIMITE", 1)
     monkeypatch.setattr(inmet.time, "sleep", esperas.append)
@@ -256,7 +244,6 @@ def test_a_consulta_por_hora_sem_nada_devolve_tabela_vazia(monkeypatch):
 
 
 def test_erro_de_token_nao_e_repetido(monkeypatch):
-    """Erros 4xx (token inválido, estação inexistente) não melhoram com novas tentativas."""
     tentativas = []
 
     def get_falso(url, timeout):
@@ -292,11 +279,6 @@ def test_resumo_da_coleta_separa_sem_dados_de_falha(monkeypatch, capsys):
 
 
 def test_a_coleta_passa_o_fuso_do_estado_para_cada_estacao(monkeypatch):
-    """É dele que sai a hora local da planilha: sem repassá-lo, toda UF ficava no horário de MS.
-
-    O defeito passou despercebido porque em MS e em MT o fuso é o mesmo (UTC−4). Em SC, que é
-    UTC−3, a "Data/Hora (SC)" da máxima saía uma hora antes da hora em que ela aconteceu.
-    """
     from zoneinfo import ZoneInfo
 
     recebidos = []
@@ -314,7 +296,6 @@ def test_a_coleta_passa_o_fuso_do_estado_para_cada_estacao(monkeypatch):
 # ---------- Estações vizinhas ----------
 
 def test_as_estacoes_de_apoio_sao_so_as_de_fora_do_estado(monkeypatch):
-    """A lista vem da vizinhança inteira, mas as do próprio estado já estão no produto."""
     import numpy as np
 
     vizinhanca = pd.DataFrame({
@@ -331,7 +312,6 @@ def test_as_estacoes_de_apoio_sao_so_as_de_fora_do_estado(monkeypatch):
 
 
 def test_sem_a_lista_das_vizinhas_o_produto_segue_so_com_o_estado(monkeypatch, capsys):
-    """As vizinhas melhoram a borda; um INMET instável não pode custar o boletim inteiro."""
     def falhar(*args, **kwargs):
         raise inmet.ErroINMET("conexão encerrada")
 

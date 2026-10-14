@@ -18,8 +18,6 @@ def tabela_da_rodada(rodada: datetime, modelo: str = "ecmwf_ifs025") -> pd.DataF
 
 
 class Busca:
-    """Uma busca de mentira, que conta quantas vezes foi ao "Open-Meteo"."""
-
     def __init__(self, rodada: datetime = RODADA_00, erro: str | None = None):
         self.rodada, self.erro, self.vezes = rodada, erro, 0
 
@@ -55,7 +53,6 @@ def test_rodada_nova_e_buscada_de_novo():
 
 
 def test_guardada_mais_nova_que_a_conferida_nao_e_buscada_de_novo():
-    """A conferência fica 5 minutos no cache; a busca pode ter trazido a rodada seguinte."""
     guarda = previsao.Guarda()
     guarda.obter("estações", "ecmwf_ifs025", RODADA_00, Busca(RODADA_06))
     outra = Busca(RODADA_06)
@@ -112,7 +109,6 @@ def test_precisa_buscar_diz_o_que_a_obter_vai_fazer():
 
 
 def test_duas_pessoas_ao_mesmo_tempo_buscam_uma_vez_so():
-    """A segunda espera a busca da primeira e sai com ela, em vez de gastar a cota de novo."""
     guarda, liberar, buscando = previsao.Guarda(), threading.Event(), threading.Event()
     vezes = []
 
@@ -142,7 +138,6 @@ def test_duas_pessoas_ao_mesmo_tempo_buscam_uma_vez_so():
 # AS SÉRIES DOS GRÁFICOS
 # =====================================================
 def horaria(inicio: str, quantas: int, modelos=("ecmwf_ifs025", "gfs_seamless"), **colunas) -> pd.DataFrame:
-    """Horas seguidas no horário de MS, já em UTC, como a busca devolve, para cada modelo."""
     locais = pd.date_range(inicio, periods=quantas, freq="h", tz=config.FUSO_MS)
     padrao = {nome: 1.0 for nome in openmeteo.VARIAVEIS.values()}
     return pd.concat([pd.DataFrame({
@@ -172,7 +167,6 @@ def test_por_hora_uma_linha_por_modelo_e_hora_a_partir_de_agora():
 
 
 def test_por_dia_so_entram_os_dias_inteiros():
-    """O dia 7 começa 01:00 e está inteiro; o 8 fica pela metade e sairia como uma queda falsa."""
     temperatura = [20.0] * 23 + [35.0] + [10.0] * 12           # o 7 fecha com a das 00:00 de 8
     horas = horaria("2026-10-07 01:00", 36, temperatura=temperatura)
     desde = pd.Timestamp("2026-10-07 10:00", tz=config.FUSO_MS)
@@ -236,7 +230,6 @@ HOJE = date(2026, 10, 8)
 
 
 def diaria(dias: dict, pontos=("A", "B"), coluna: str = "chuva", horas: dict | None = None) -> pd.DataFrame:
-    """Uma tabela diária como a do `openmeteo.diario`: um valor por ponto e dia."""
     linhas = [{"modelo": "ecmwf_ifs025", "ponto": ponto, "dia_previsto": dia, coluna: valor,
                "direcao_dominante": 90.0, "horas": (horas or {}).get(dia, 24)}
               for dia, valor in dias.items() for ponto in pontos]
@@ -271,7 +264,6 @@ def test_o_acumulado_soma_de_hoje_ate_o_dia_escolhido():
 
 
 def test_no_acumulado_um_dia_faltando_deixa_o_ponto_sem_valor():
-    """Somar o que houver daria menos chuva onde faltou dia, e não onde choveu menos."""
     tabela = diaria({HOJE: 2.0, date(2026, 10, 9): 5.0})
     tabela = tabela[~((tabela["ponto"] == "B") & (tabela["dia_previsto"] == HOJE))]
 
@@ -299,7 +291,6 @@ def test_ajustar_a_escala_deixa_os_niveis_para_o_dado():
 
 
 def rede(passo: float = 0.5, faltando: tuple = ()) -> pd.DataFrame:
-    """Pontos de 0,5° num quadrado de MS, sem os de `faltando`."""
     lons, lats = np.meshgrid(np.arange(-56.0, -53.9, passo), np.arange(-22.0, -19.9, passo))
     pontos = pd.DataFrame({"latitude": lats.ravel(), "longitude": lons.ravel()})
     pontos["ponto"] = [f"{lat:.2f};{lon:.2f}" for lat, lon in zip(pontos["latitude"], pontos["longitude"])]
@@ -307,7 +298,6 @@ def rede(passo: float = 0.5, faltando: tuple = ()) -> pd.DataFrame:
 
 
 def test_a_superficie_bilinear_reproduz_um_campo_plano():
-    """Entre os pontos, um campo que varia em linha reta sai exato: nada é inventado."""
     pontos = rede()
     valores = pd.Series(2.0 * pontos["longitude"].to_numpy() + 3.0 * pontos["latitude"].to_numpy(),
                         index=pontos["ponto"].to_numpy())
@@ -378,7 +368,6 @@ def test_subtitulo_e_carimbo_dizem_o_modelo_a_janela_e_a_rodada():
 
 
 def test_o_png_do_boletim_da_previsao_leva_o_credito_do_open_meteo():
-    """A licença do Open-Meteo obriga o crédito; o main.py segue com o do INMET."""
     base = mapas.carregar_base()
     mapa = previsao.MAPAS["Temperatura máxima"]
     pontos = previsao.nas_estacoes(diaria({HOJE: 33.0}, pontos=("A702", "A721"), coluna="temp_max"),
@@ -402,14 +391,12 @@ RODADA_EC46 = datetime(2026, 10, 7, 0, tzinfo=timezone.utc)
 
 
 def semanal(semanas: dict, pontos=("A", "B")) -> pd.DataFrame:
-    """Uma tabela como a de `openmeteo.buscar_semanas`: uma anomalia por ponto e semana."""
     return pd.DataFrame([{"modelo": "ecmwf_ec46_ensemble_mean", "rodada_utc": RODADA_EC46, "ponto": ponto,
                           "semana": semana, "anom_temperatura": valor, "anom_chuva": valor * 10}
                          for semana, valor in semanas.items() for ponto in pontos])
 
 
 def test_so_entram_as_semanas_que_comecam_depois_da_rodada():
-    """A semana de 05/10 já tinha começado quando a rodada de 07/10 saiu: só teria cinco dias."""
     tabela = semanal({date(2026, 10, 5): 1.0, date(2026, 10, 12): 2.0, date(2026, 10, 19): 3.0})
 
     assert previsao.semanas_inteiras(tabela, RODADA_EC46) == [date(2026, 10, 12), date(2026, 10, 19)]
@@ -444,14 +431,12 @@ def test_nas_estacoes_a_coluna_leva_o_titulo_que_nao_se_confunde_com_os_dias():
 
 
 def test_todo_mapa_das_semanas_diz_que_e_anomalia():
-    """Só "Temperatura média" sobre um -2,4 se lia como uma temperatura de -2,4 °C."""
     assert all(nome.startswith("Anomalia") for nome in previsao.MAPAS_SEMANAIS)
     assert set(previsao.PADRAO_SEMANAIS) <= set(previsao.MAPAS_SEMANAIS)
 
 
 @pytest.mark.parametrize("niveis", [previsao.NIVEIS_ANOMALIA_TEMPERATURA, previsao.NIVEIS_ANOMALIA_CHUVA])
 def test_a_escala_da_anomalia_tem_o_normal_no_meio(niveis):
-    """Tantas classes abaixo quanto acima da faixa do normal: é ela que sai branca."""
     abaixo = sum(1 for nivel in niveis if nivel < 0)
     acima = sum(1 for nivel in niveis if nivel > 0)
     assert abaixo == acima
@@ -468,7 +453,6 @@ def test_subtitulo_e_carimbo_da_semana():
 # O RISCO DE FOGO PREVISTO
 # =====================================================
 def test_o_nivel_de_cada_hora_e_o_da_regra_do_produto():
-    """Temperatura ≥ 30 °C, umidade ≤ 30 % e rajada ≥ 30 km/h: cada uma soma um nível."""
     horas = horaria("2026-10-08 01:00", 4, modelos=("ecmwf_ifs025",),
                     temperatura=[35.0, 35.0, 25.0, 35.0], umidade=[20.0, 40.0, 40.0, 20.0],
                     rajada=[40.0, 40.0, 10.0, 29.9])
@@ -484,7 +468,6 @@ def test_hora_sem_uma_das_tres_variaveis_fica_fora_do_risco():
 
 
 def test_o_dia_do_risco_e_o_pior_nivel_e_as_horas_em_risco_alto():
-    """A das 00:00 fecha o dia anterior, como no produto: o risco alto dela conta no dia 8."""
     temperatura = [35.0] * 3 + [25.0] * 20 + [35.0] + [35.0]          # 01:00 do dia 8 à 01:00 do dia 9
     horas = horaria("2026-10-08 01:00", 25, modelos=("ecmwf_ifs025",), temperatura=temperatura,
                     umidade=[20.0] * 25, rajada=[40.0] * 25)
@@ -504,7 +487,6 @@ def test_a_tabela_diaria_e_a_planilha_levam_o_risco():
 
 
 def test_na_grade_a_regra_e_aplicada_celula_a_celula_hora_a_hora():
-    """Quente a oeste e ameno a leste: o nível muda no meio, onde a temperatura passa de 30 °C."""
     pontos = rede()
     linhas = []
     for hora in pd.date_range("2026-10-08 01:00", periods=24, freq="h", tz=config.FUSO_MS):
@@ -536,7 +518,6 @@ def test_os_dois_mapas_do_risco_estao_no_catalogo():
 
 
 def test_a_normal_da_semana_e_a_previsao_menos_a_anomalia():
-    """Campo Grande, semana de 12/10/2026: o EC46 previu 23,8 °C com anomalia de -1,8; a normal é 25,6."""
     tabela = pd.DataFrame([
         {"ponto": "A702", "semana": date(2026, 10, 5), "temperatura": 24.9, "anom_temperatura": -0.8},
         {"ponto": "A702", "semana": date(2026, 10, 12), "temperatura": 23.8, "anom_temperatura": -1.8},

@@ -41,7 +41,6 @@ EXTRAS = {coluna.upper(): coluna for coluna in banco.COLUNAS_INMET_EXTRAS}
 
 @dataclass
 class Coleta:
-    """O que uma coleta fez: para o relato e para o código de saída do `coletar.py`."""
     consultas: int = 0      # horas pedidas (ou estações, nos extras)
     leituras: int = 0       # linhas com alguma medida
     gravadas: int = 0       # as que entraram no banco ou mudaram nele
@@ -60,24 +59,11 @@ class Coleta:
 # DA API PARA O BANCO
 # =====================================================
 def _radiacao_com_uma_casa(valores: pd.Series) -> pd.Series:
-    """A radiação arredondada como a consulta por estação a mostra: uma casa, com o meio para cima.
-
-    A consulta por hora manda três casas (3523,619 kJ/m²), e a por estação, uma (3523,6). Gravando
-    como a por estação, o banco devolve ao painel e aos produtos o mesmo número que eles recebem
-    hoje, e o passo 7 do plano (o banco contra as APIs) pode exigir igualdade. Conferido em
-    09/10/2026 em 108 horas de seis estações: é o "meio para cima" (1724,55 vira 1724,6), e não o
-    `round` do Python, que leva o meio para o par.
-    """
     return valores.map(lambda valor: valor if pd.isna(valor) else
                        float(Decimal(str(float(valor))).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)))
 
 
 def leituras_para_o_banco(dados: pd.DataFrame, medidas: dict[str, str] = MEDIDAS) -> pd.DataFrame:
-    """As leituras da API (de `inmet.baixar_hora` ou de `baixar_dados_estacao`) com os nomes do banco.
-
-    Sai a linha sem nenhuma das medidas: a consulta por hora traz todas as estações, até as em pane
-    e as que já fecharam, e umas 30% vêm vazias.
-    """
     presentes = {api: nome for api, nome in medidas.items() if api in dados}
     if dados.empty or not presentes:
         return pd.DataFrame(columns=["estacao", "hora_utc", *medidas.values()])
@@ -94,7 +80,6 @@ def _coluna(tabela: pd.DataFrame, nome: str) -> pd.Series:
 
 
 def estacoes_da_lista(lista: pd.DataFrame) -> pd.DataFrame:
-    """O cadastro, com os nomes do banco, a partir da lista do INMET (`inmet.lista_do_inmet`)."""
     tabela = pd.DataFrame({
         "codigo": _coluna(lista, "CD_ESTACAO").str.strip(),
         "nome": _coluna(lista, "DC_NOME").str.strip(),
@@ -110,7 +95,6 @@ def estacoes_da_lista(lista: pd.DataFrame) -> pd.DataFrame:
 
 
 def estacoes_das_leituras(dados: pd.DataFrame) -> pd.DataFrame:
-    """O cadastro mínimo (código, nome, UF e coordenadas) das estações da consulta por hora."""
     if dados.empty:
         return pd.DataFrame(columns=["codigo", "nome", "uf", "latitude", "longitude"])
     tabela = pd.DataFrame({
@@ -124,8 +108,6 @@ def estacoes_das_leituras(dados: pd.DataFrame) -> pd.DataFrame:
 
 
 class _Ritmo:
-    """No máximo uma consulta a cada `config.INTERVALO_DO_COLETOR` segundos, no coletor inteiro."""
-
     def __init__(self):
         self.ultima = float("-inf")
 
@@ -148,12 +130,6 @@ def _hora_cheia(momento: datetime | None) -> datetime:
 
 
 def ultimas_horas(agora: datetime | None = None, quantas: int = HORAS_REBUSCADAS) -> list[datetime]:
-    """As últimas horas cheias (UTC), da mais antiga até a corrente.
-
-    A corrente entra: a leitura das 14:00, que fecha a hora das 13 às 14, chega aos poucos depois
-    das 14:00 (a das 15:00 de 09/10/2026 tinha ~88% das estações às 15:26), e o que faltar dela a
-    próxima execução completa.
-    """
     agora = _hora_cheia(agora)
     return [agora - timedelta(hours=atras) for atras in range(quantas - 1, -1, -1)]
 
@@ -166,11 +142,6 @@ def _rotulo(hora: datetime) -> str:
 # COLETAR
 # =====================================================
 def atualizar_cadastro(conexao: psycopg.Connection) -> int | None:
-    """Grava a lista do INMET no cadastro. Devolve quantas estações entraram ou mudaram.
-
-    Se a lista falhar, devolve None e a coleta segue: as estações novas entram pela consulta por
-    hora, com o cadastro mínimo, e a lista completa o resto numa próxima execução.
-    """
     try:
         lista = inmet.lista_do_inmet()
     except inmet.ErroINMET as erro:
@@ -180,10 +151,6 @@ def atualizar_cadastro(conexao: psycopg.Connection) -> int | None:
 
 
 def coletar_horas(conexao: psycopg.Connection, horas: list[datetime]) -> Coleta:
-    """Busca as horas dadas, uma consulta por hora, e grava tudo junto no fim.
-
-    Uma hora que falha não derruba as outras: fica em `falhas`, e a próxima execução a busca de novo.
-    """
     coleta = Coleta(consultas=len(horas))
     partes = []
     for hora in horas:
@@ -218,7 +185,6 @@ def coletar_horas(conexao: psycopg.Connection, horas: list[datetime]) -> Coleta:
 
 def coletar_ultimas(conexao: psycopg.Connection, agora: datetime | None = None,
                     quantas: int = HORAS_REBUSCADAS) -> Coleta:
-    """O trabalho de hora em hora: o cadastro e os últimos 3 dias."""
     comeco = time.monotonic()
     mudadas = atualizar_cadastro(conexao)
     if mudadas is not None:
@@ -232,13 +198,6 @@ def coletar_ultimas(conexao: psycopg.Connection, agora: datetime | None = None,
 
 def coletar_extras(conexao: psycopg.Connection, agora: datetime | None = None,
                    quantas: int = HORAS_REBUSCADAS) -> Coleta:
-    """O trabalho de uma vez por dia: a sensação térmica, a bateria e a temperatura do processador.
-
-    Uma consulta por estação, para os últimos 3 dias, e só das estações que têm leitura no banco
-    nessas horas: as outras não têm o que responder. São umas 500 consultas, uns 9 minutos, que
-    vão sendo gravadas de 50 em 50 estações. Só essas três medidas são gravadas; as outras
-    continuam as da consulta por hora.
-    """
     comeco = time.monotonic()
     fim = _hora_cheia(agora)
     inicio = fim - timedelta(hours=quantas)
@@ -269,13 +228,6 @@ def coletar_extras(conexao: psycopg.Connection, agora: datetime | None = None,
 
 def carregar_historico(conexao: psycopg.Connection, desde: datetime = INICIO_DO_HISTORICO,
                        ate: datetime | None = None) -> Coleta:
-    """As horas de `desde` até `ate` (UTC), dia a dia, pulando as que já estão no banco.
-
-    Pode parar e retomar: cada dia é gravado quando termina, e a execução seguinte só busca as
-    horas que faltam. Desde 2018 são umas 77 mil consultas, a uma por segundo: perto de 22 horas.
-    Um dia em que todas as horas falham quer dizer que o INMET saiu do ar, e a carga para ali em
-    vez de passar a noite falhando.
-    """
     comeco = time.monotonic()
     desde, ate = _hora_cheia(desde), min(_hora_cheia(ate), _hora_cheia(None))   # nada do futuro
     mudadas = atualizar_cadastro(conexao)
@@ -305,7 +257,6 @@ def carregar_historico(conexao: psycopg.Connection, desde: datetime = INICIO_DO_
 
 
 def relatar(coleta: Coleta, segundos: float, o_que: str) -> None:
-    """Fecha a coleta com os números e as falhas, que a próxima execução tenta de novo."""
     print(f"✅ {coleta.consultas} {o_que} consultadas, {coleta.leituras} leituras: "
           f"{coleta.gravadas} novas ou mudadas no banco ({segundos:.0f} s)")
     if coleta.estacoes_novas:

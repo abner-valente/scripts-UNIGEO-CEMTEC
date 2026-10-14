@@ -143,24 +143,11 @@ alt.data_transformers.enable("default", max_rows=20000)
 # estados diferentes no mesmo processo dividiriam o mesmo mapa — e a segunda veria o da primeira.
 @st.cache_data(ttl=3600, show_spinner=False)
 def carregar_estacoes(uf: str) -> pd.DataFrame:
-    """As estações do estado — as do produto: tabelas, listas, rankings e CSV saem daqui."""
     return fonte.estacoes(uf)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def carregar_apoio(uf: str) -> pd.DataFrame:
-    """As estações de fora do estado que ajudam a interpolar a borda.
-
-    Elas não são do produto: não entram em lista, tabela nem ranking, e não aparecem desenhadas.
-    Servem para o IDW ter dado dos dois lados da divisa — sem elas, os 8 vizinhos que ele enxerga
-    numa célula da fronteira estão todos para dentro, e a superfície extrapola tendo medição do
-    outro lado.
-
-    Da vizinhança inteira sobram só as que podem entrar na conta de alguma célula: estar dentro
-    da margem não basta, é preciso chegar às mais próximas de algum lugar que vira desenho. Isso
-    corta 54 para 39 em MS e 89 para 60 em SC — requisição a menos em toda consulta, sem mudar
-    mapa, porque a poda tem folga (ver config.VIZINHOS_NA_PODA).
-    """
     base = base_cartografica(uf)
     return fonte.estacoes_de_apoio(config.recorte_de(uf), base.lon_grade[base.dentro_uf],
                                    base.lat_grade[base.dentro_uf])
@@ -170,20 +157,6 @@ def carregar_apoio(uf: str) -> pd.DataFrame:
 def carregar_leituras(codigos: tuple[str, ...], nomes: tuple[str, ...],
                       inicio: datetime, fim: datetime, uf: str,
                       _mensagem: str = "Consultando o INMET") -> tuple[pd.DataFrame, list[str]]:
-    """Séries das estações escolhidas, com a lista das que falharam.
-
-    A espera é de rede: uma consulta por estação, e são 62. A barra diz quantas já chegaram —
-    um giro sem número não diz se falta muito, e numa janela longa a pessoa desiste antes de o
-    mapa aparecer.
-
-    A barra nasce **aqui dentro** de propósito. O Streamlit grava os elementos desenhados dentro
-    de uma função cacheada e os redesenha quando a resposta vem do cache; uma barra criada fora
-    quebra esse redesenho, porque o lugar dela pode não existir mais. Como ela é apagada antes
-    do retorno, o redesenho não mostra nada — que é o certo, já que não houve espera.
-
-    `_mensagem` começa com sublinhado para ficar fora da chave do cache: duas abas pedindo a
-    mesma janela com textos diferentes baixariam tudo duas vezes.
-    """
     barra = st.progress(0.0, text=_mensagem)
 
     def avancar(concluidas: int, total: int) -> None:
@@ -199,11 +172,6 @@ def carregar_leituras(codigos: tuple[str, ...], nomes: tuple[str, ...],
 
 
 def series_da_grandeza(tabela: pd.DataFrame, grandeza: str, modo: str):
-    """As séries daquela grandeza no tempo, e os produtos que as geraram.
-
-    É aqui que o catálogo entra no gráfico: a máxima do dia sai da mesma regra que alimenta o
-    mapa, e as duas telas não podem discordar.
-    """
     pedacos, usados = [], []
     for produto in variaveis.disponiveis(modo, variaveis.GRAFICO):
         if produto.grandeza != grandeza:
@@ -221,13 +189,6 @@ def series_da_grandeza(tabela: pd.DataFrame, grandeza: str, modo: str):
 
 
 def _apelidos(longo: pd.DataFrame) -> dict[tuple[str, str], str]:
-    """Um apelido curto e seguro para cada linha do gráfico: `s0`, `s1`...
-
-    O balão junta várias linhas num quadro só, e para isso o Vega transforma esses apelidos em
-    **nomes de campo**. Ponto em nome de campo ali quer dizer caminho aninhado, e meia dúzia de
-    estações se chamam "Faz. Alvorada" ou parecido: o nome viraria dois níveis e o balão
-    mostraria vazio. Daí o apelido no dado e o nome legível só no rótulo.
-    """
     pares = (longo[["Estação", "Série"]].drop_duplicates()
              .sort_values(["Estação", "Série"]).itertuples(index=False))
     return {(estacao, serie): f"s{indice}" for indice, (estacao, serie) in enumerate(pares)}
@@ -235,15 +196,6 @@ def _apelidos(longo: pd.DataFrame) -> dict[tuple[str, str], str]:
 
 def _regua(dados: pd.DataFrame, linhas_do_balao: list[tuple[str, str, str]], casas: int,
            por_dia: bool, apontar: alt.Parameter) -> alt.Chart:
-    """Régua vertical e balão com as linhas do instante mais próximo do cursor.
-
-    O balão tem as colunas fixas no spec: esconder uma linha tirando o dado dela deixaria "NaN"
-    no lugar. Então cada linha vira um **texto pronto**, vazio quando a legenda escondeu aquela
-    série ou quando a estação não mediu naquela hora — e linha vazia some do balão por CSS.
-
-    Uma régua só, e não uma por estado da legenda: o Vega-Lite constrói uma única vizinhança de
-    cursor por gráfico, e as outras camadas ficariam sem nenhuma.
-    """
     grafico = alt.Chart(dados).transform_pivot("chave", value="valor", groupby=["dt_local"])
     balao = [alt.Tooltip("dt_local:T", title="Quando", format="%d/%m" if por_dia else "%d/%m %H:%M")]
     for nome, apelido, serie in linhas_do_balao:
@@ -264,7 +216,6 @@ def _regua(dados: pd.DataFrame, linhas_do_balao: list[tuple[str, str, str]], cas
 
 
 def _escala_das_cores(cores: dict[str, str] | None, presentes: pd.Series):
-    """A cor fixa de cada modelo, só com os que estão no gráfico: os outros não vão para a legenda."""
     if not cores:
         return alt.Undefined
     nomes = [nome for nome in cores if nome in set(presentes)]
@@ -273,14 +224,6 @@ def _escala_das_cores(cores: dict[str, str] | None, presentes: pd.Series):
 
 def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, casas: int = 1,
              cores: dict[str, str] | None = None) -> alt.Chart:
-    """As séries de uma grandeza no tempo: cor separa a estação, traço separa a série.
-
-    Cinco estações com três séries dariam quinze linhas iguais. Cor para a estação e traço para
-    a série (máxima, mínima, média) deixa as duas leituras possíveis no mesmo desenho; clicar na
-    legenda isola uma série, no desenho e também no balão.
-
-    Na previsão, a coluna "Estação" leva o nome do modelo, e `cores` fixa a cor de cada um.
-    """
     # Arrastar move e Shift+roda aproxima. Sem o Shift, a roda do mouse em cima do gráfico
     # aproximaria em vez de rolar a página, e quem passa por vários gráficos fica preso no
     # primeiro (é o que o .interactive() faz por padrão).
@@ -330,11 +273,6 @@ def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, 
 
 
 def barras_do_acumulado(valores: pd.Series, unidade: str, quantas: int | None) -> alt.Chart:
-    """Quanto choveu em cada estação na janela, da maior para a menor.
-
-    É a leitura que vai para o texto do boletim — "Dourados registrou 78 mm em 24 h" —, e o mapa
-    fica para quando a pergunta for *onde* choveu.
-    """
     tabela = (valores.dropna().rename("valor").rename_axis("Estação").reset_index()
               .sort_values("valor", ascending=False))
     if quantas:
@@ -361,14 +299,6 @@ def barras_do_acumulado(valores: pd.Series, unidade: str, quantas: int | None) -
 
 
 def cascata_da_chuva(barras: pd.DataFrame, por_dia: bool, facetar: bool = True) -> alt.Chart:
-    """Quanto choveu em cada passo, empilhado no que já tinha caído, e a barra do total.
-
-    Cada barra começa onde a anterior terminou, então a altura da última diz o acumulado sem
-    ninguém somar de cabeça. A do total sai do chão, para comparar de relance.
-
-    Com `facetar`, um painel por estação; sem, um gráfico só — que é como sai a do estado, já
-    somada numa linha única.
-    """
     ordem = list(barras.sort_values("ordem")["Passo"].unique())
     base = alt.Chart(barras).encode(
         x=alt.X("Passo:N", title=None, sort=ordem, axis=alt.Axis(labelAngle=-45, labelFontSize=9)))
@@ -393,11 +323,6 @@ def cascata_da_chuva(barras: pd.DataFrame, por_dia: bool, facetar: bool = True) 
 
 
 def rosa_dos_ventos(tabela: pd.DataFrame, nome_estacao: str):
-    """Horas em que o vento veio de cada direção, separadas por faixa de velocidade.
-
-    É a forma certa de resumir direção num período: cada pétala é um rumo, e o comprimento
-    diz por quantas horas o vento veio de lá.
-    """
     dados = tabela[tabela["Estação"] == nome_estacao].dropna(subset=["VEN_DIR", "VEN_VEL"])
     setores = ((dados["VEN_DIR"] % 360) / 22.5).round().astype(int) % 16
     rotulos = [f"{menor:g}–{maior:g}" if maior != float("inf") else f"≥ {menor:g}" for menor, maior in FAIXAS_VENTO]
@@ -437,11 +362,6 @@ def rosa_dos_ventos(tabela: pd.DataFrame, nome_estacao: str):
 
 
 def visao_inicial(recorte: config.Recorte) -> dict:
-    """Centro e zoom de abertura do mapa navegável, a partir do enquadramento do estado.
-
-    O zoom foi calibrado em MS (8° de largura abrem bem em 5,9) e escala pelo maior lado: um
-    estado pequeno abre mais perto, um grande mais longe, sem ninguém ajustar número nenhum.
-    """
     oeste, leste, sul, norte = recorte.limites
     maior_lado = max(leste - oeste, norte - sul)
     return {"latitude": (sul + norte) / 2, "longitude": (oeste + leste) / 2,
@@ -449,7 +369,6 @@ def visao_inicial(recorte: config.Recorte) -> dict:
 
 
 def niveis_da_escala(produto: variaveis.Produto, horas_janela=None, ajustar: bool = False):
-    """Os níveis de cor deste mapa, ou None para deixar a escala se ajustar ao dado."""
     if ajustar:
         return None
     escolhida = variaveis.escala(produto, horas_janela)
@@ -461,12 +380,6 @@ def niveis_da_escala(produto: variaveis.Produto, horas_janela=None, ajustar: boo
 
 @st.cache_data(show_spinner=False, max_entries=20)
 def barra_de_escala(paleta: str, niveis: tuple, unidade: str) -> bytes:
-    """Régua horizontal das cores, para ir embaixo do mapa.
-
-    Com escala fixa a barra passa a valer para todos os mapas daquela grandeza — e sem ela a cor
-    não diz número nenhum. Fica fina e deitada para não roubar largura do desenho, ao contrário
-    da barra vertical que tiramos.
-    """
     so_acima = float(min(niveis)) > 0
     continua = len(niveis) > mapas.MAX_CLASSES  # faixa fixa vira 21 níveis; classes são poucas
     norma = (Normalize(vmin=min(niveis), vmax=max(niveis)) if continua
@@ -491,12 +404,6 @@ def barra_de_escala(paleta: str, niveis: tuple, unidade: str) -> bytes:
 
 @st.cache_resource(show_spinner=False, max_entries=ESTADOS_NA_MEMORIA)
 def base_cartografica(uf: str) -> mapas.BaseCartografica:
-    """Shapefiles, grade e máscara do estado: pesados de ler e iguais para todo mundo.
-
-    `cache_resource` devolve **a mesma instância**, sem copiar — é o certo aqui, porque
-    serializar 24 MB de GeoDataFrame a cada chamada custaria mais que a leitura que o cache
-    poupa. O preço é que a instância vive enquanto a entrada viver, daí o teto.
-    """
     return mapas.carregar_base(config.recorte_de(uf))
 
 
@@ -504,13 +411,6 @@ def base_cartografica(uf: str) -> mapas.BaseCartografica:
 def mapa_do_instante(valores: pd.Series, titulo: str, unidade: str, paleta: str, decimais: int,
                      quando: str, rotulos: bool, uf: str, niveis=None, direcoes=None,
                      dpi: int = DPI_MAPA, apoio: pd.Series | None = None) -> bytes | None:
-    """PNG do mapa interpolado de um instante, ou None se faltarem estações para interpolar.
-
-    É o mesmo desenho dos produtos — mesmo IDW, mesmo recorte pelo estado, mesmas cores —, só que
-    sem a moldura institucional: na tela, título e logos tomariam o lugar do mapa. Fica em cache
-    porque cada passo do deslizante redesenha uma variável por vez: voltar a uma hora já vista não
-    paga o desenho de novo.
-    """
     gdf = _pontos_do_mapa(valores, titulo, uf, quando, direcoes)
     if gdf is None or len(gdf) < config.MIN_ESTACOES_INTERPOLACAO:
         return None
@@ -530,7 +430,6 @@ def mapa_do_instante(valores: pd.Series, titulo: str, unidade: str, paleta: str,
 
 @st.cache_resource(show_spinner=False, max_entries=ESTADOS_NA_MEMORIA)
 def malha_fina(uf: str) -> superficie.Malha:
-    """Grade e máscara do estado do mapa navegável: dependem só da resolução, não do dado."""
     recorte = config.recorte_de(uf)
     return superficie.malha(base_cartografica(uf).uf.geometry.union_all(), recorte=recorte)
 
@@ -538,7 +437,6 @@ def malha_fina(uf: str) -> superficie.Malha:
 @st.cache_data(show_spinner=False, max_entries=30)
 def camada_superficie(valores: pd.Series, nome_produto: str, quando: str, uf: str, niveis=None,
                       apoio: pd.Series | None = None) -> str:
-    """A superfície do instante como imagem, pronta para virar camada do mapa."""
     produto = variaveis.por_nome(nome_produto)
     pontos = _com_coordenadas(valores, nome_produto, uf)
     vizinhas = (_com_coordenadas(apoio, nome_produto, uf)
@@ -549,13 +447,6 @@ def camada_superficie(valores: pd.Series, nome_produto: str, quando: str, uf: st
 
 
 def estacoes_vizinhas(uf: str, avisar: bool = True) -> pd.DataFrame:
-    """As estações vizinhas do estado, ou nenhuma se o INMET não devolver a lista, e o painel segue.
-
-    Sem elas a borda dos mapas extrapola, mas todo o resto funciona: é o mesmo que os produtos
-    fazem em `inmet.baixar_apoio`. Melhor um mapa com a borda menos firme do que nenhum mapa. A
-    tabela vazia tem as colunas do cadastro, para quem vem depois não precisar tratar o caso; e a
-    falha não fica no cache, então a próxima consulta tenta de novo.
-    """
     try:
         return carregar_apoio(uf)
     except fonte.ErroFonte:
@@ -566,14 +457,6 @@ def estacoes_vizinhas(uf: str, avisar: bool = True) -> pd.DataFrame:
 
 
 def sem_lista_de_estacoes(onde, uf: str) -> None:
-    """Para o painel com um aviso claro quando a lista de estações do estado não vem.
-
-    Sem ela não há o que mostrar: a barra lateral precisa dos nomes, e os mapas, das coordenadas.
-    Antes o painel caía com o traceback do Python na tela ("ErroINMET: Expecting value..."), e
-    quem abria não sabia se o problema era com ele. O INMET às vezes devolve resposta vazia por
-    alguns minutos, e as três tentativas de `inmet._consultar` não bastam; tentar de novo depois
-    resolve. A falha não fica no cache, então o botão refaz a consulta de verdade.
-    """
     onde.error(f"O INMET não respondeu à lista de estações de {uf} agora. Costuma passar em alguns "
                "minutos.")
     onde.button("Tentar de novo", key="tentar_lista_de_novo")
@@ -581,11 +464,6 @@ def sem_lista_de_estacoes(onde, uf: str) -> None:
 
 
 def _com_coordenadas(valores: pd.Series, nome_variavel: str, uf: str) -> pd.DataFrame:
-    """Valores de um instante com a latitude e a longitude de cada estação.
-
-    O cadastro reúne as duas listas — as do estado e as de apoio —, e quem manda é o índice da
-    série: entra o que estiver nela, saia de onde sair.
-    """
     cadastro = pd.concat([carregar_estacoes(uf), estacoes_vizinhas(uf, avisar=False)], ignore_index=True)
     coordenadas = (cadastro.set_index("Estação")[["VL_LATITUDE", "VL_LONGITUDE"]]
                    .rename(columns={"VL_LATITUDE": "Latitude", "VL_LONGITUDE": "Longitude"}))
@@ -593,7 +471,6 @@ def _com_coordenadas(valores: pd.Series, nome_variavel: str, uf: str) -> pd.Data
 
 
 def _pontos_do_mapa(valores: pd.Series, nome: str, uf: str, quando: str, direcoes=None):
-    """As estações do estado que vão para o mapa, com a direção do vento quando houver."""
     pontos = _com_coordenadas(valores, nome, uf)
     if direcoes is not None:
         # A direção não vira superfície: vai como seta sobre a estação, e o valor do mapa dá o
@@ -603,19 +480,12 @@ def _pontos_do_mapa(valores: pd.Series, nome: str, uf: str, quando: str, direcoe
 
 
 def _vizinhas_do_mapa(apoio: pd.Series | None, nome: str, uf: str, quando: str):
-    """As de apoio entram na conta e só: nada do que sai delas é desenhado, rotulado ou ranqueado."""
     if apoio is None or apoio.dropna().empty:
         return None
     return mapas.preparar_pontos(_com_coordenadas(apoio, nome, uf), nome, quando)
 
 
 def linha_do_tempo(rotulo: str, paradas: list, chave: str, formatar, dia_de=None):
-    """O deslizante que escolhe uma hora ou um dia, desenhado como linha do tempo.
-
-    É o `st.select_slider` de sempre, começando na última parada, sem o trilho pintado até o ponto
-    (que a equipe lia como acumulado) e com um risco na virada de cada dia. `dia_de` diz o dia de
-    cada parada no fuso do estado; sem ele, vale a data da própria parada.
-    """
     marcas = (variaveis.marcas_dos_dias(paradas, dia_de) if dia_de
               else variaveis.marcas_dos_dias(paradas))
     st.html(_estilo_da_linha_do_tempo(chave, marcas))   # só estilo: o Streamlit não reserva espaço para ele
@@ -623,16 +493,6 @@ def linha_do_tempo(rotulo: str, paradas: list, chave: str, formatar, dia_de=None
 
 
 def botao_do_boletim(medida: str, chave: str, arquivo: str, desenhar) -> None:
-    """O botão que baixa o mapa na moldura do relatório, com os logos do CEMTEC e da SEMADESC.
-
-    `desenhar` só roda no clique: o Streamlit chama a função quando o arquivo é pedido. Em 300
-    dpi, como o main.py grava, cada mapa custa ~0,7 s e 1,5 MB (medido com as 59 de MS), e pagar
-    isso a cada passo do deslizante — três mapas por linha —, por um arquivo que se baixa de vez
-    em quando, deixaria a aba lenta para todo mundo. A função
-    roda numa thread à parte, fora do script, então chega com tudo pronto — pontos, base e
-    níveis —, sem nada de cache do Streamlit lá dentro. E o clique não reexecuta a página
-    (`on_click="ignore"`): os mapas da tela já estão desenhados.
-    """
     st.download_button(f"Baixar PNG do boletim — {medida}", lambda: boletim.png(desenhar()),
                        mime="image/png", key=f"boletim_{chave}", file_name=arquivo, on_click="ignore",
                        help="Como o main.py grava: título, logos do CEMTEC e da SEMADESC, ranking e "
@@ -641,11 +501,6 @@ def botao_do_boletim(medida: str, chave: str, arquivo: str, desenhar) -> None:
 
 def desenho_do_boletim(valores: pd.Series, nome: str, grandeza: str, unidade: str, paleta: str,
                        decimais: int, subtitulo: str, uf: str, niveis=None, direcoes=None, apoio=None):
-    """O mapa interpolado da tela na moldura do relatório, pronto para desenhar quando pedirem.
-
-    Mesma superfície, mesmas vizinhas e mesmos níveis de cor do que está na tela; muda só a
-    moldura, que é a que o main.py desenha.
-    """
     gdf = _pontos_do_mapa(valores, nome, uf, subtitulo, direcoes)
     vizinhas = _vizinhas_do_mapa(apoio, nome, uf, subtitulo)
     espec = boletim.espec(nome, grandeza, unidade, paleta, decimais, uf, subtitulo, direcoes is not None)
@@ -655,31 +510,24 @@ def desenho_do_boletim(valores: pd.Series, nome: str, grandeza: str, unidade: st
 
 def desenho_de_classes(grade, pontos: pd.DataFrame, coluna: str, espec: mapas.EspecClasses, uf: str,
                        indicadores: mapas.Indicadores | None = None):
-    """Um mapa de risco na moldura do relatório, pronto para desenhar quando pedirem."""
     gdf = mapas.preparar_pontos(pontos, coluna, espec.subtitulo)
     base = base_cartografica(uf)
     return lambda: mapas.mapa_classes_interpolado(grade, gdf, coluna, espec, base, indicadores=indicadores)
 
 
 def desenho_das_horas(grade, pontos: pd.DataFrame, espec: mapas.EspecMapa, uf: str):
-    """O mapa de horas em risco alto na moldura do relatório, com as faixas da tela."""
     gdf = mapas.preparar_pontos(pontos, espec.coluna, espec.subtitulo)
     base = base_cartografica(uf)
     return lambda: mapas.mapa_de_grade(grade, gdf, espec, base, niveis=niveis_das_horas(grade))
 
 
 def niveis_das_horas(grade):
-    """As faixas do mapa de horas em risco alto: uma por hora até 12, e 12 faixas acima disso."""
     maximo = int(grade.max())
     return np.arange(0, max(maximo, 1) + 1) if maximo < 12 else 12
 
 
 def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, subtitulo: str,
                    carimbo: str, rotulos: bool, uf: str, niveis=None, direcoes=None, apoio=None) -> None:
-    """Uma coluna da linha de mapas: nome do produto, desenho, a regra e os botões de baixar.
-
-    `rotulo` é o instante como a tela o escreve; `subtitulo`, como o relatório escreve.
-    """
     st.markdown(f"**{produto.nome}**")
     medida = produto.nome.lower()
     if valores.dropna().empty:
@@ -710,12 +558,6 @@ def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, 
 
 
 def escala_do_periodo(produto: variaveis.Produto, leituras: pd.DataFrame, horas_janela):
-    """Os níveis de cor que valem para todos os quadros do GIF.
-
-    Num GIF a escala **tem** de ser a mesma do começo ao fim: esticada a cada quadro, a mancha
-    fica igual e só as cores piscam, e quem olha vê variação onde não houve. Quando o produto não
-    tem escala fixa — a pressão —, a faixa sai dos extremos da janela inteira.
-    """
     niveis = niveis_da_escala(produto, horas_janela)
     if niveis is not None:
         return niveis
@@ -729,11 +571,6 @@ def escala_do_periodo(produto: variaveis.Produto, leituras: pd.DataFrame, horas_
 @st.cache_data(show_spinner=False, max_entries=3)
 def gif_do_mapa(nome_produto: str, leituras: pd.DataFrame, modo: str, momentos: tuple,
                 rotulos: bool, uf: str, niveis=None) -> bytes | None:
-    """O mapa quadro a quadro, do começo ao fim da janela, como GIF.
-
-    Guarda poucos na memória (`max_entries`) de propósito: cada um pesa alguns MB, e o painel
-    pode estar servindo várias pessoas ao mesmo tempo.
-    """
     produto = variaveis.por_nome(nome_produto)
     barra = st.progress(0.0, text=f"Desenhando o GIF de {produto.nome.lower()}")
     quadros = []
@@ -753,11 +590,6 @@ def gif_do_mapa(nome_produto: str, leituras: pd.DataFrame, modo: str, momentos: 
 
 def painel_do_gif(produto: variaveis.Produto, leituras: pd.DataFrame, modo: str, paradas: list,
                   rotulos: bool, horas_janela, uf: str) -> None:
-    """Botão que monta a animação do período, e a animação quando ela fica pronta.
-
-    Atrás de um botão porque custa: um quadro por hora da janela, desenhados um a um. Quem só
-    quer o mapa da hora não deve pagar por isso.
-    """
     momentos = animacao.passos(paradas)
     salto = animacao.intervalo(paradas, momentos)
     chave = f"gif_{produto.nome}"
@@ -787,10 +619,6 @@ def painel_do_gif(produto: variaveis.Produto, leituras: pd.DataFrame, modo: str,
 
 def painel_da_chuva(rotulo: str, valores: pd.Series, janela: str, subtitulo: str, carimbo: str,
                     rotulos: bool, uf: str, niveis=None, apoio=None) -> None:
-    """Uma coluna da linha de acumulados: quanto choveu na janela que termina no fim do período.
-
-    `janela` é o intervalo como a tela o escreve; `subtitulo`, como o relatório escreve.
-    """
     st.markdown(f"**Chuva {rotulo}**")
     if valores.dropna().empty:
         st.info(f"Nenhuma estação mediu chuva em {janela}.")
@@ -822,11 +650,6 @@ def risco_avaliado(leituras: pd.DataFrame, estacoes_do_estado: pd.DataFrame, uf:
     # `leituras` e `estacoes_do_estado` já vêm com as vizinhas dentro: a grade de risco de uma
     # célula da divisa depende do que acontece dos dois lados. Quem separa o produto do apoio é
     # `risco.da_uf`, na aba.
-    """As horas da janela avaliadas pela regra 30-30-30, com a grade de cada uma.
-
-    São três interpolações por hora — 31 ms cada, ~5 s numa semana —, e por isso fica em cache e
-    com barra: quem mexe no deslizante não pode pagar isso de novo a cada passo.
-    """
     completas = risco.por_estacao(leituras, estacoes_do_estado)
     if not completas:
         return [], {}
@@ -844,12 +667,6 @@ def risco_avaliado(leituras: pd.DataFrame, estacoes_do_estado: pd.DataFrame, uf:
 @st.cache_data(show_spinner=False, max_entries=30)
 def mapa_de_risco(grade, pontos: pd.DataFrame, coluna: str, quando: str, detalhes: bool, uf: str,
                   dpi: int = DPI_MAPA) -> bytes | None:
-    """PNG do mapa de níveis de risco: a superfície em quatro classes e as estações por cima.
-
-    Com `detalhes`, cada estação leva o seu nível escrito e, no mapa de uma hora, os pontinhos das
-    condições atendidas — temperatura, umidade e rajada, da esquerda para a direita. O do dia e o
-    do período só levam o nível: juntam horas diferentes (`risco.indicadores`).
-    """
     gdf = mapas.preparar_pontos(pontos, coluna, quando)
     if gdf is None:
         return None
@@ -866,7 +683,6 @@ def mapa_de_risco(grade, pontos: pd.DataFrame, coluna: str, quando: str, detalhe
 @st.cache_data(show_spinner=False, max_entries=6)
 def mapa_de_horas_altas(grade, pontos: pd.DataFrame, quando: str, detalhes: bool,
                         uf: str) -> bytes | None:
-    """PNG do mapa de exposição: em quantas horas cada lugar esteve no risco alto."""
     gdf = mapas.preparar_pontos(pontos, risco_fogo.COLUNA_HORAS_ALTO, quando)
     if gdf is None:
         return None
@@ -884,11 +700,6 @@ def mapa_de_horas_altas(grade, pontos: pd.DataFrame, quando: str, detalhes: bool
 @st.cache_data(show_spinner=False, max_entries=2)
 def gif_do_risco(instantes: tuple, detalhes: bool, uf: str, _avaliadas: dict,
                  _do_estado: set | None = None) -> bytes | None:
-    """A sequência das horas de risco, com a data e a hora escritas em cada quadro.
-
-    `_avaliadas` não entra na chave do cache (é um dicionário de grades, caro de resumir): as
-    horas escolhidas já identificam o que está sendo desenhado.
-    """
     barra = st.progress(0.0, text="Desenhando o GIF do risco")
     quadros = []
     for indice, hora in enumerate(instantes, start=1):
@@ -907,10 +718,6 @@ def gif_do_risco(instantes: tuple, detalhes: bool, uf: str, _avaliadas: dict,
 
 
 def ordem_das_estacoes(horaria: pd.DataFrame) -> list[str]:
-    """As estações da que passou mais horas em risco alto para a que passou menos.
-
-    A mesma ordem nos três gráficos: sem isso, comparar um com o outro vira caça ao nome.
-    """
     por_nivel = (horaria.pivot_table(index="Estação", columns=risco_fogo.COLUNA_NIVEL_HORA,
                                      values="dia", aggfunc="count")
                  .reindex(columns=[1, risco.NIVEL_MEDIO, risco.NIVEL_ALTO]).fillna(0))
@@ -930,7 +737,6 @@ def _legenda_dos_niveis(niveis: list[int]) -> alt.Legend:
 
 
 def barras_de_niveis(horaria: pd.DataFrame, ordem: list[str]) -> alt.Chart:
-    """Quantas horas cada estação passou em cada nível, empilhadas do alto para o baixo."""
     contagem = (horaria[horaria[risco_fogo.COLUNA_NIVEL_HORA] > 0]
                 .groupby(["Estação", risco_fogo.COLUNA_NIVEL_HORA]).size().reset_index(name="Horas"))
     return (alt.Chart(contagem)
@@ -951,7 +757,6 @@ def barras_de_niveis(horaria: pd.DataFrame, ordem: list[str]) -> alt.Chart:
 
 
 def calendario_de_risco(horaria: pd.DataFrame, ordem: list[str]) -> alt.Chart:
-    """O pior nível de cada estação em cada dia — a leitura de relance da semana."""
     por_dia = (horaria.groupby(["Estação", "dia"])[risco_fogo.COLUNA_NIVEL_HORA].max()
                .reset_index().assign(dia=lambda tabela: tabela["dia"].astype(str)))
     return (alt.Chart(por_dia)
@@ -969,11 +774,6 @@ def calendario_de_risco(horaria: pd.DataFrame, ordem: list[str]) -> alt.Chart:
 
 
 def condicoes_do_dia(horaria: pd.DataFrame, dia, ordem: list[str]) -> alt.Chart:
-    """Quantas horas cada condição valeu, estação por estação, naquele dia.
-
-    É o gráfico que responde "o risco veio do calor, da secura ou do vento?" — a pergunta que o
-    nível sozinho não responde.
-    """
     do_dia = horaria[horaria["dia"] == dia]
     somas = (do_dia.groupby("Estação")[risco_fogo.COLUNAS_CONDICOES].sum().reset_index()
              .melt("Estação", var_name="Condição", value_name="Horas"))
@@ -1000,22 +800,11 @@ def condicoes_do_dia(horaria: pd.DataFrame, dia, ordem: list[str]) -> alt.Chart:
 # =====================================================
 @st.cache_resource(show_spinner=False, max_entries=1)
 def guarda_da_previsao() -> previsao.Guarda:
-    """A previsão guardada, uma só no processo: todos os que abrem o painel dividem a mesma.
-
-    São as estações e a grade de 0,5° de MS nos três modelos, uns 26 MB (medido em 08/10: 7,7 MB a
-    grade de um modelo): a função não tem argumentos, e a entrada é uma só.
-    """
     return previsao.Guarda()
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def rodadas_atuais() -> tuple[dict | None, str | None]:
-    """A rodada que o Open-Meteo está servindo de cada modelo, conferida no máximo a cada 5 minutos.
-
-    Conferir não gasta cota, mas são três pedidos, e o script roda a cada clique. A falha fica
-    guardada pelos mesmos 5 minutos: com o Open-Meteo fora do ar, cada clique esperaria de novo as
-    três tentativas de cada pedido.
-    """
     try:
         return openmeteo.rodadas(config.MODELOS_PREVISAO), None
     except openmeteo.ErroOpenMeteo as erro:
@@ -1024,10 +813,6 @@ def rodadas_atuais() -> tuple[dict | None, str | None]:
 
 def previsao_dos_pontos(conjunto: str, pontos: pd.DataFrame,
                         modelos: tuple[str, ...]) -> tuple[list[pd.DataFrame], list[str]]:
-    """A previsão horária dos pontos, uma tabela por modelo, e os avisos para a tela.
-
-    `conjunto` nomeia os pontos na guarda: "estações" ou "grade".
-    """
     rodadas, falha = rodadas_atuais()
     tabelas, avisos = [], []
     for modelo in modelos:
@@ -1040,7 +825,6 @@ def previsao_dos_pontos(conjunto: str, pontos: pd.DataFrame,
 
 @st.cache_data(ttl=300, show_spinner=False)
 def rodada_semanal_atual() -> tuple[datetime | None, str | None]:
-    """A rodada do EC46 que o Open-Meteo está servindo, conferida no máximo a cada 5 minutos."""
     try:
         return openmeteo.rodadas((config.MODELO_SEMANAS,))[config.MODELO_SEMANAS], None
     except openmeteo.ErroOpenMeteo as erro:
@@ -1048,7 +832,6 @@ def rodada_semanal_atual() -> tuple[datetime | None, str | None]:
 
 
 def semanas_dos_pontos(conjunto: str, pontos: pd.DataFrame) -> tuple[pd.DataFrame | None, list[str]]:
-    """As anomalias semanais do EC46 nos pontos, guardadas como as dos outros modelos."""
     rodada, falha = rodada_semanal_atual()
     avisos = []
     tabela = _obter_previsao(conjunto, config.MODELO_SEMANAS, rodada, falha,
@@ -1058,7 +841,6 @@ def semanas_dos_pontos(conjunto: str, pontos: pd.DataFrame) -> tuple[pd.DataFram
 
 def _obter_previsao(conjunto: str, modelo: str, rodada: datetime | None, falha: str | None, buscar,
                     avisos: list[str]) -> pd.DataFrame | None:
-    """A previsão de um modelo, da guarda ou do Open-Meteo, com os avisos acrescentados à lista."""
     nome = openmeteo.NOMES[modelo]
     guarda = guarda_da_previsao()
     try:
@@ -1083,7 +865,6 @@ def _obter_previsao(conjunto: str, modelo: str, rodada: datetime | None, falha: 
 
 
 def barras_da_chuva_prevista(longo: pd.DataFrame) -> alt.Chart:
-    """A chuva de cada dia, com os modelos lado a lado: chuva se lê em barra, e não em linha."""
     return (alt.Chart(longo)
             .mark_bar()
             .encode(x=alt.X("yearmonthdate(dt_local):O", title=None,
@@ -1107,25 +888,12 @@ CHAVES_DOS_FILTROS = ("uf", "estacoes", "grandezas",
 
 
 def lembrar_filtros() -> None:
-    """Mantém o que se escolheu nos filtros de cada página. Chamada no topo de toda execução.
-
-    É a receita da documentação do Streamlit: regravar a chave a cada execução impede que ela seja
-    apagada. Tem de ser em toda execução, e não só na da outra página: regravada só lá, a chave
-    sobrevivia, mas o widget voltava vazio na tela, e o painel mostrava uma estação que o seletor
-    não mostrava. Por isso esses widgets não recebem valor inicial pelo parâmetro: ele entra no
-    estado com `setdefault`, antes do widget. Com os dois, o Streamlit avisa que o valor veio de
-    dois lugares.
-
-    O período fica de fora: o seletor de datas só sabe que é de intervalo pelo valor inicial. Ele
-    volta pelo valor guardado em `periodo_guardado`.
-    """
     for chave in CHAVES_DOS_FILTROS:
         if chave in st.session_state:
             st.session_state[chave] = st.session_state[chave]
 
 
 def pagina_previsao() -> None:
-    """A previsão de MS nas estações, com os três modelos lado a lado (passo 3 do escopo)."""
     st.title("Previsão do tempo — Mato Grosso do Sul")
     aviso = st.container()
     # A previsão é do Open-Meteo, mas a lista das estações é do INMET
@@ -1233,19 +1001,12 @@ def pagina_previsao() -> None:
 
 @st.cache_data(show_spinner=False, max_entries=12)
 def diario_previsto(conjunto: str, modelo: str, rodada: datetime, _horaria: pd.DataFrame) -> pd.DataFrame:
-    """O dia de cada ponto, tirado das horas uma vez por rodada.
-
-    As horas da grade são 60 mil linhas por modelo: refazer a soma a cada clique custaria mais que
-    o desenho. A chave é o conjunto, o modelo e a rodada, que é o que muda a tabela. Vem com o pior
-    nível de risco de fogo de cada dia e as horas em risco alto.
-    """
     return previsao.diario_com_risco(_horaria, config.FUSO_MS)
 
 
 @st.cache_data(show_spinner=False, max_entries=12)
 def risco_na_grade_prevista(modelo: str, rodada: datetime, dia: date, _horaria: pd.DataFrame,
                             _pontos: pd.DataFrame) -> tuple[np.ndarray, np.ndarray] | None:
-    """O pior nível e as horas em risco alto do dia, célula a célula: a regra aplicada a cada hora."""
     base = base_cartografica(previsao.UF)
     return previsao.risco_na_grade(_horaria, _pontos, dia, base.lon_grade, base.lat_grade, config.FUSO_MS)
 
@@ -1253,7 +1014,6 @@ def risco_na_grade_prevista(modelo: str, rodada: datetime, dia: date, _horaria: 
 @st.cache_data(show_spinner=False, max_entries=20)
 def mapa_de_risco_previsto(origem: tuple, nome: str, rotulos: bool, _grade: np.ndarray,
                            _estacoes: pd.DataFrame) -> bytes:
-    """PNG do mapa do pior nível de risco previsto para a tela, com as cores do produto."""
     espec = mapas.EspecClasses(nome, "", "", config.CORES_RISCO, config.ROTULOS_RISCO)
     figura = mapas.mapa_classes_interpolado(_grade, _pontos_previstos(_estacoes, nome), nome, espec,
                                             base_cartografica(previsao.UF), tela=mapas.Tela(rotulos=rotulos))
@@ -1266,12 +1026,6 @@ def mapa_de_risco_previsto(origem: tuple, nome: str, rotulos: bool, _grade: np.n
 def mapa_previsto(origem: tuple, nome: str, paleta: str, unidade: str, decimais: int, setas: bool,
                   rotulos: bool, niveis: tuple | None, _grade: np.ndarray, _estacoes: pd.DataFrame,
                   com_sinal: bool = False) -> bytes:
-    """PNG de um mapa da previsão para a tela, sem a moldura.
-
-    `origem` diz de que previsão é o desenho: o modelo, a rodada e o dia (ou a semana). Com o
-    mapa e a escala, é a chave; a superfície e as estações vêm deles e ficam fora dela, que não
-    precisa comparar 10 mil números a cada clique.
-    """
     espec = mapas.EspecMapa(tabela="", coluna=nome, titulo=nome, subtitulo="", arquivo="",
                             cmap=paleta, unidade=f"{nome} ({unidade})", ranking="",
                             decimais=decimais, direcao_vento=setas, com_sinal=com_sinal)
@@ -1284,7 +1038,6 @@ def mapa_previsto(origem: tuple, nome: str, paleta: str, unidade: str, decimais:
 
 
 def _pontos_previstos(estacoes: pd.DataFrame, nome: str):
-    """As estações com a previsão no ponto delas, prontas para o mapa; vazias se não houver."""
     pontos = mapas.preparar_pontos(estacoes, nome, nome)
     if pontos is None:
         colunas = ["Estação", "Latitude", "Longitude", nome, "Direção (°)"]
@@ -1297,7 +1050,6 @@ def painel_do_mapa_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: da
                             hoje: date, rotulos: bool, ajustar: bool, diaria_grade: pd.DataFrame,
                             pontos_grade: pd.DataFrame, diaria_estacoes: pd.DataFrame,
                             estacoes: pd.DataFrame, horaria_grade: pd.DataFrame) -> None:
-    """Uma coluna da linha de mapas da previsão: o desenho, a escala, a regra e os botões."""
     st.markdown(f"**{mapa.nome}**")
     if mapa.risco:
         painel_do_risco_previsto(mapa, modelo, rodada, dia, hoje, rotulos, horaria_grade, pontos_grade,
@@ -1340,11 +1092,6 @@ def painel_do_risco_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: d
                              hoje: date, rotulos: bool, horaria_grade: pd.DataFrame,
                              pontos_grade: pd.DataFrame, diaria_estacoes: pd.DataFrame,
                              estacoes: pd.DataFrame) -> None:
-    """Os mapas do risco de fogo previsto: o pior nível do dia ou as horas em risco alto.
-
-    A superfície sai da regra aplicada célula a célula, hora a hora (`previsao.risco_na_grade`), e
-    os números sobre as estações, da regra aplicada às horas previstas no ponto de cada uma.
-    """
     base = base_cartografica(previsao.UF)
     calculado = risco_na_grade_prevista(modelo, rodada, dia, _horaria=horaria_grade, _pontos=pontos_grade)
     if calculado is None:
@@ -1391,7 +1138,6 @@ def painel_do_risco_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: d
 
 
 def calendario_do_risco_previsto(dias: pd.DataFrame) -> alt.Chart:
-    """O pior nível de cada dia em cada modelo, na estação: as duas semanas de relance."""
     dados = dias.assign(Modelo=dias["modelo"].map(openmeteo.NOMES),
                         dia=dias["dia_previsto"].map(previsao.nome_do_dia),
                         risco_max=dias["risco_max"].astype(int))
@@ -1416,7 +1162,6 @@ def calendario_do_risco_previsto(dias: pd.DataFrame) -> alt.Chart:
 
 
 def pagina_mapas_previstos() -> None:
-    """Os mapas dos dias 1 a 14 de MS, um modelo por vez (passo 4 do escopo)."""
     st.title("Mapas da previsão — Mato Grosso do Sul")
     aviso = st.container()
     # A superfície é do Open-Meteo; os números sobre as estações precisam da lista do INMET
@@ -1497,7 +1242,6 @@ def pagina_mapas_previstos() -> None:
 def painel_do_mapa_semanal(mapa: previsao.MapaSemanal, rodada: datetime, semana: date, rotulos: bool,
                            semanal_grade: pd.DataFrame, pontos_grade: pd.DataFrame,
                            semanal_estacoes: pd.DataFrame, estacoes: pd.DataFrame, titulo: str) -> None:
-    """Uma coluna de mapas das semanas: o desenho, a escala divergente, a regra e os botões."""
     st.markdown(f"**{titulo}**")
     base = base_cartografica(previsao.UF)
     grade = previsao.superficie(previsao.valores_da_semana(semanal_grade, mapa, semana), pontos_grade,
@@ -1535,11 +1279,6 @@ def painel_do_mapa_semanal(mapa: previsao.MapaSemanal, rodada: datetime, semana:
 
 
 def semana_contra_o_normal(tabela: pd.DataFrame, grandeza: str) -> alt.Chart:
-    """A previsão de cada semana contra a normal da época, e a anomalia como a distância entre as duas.
-
-    A barra entre as linhas é o número dos mapas: vermelha (ou verde, na chuva) quando a semana fica
-    acima do normal, azul (ou marrom) quando fica abaixo.
-    """
     _, _, unidade = previsao.SERIES_SEMANAIS[grandeza]
     chuva = grandeza == "Chuva"
     acima, abaixo = ("#1b7837", "#8c510a") if chuva else ("#d6604d", "#4393c3")
@@ -1578,7 +1317,6 @@ def semana_contra_o_normal(tabela: pd.DataFrame, grandeza: str) -> alt.Chart:
 
 
 def pagina_semanas() -> None:
-    """A anomalia semanal do EC46 em MS, até 6 semanas à frente (passo 5 do escopo)."""
     st.title("Previsão por semana — Mato Grosso do Sul")
     aviso = st.container()
     # A superfície é do Open-Meteo; os números sobre as estações precisam da lista do INMET
@@ -1686,7 +1424,7 @@ def pagina_semanas() -> None:
 # PÁGINAS
 # =====================================================
 def _observado() -> None:
-    """O observado do INMET: é o resto deste arquivo, que segue depois da navegação."""
+    pass
 
 
 # A previsão não usa nenhum filtro do observado (estado, período, estações), e numa aba ela ficaria

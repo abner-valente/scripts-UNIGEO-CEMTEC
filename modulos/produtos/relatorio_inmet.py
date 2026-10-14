@@ -25,7 +25,6 @@ TITULO = "Relatório INMET — extremos e chuva das estações automáticas"
 # JANELAS DE TEMPO DESTE RELATÓRIO
 # =====================================================
 def janelas_chuva(periodo: Periodo) -> dict[str, tuple[datetime, datetime]]:
-    """Colunas de chuva acumulada da planilha e o intervalo de cada uma."""
     if periodo.modo == "tempo_real":
         janelas = {"Chuva Hoje (desde 00h MS)": (periodo.inicio_do_dia, periodo.fim)}
         for horas in (12, 24, 48, 72):
@@ -36,7 +35,6 @@ def janelas_chuva(periodo: Periodo) -> dict[str, tuple[datetime, datetime]]:
 
 
 def coluna_chuva_principal(periodo: Periodo) -> str:
-    """Coluna de chuva usada para ordenar a aba Chuva."""
     return "Acumulado 24h" if periodo.modo == "tempo_real" else next(iter(janelas_chuva(periodo)))
 
 
@@ -44,12 +42,6 @@ def coluna_chuva_principal(periodo: Periodo) -> str:
 # ESTAÇÕES VIZINHAS
 # =====================================================
 def _tabelas_de_apoio(recorte: config.Recorte, base, periodo: Periodo) -> dict | None:
-    """As mesmas tabelas do relatório, para as vizinhas que seguram a borda da interpolação.
-
-    Não vão para a planilha nem para o ranking: só para a superfície. Numa célula da divisa, os
-    8 vizinhos que o IDW enxerga estariam todos do lado de cá, e a superfície extrapolaria
-    tendo medição do outro lado.
-    """
     coletadas = fonte.leituras_de_apoio(recorte, base.lon_grade[base.dentro_uf],
                                         base.lat_grade[base.dentro_uf], *periodo.janela_busca,
                                         fuso=periodo.fuso)
@@ -64,11 +56,6 @@ def _tabelas_de_apoio(recorte: config.Recorte, base, periodo: Periodo) -> dict |
 # =====================================================
 def resumir_estacao(dados: pd.DataFrame, estacao: pd.Series, periodo: Periodo,
                     uf: str = config.UF) -> dict[str, dict]:
-    """Extremos e acumulados de uma estação no período.
-
-    Retorna {aba do Excel: linha da tabela}. Variáveis sem nenhum dado válido ficam de fora.
-    A sigla vai junto porque nomeia a coluna de horário local da planilha.
-    """
     nome = estacao["Estação"]
     coordenadas = {"Latitude": estacao["VL_LATITUDE"], "Longitude": estacao["VL_LONGITUDE"]}
     dados_periodo = calculos.recortar(dados, *periodo.janela)
@@ -120,7 +107,6 @@ def resumir_estacao(dados: pd.DataFrame, estacao: pd.Series, periodo: Periodo,
 
 
 def montar_tabelas(resumos: list[dict[str, dict]], periodo: Periodo) -> dict[str, pd.DataFrame]:
-    """Junta os resumos das estações em uma tabela ordenada para cada aba do Excel."""
     ordenacao = {  # aba: (coluna de ordenação, crescente?)
         "Temp_Min": ("Temperatura Mínima (°C)", True),
         "Temp_Max": ("Temperatura Máxima (°C)", False),
@@ -140,7 +126,6 @@ def montar_tabelas(resumos: list[dict[str, dict]], periodo: Periodo) -> dict[str
 # MAPAS
 # =====================================================
 def especificacoes_mapas(periodo: Periodo, recorte: config.Recorte = config.RECORTE) -> list[EspecMapa]:
-    """Mapas gerados pelo relatório, conforme o modo da consulta."""
     sigla = recorte.uf
     subtitulo = periodo.descrever_janela(*periodo.janela)
 
@@ -181,11 +166,6 @@ def especificacoes_mapas(periodo: Periodo, recorte: config.Recorte = config.RECO
 # EXECUÇÃO
 # =====================================================
 def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
-    """Coleta os dados, calcula e grava a planilha e os mapas. Retorna 0 se deu certo e 1 se falhou.
-
-    Este produto não tem opções próprias de linha de comando; `opcoes` existe para manter a mesma
-    assinatura em todos os produtos.
-    """
     recorte = (opcoes or {}).get("recorte", config.RECORTE)
     print("=" * 60)
     print(f"📊 {TITULO} — {recorte.nome}")

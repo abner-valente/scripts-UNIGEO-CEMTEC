@@ -42,12 +42,10 @@ def test_o_titulo_e_o_nome_da_tela_com_o_estado():
     ("Algo novo", "Grandeza nova", ("5 MAIORES VALORES", True)),
 ])
 def test_o_ranking_traz_as_menores_so_na_minima(nome, grandeza, esperado):
-    """Como o main.py: a temperatura e a umidade mínimas ranqueiam as menores."""
     assert boletim.ranking(nome, grandeza) == esperado
 
 
 def test_a_hora_vai_com_o_fuso_do_estado_como_no_mapa_horario_do_risco():
-    """O mesmo texto que o main.py escreve nos mapas horários, para não haver duas formas."""
     em_ms = datetime(2026, 9, 3, 11, tzinfo=MS)
     em_sc = datetime(2026, 9, 3, 11, tzinfo=SC)
 
@@ -73,7 +71,6 @@ def test_o_acumulado_da_chuva_ganha_nome_de_relatorio():
 
 
 def test_a_moldura_leva_as_cores_da_tela_e_nao_as_do_main_py():
-    """Decisão de 01/10/2026: o que se baixa é o que se vê. O main.py pintaria a mínima em coolwarm."""
     minima = variaveis.por_nome("Temperatura mínima")
 
     espec = boletim.espec(minima.nome, minima.grandeza, minima.unidade, minima.paleta, minima.decimais,
@@ -94,7 +91,6 @@ def test_o_arquivo_leva_a_sigla_do_estado():
 # O DESENHO
 # =====================================================
 def test_o_mapa_do_boletim_sai_com_titulo_logos_ranking_e_a_escala_da_tela(base):
-    """O caminho do relatório (sem Tela), com os níveis de cor que a tela estava usando."""
     nome = "Temperatura máxima"
     gdf = mapas.preparar_pontos(ESTACOES.assign(**{nome: [31.0, 29.5, 36.2, 33.1, 30.4]}), nome)
     espec = boletim.espec(nome, "Temperatura", "°C", variaveis.PALETA_TEMPERATURA, 1, "MS", "03/09/2026")
@@ -127,7 +123,6 @@ def test_na_escala_fixa_a_barra_marca_numeros_redondos_e_dentro_da_faixa(base, t
 
 
 def test_o_png_sai_na_resolucao_do_relatorio(base, monkeypatch):
-    """Grava como o main.py grava: a resolução é a de config.DPI."""
     nome = "Chuva acumulada em 24 h"
     gdf = mapas.preparar_pontos(ESTACOES.assign(**{nome: [0.0, 5.0, 12.0, 3.0, 8.0]}), nome)
     espec = boletim.espec(nome, "Chuva", "mm", "Blues", 1, "MS", "03/09/2026")

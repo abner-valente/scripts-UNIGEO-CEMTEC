@@ -33,10 +33,6 @@ def test_janela_mensal_comeca_no_primeiro_dia_do_mes():
 
 
 def test_no_dia_1o_a_zero_hora_o_mensal_e_o_mes_que_acabou_de_fechar():
-    """A leitura das 00:00 de 01/10 fecha o dia 30/09: o mensal dali é setembro inteiro.
-
-    Antes a janela ia de 01/10 00:00 a 01/10 00:00 — vazia —, e o mapa saía zerado.
-    """
     comeco, fim = chuva.janela(instante("2026-10-01 00:00"), chuva.MENSAL)
 
     assert f"{comeco:%d/%m %H:%M} a {fim:%d/%m %H:%M}" == "01/09 00:00 a 01/10 00:00"
@@ -50,12 +46,10 @@ def test_uma_hora_depois_o_mensal_ja_e_o_mes_novo():
 
 
 def test_carga_necessaria_alcanca_o_comeco_do_mes():
-    """A aba da chuva precisa de mais dado que o período escolhido — é a razão de ser separada."""
     assert f"{chuva.inicio_necessario(instante('2026-09-25 00:00')):%d/%m}" == "01/09"
 
 
 def test_no_comeco_do_mes_a_carga_vai_alem_dele():
-    """Dia 2, o acumulado de 96 h ainda alcança o mês anterior."""
     assert f"{chuva.inicio_necessario(instante('2026-10-02 00:00')):%d/%m}" == "28/09"
 
 
@@ -72,7 +66,6 @@ def test_acumulado_soma_so_as_horas_da_janela():
 
 
 def test_acumulado_entra_a_leitura_do_fim_e_nao_a_do_inicio():
-    """Convenção do projeto: a leitura de uma hora cobre a hora que termina nela."""
     tabela = leituras("Bonito", "2026-09-24 00:00", 25, [100.0] + [1.0] * 24)
 
     somas = chuva.acumulado(tabela, instante("2026-09-25 00:00"), "24 h")
@@ -93,7 +86,6 @@ def test_acumulado_mensal_na_virada_soma_o_mes_que_fechou():
 
 
 def test_avisa_quando_o_dado_carregado_nao_cobre_a_janela():
-    """96 h calculadas com 48 h de dado mostrariam metade da chuva como se fosse o total."""
     tabela = leituras("Bonito", "2026-09-23 01:00", 48, 1.0)
     fim = instante("2026-09-25 00:00")
 
@@ -134,7 +126,6 @@ def test_cascata_termina_com_a_barra_de_total():
 
 
 def test_cascata_horaria_mostra_so_as_ultimas_24_horas():
-    """Uma semana daria 168 barras: ilegível."""
     tabela = leituras("Bonito", "2026-09-18 01:00", 24 * 7, 1.0)
 
     barras = chuva.cascata(tabela, por_dia=False)
@@ -144,7 +135,6 @@ def test_cascata_horaria_mostra_so_as_ultimas_24_horas():
 
 
 def test_cascata_diaria_usa_o_fechamento_do_dia_do_projeto():
-    """A leitura das 00:00 fecha o dia anterior: sete dias continuam sete barras."""
     tabela = leituras("Bonito", "2026-09-18 01:00", 24 * 7, 1.0)
 
     barras = chuva.cascata(tabela, por_dia=True)
@@ -171,7 +161,6 @@ def test_sem_leituras_a_cascata_sai_vazia_e_nao_quebra():
 
 
 def test_a_cascata_do_estado_soma_as_estacoes_num_passo_so():
-    """Uma linha por passo, e não uma por estação: o gráfico do estado é um só."""
     tabela = pd.concat([leituras("Bonito", "2026-09-24 01:00", 3, [1.0, 2.0, 0.0]),
                         leituras("Corumba", "2026-09-24 01:00", 3, [10.0, 0.0, 5.0])],
                        ignore_index=True)
@@ -185,7 +174,6 @@ def test_a_cascata_do_estado_soma_as_estacoes_num_passo_so():
 
 
 def test_a_cascata_do_estado_fecha_no_total_de_tudo_que_foi_medido():
-    """O topo da última barra e a barra de total têm de bater com a soma bruta das leituras."""
     tabela = pd.concat([leituras("Bonito", "2026-09-24 01:00", 24, 1.0),
                         leituras("Corumba", "2026-09-24 01:00", 24, 2.0)], ignore_index=True)
 
@@ -200,11 +188,6 @@ def test_a_cascata_do_estado_fecha_no_total_de_tudo_que_foi_medido():
 
 
 def test_a_cascata_do_estado_nao_e_a_media_nem_a_maxima():
-    """Somar milímetro de estações diferentes dá um número maior que o de qualquer uma delas.
-
-    Está aqui para o dia em que alguém trocar a conta sem querer: a equipe escolheu a soma, e a
-    legenda da tela avisa que não é a chuva de um lugar.
-    """
     tabela = pd.concat([leituras("Bonito", "2026-09-24 01:00", 2, 1.0),
                         leituras("Corumba", "2026-09-24 01:00", 2, 9.0)], ignore_index=True)
 

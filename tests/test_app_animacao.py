@@ -27,7 +27,6 @@ def test_cabendo_no_teto_entram_todas():
 
 
 def test_passando_do_teto_o_gif_pula_de_tantas_em_tantas():
-    """Uma semana hora a hora dá 168 quadros: ~11 MB e um minuto de espera."""
     escolhidas = animacao.passos(list(range(168)), maximo=72)
 
     assert len(escolhidas) <= 72
@@ -42,7 +41,6 @@ def test_sem_paradas_o_intervalo_nao_divide_por_zero():
 
 
 def test_no_diario_o_carimbo_traz_so_a_data():
-    """Escrever "00:00" num mapa que resume o dia inteiro faria pensar que o valor é da meia-noite."""
     momento = pd.Timestamp("2026-09-24 00:00", tz="America/Campo_Grande")
 
     assert animacao.carimbo(momento, por_dia=True) == "24/09/2026"
@@ -61,7 +59,6 @@ def test_o_gif_tem_um_quadro_para_cada_imagem():
 
 
 def test_cada_quadro_leva_o_seu_instante_escrito():
-    """Fora do painel o GIF vira arquivo solto: sem o carimbo ninguém sabe de quando ele é."""
     liso = png()
     gif = animacao.montar([(liso, "24/09/2026 15:00")])
 

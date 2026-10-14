@@ -54,25 +54,19 @@ TEMPO_DE_CONEXAO = 30   # segundos
 
 
 class ErroBanco(Exception):
-    """Falha ao falar com o banco."""
+    pass
 
 
 # =====================================================
 # CONEXÃO
 # =====================================================
 def _conferir_nome(nome: str) -> str:
-    """Um nome de schema ou de tabela que pode ir no SQL: letras minúsculas, números e sublinhado."""
     if not re.fullmatch(r"[a-z_][a-z0-9_]*", nome):
         raise ErroBanco(f"nome inválido para o banco: {nome!r}")
     return nome
 
 
 def conectar(papel: str = "leitura", schema: str = config.BANCO_SCHEMA) -> psycopg.Connection:
-    """Uma conexão com o papel pedido ("gravacao", "leitura" ou "teste"), já no schema certo.
-
-    O schema vai na frente do `public`, onde mora o PostGIS. O fuso da conexão é UTC: as horas
-    voltam do banco em UTC, como entraram.
-    """
     variavel = config.BANCO_CONEXOES[papel]
     texto = os.getenv(variavel, "").strip()
     if not texto:
@@ -89,17 +83,11 @@ def conectar(papel: str = "leitura", schema: str = config.BANCO_SCHEMA) -> psyco
 
 
 def criar_esquema(conexao: psycopg.Connection) -> None:
-    """Cria as tabelas e a view que faltarem, pelo banco/esquema.sql. Pode rodar de novo."""
     conexao.execute(config.BANCO_ESQUEMA.read_text(encoding="utf-8"))
     conexao.commit()
 
 
 def recriar_schema_de_teste(conexao: psycopg.Connection, schema: str) -> None:
-    """Apaga e recria o schema dos testes, vazio. Recusa qualquer schema que não termine em _teste.
-
-    É a única função que apaga um schema inteiro, e a trava no nome existe para ela nunca alcançar
-    o `climageo` de verdade, nem por engano de configuração.
-    """
     if not _conferir_nome(schema).endswith("_teste"):
         raise ErroBanco(f"recriar_schema_de_teste só apaga schemas de teste (…_teste), e não {schema!r}")
     conexao.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
@@ -116,7 +104,6 @@ def _em_utc(momento) -> datetime:
 
 
 def _periodo(divisao: str, dia: date) -> tuple[date, date]:
-    """O começo e o fim (exclusivo) da partição que contém o dia."""
     if divisao == "dia":
         return dia, dia + timedelta(days=1)
     comeco = dia.replace(day=1)
@@ -124,7 +111,6 @@ def _periodo(divisao: str, dia: date) -> tuple[date, date]:
 
 
 def nome_da_particao(tabela: str, comeco: date) -> str:
-    """inmet_horaria_202610, previsao_horaria_grade_20261009: o período está no nome."""
     divisao, _ = PARTICOES[tabela]
     return f"{tabela}_{comeco:%Y%m%d}" if divisao == "dia" else f"{tabela}_{comeco:%Y%m}"
 
@@ -134,10 +120,6 @@ def _meia_noite_utc(dia: date) -> datetime:
 
 
 def garantir_particoes(conexao: psycopg.Connection, tabela: str, de, ate) -> list[str]:
-    """Cria as partições que faltarem para cobrir de `de` a `ate` (UTC). Devolve as que criou.
-
-    Não confirma a transação: quem chama grava em seguida e confirma tudo junto.
-    """
     divisao, _ = PARTICOES[tabela]
     dia, ultimo = _em_utc(de).date(), _em_utc(ate).date()
     existentes = set(particoes(conexao, tabela))
@@ -155,7 +137,6 @@ def garantir_particoes(conexao: psycopg.Connection, tabela: str, de, ate) -> lis
 
 
 def particoes(conexao: psycopg.Connection, tabela: str) -> dict[str, date]:
-    """As partições da tabela, cada uma com o dia em que começa (tirado do nome)."""
     linhas = conexao.execute(
         "SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid "
         "WHERE i.inhparent = to_regclass(%s)", (tabela,)).fetchall()
@@ -168,12 +149,6 @@ def particoes(conexao: psycopg.Connection, tabela: str) -> dict[str, date]:
 
 
 def apagar_particoes_antigas(conexao: psycopg.Connection, tabela: str, antes_de) -> list[str]:
-    """Apaga as partições que terminam até `antes_de` (UTC). Devolve as que apagou.
-
-    Cada uma é desanexada sem travar quem está lendo (`DETACH ... CONCURRENTLY`, da versão 14) e
-    só então apagada. O CONCURRENTLY não roda dentro de uma transação: a conexão passa um instante
-    para o modo em que cada comando se confirma sozinho, e volta como estava.
-    """
     divisao, _ = PARTICOES[tabela]
     limite = _em_utc(antes_de).date()
     velhas = [nome for nome, comeco in particoes(conexao, tabela).items()
@@ -194,7 +169,6 @@ def apagar_particoes_antigas(conexao: psycopg.Connection, tabela: str, antes_de)
 
 
 def limpar_grade(conexao: psycopg.Connection, agora: datetime | None = None) -> list[str]:
-    """Apaga as rodadas da grade com mais de 21 dias (decisão 6 do escopo)."""
     agora = agora or datetime.now(timezone.utc)
     return apagar_particoes_antigas(conexao, "previsao_horaria_grade", agora - timedelta(days=DIAS_DA_GRADE))
 
@@ -203,7 +177,6 @@ def limpar_grade(conexao: psycopg.Connection, agora: datetime | None = None) -> 
 # GRAVAR
 # =====================================================
 def _linhas(tabela: pd.DataFrame, colunas: list[str]) -> Iterator[tuple]:
-    """As linhas como tuplas que o psycopg entende: NaN vira NULL, e as horas vão em UTC."""
     dados = tabela[colunas].copy()
     for coluna in colunas:
         if isinstance(dados[coluna].dtype, pd.DatetimeTZDtype):
@@ -213,11 +186,6 @@ def _linhas(tabela: pd.DataFrame, colunas: list[str]) -> Iterator[tuple]:
 
 
 def _carregar(conexao: psycopg.Connection, tabela: str, colunas: list[str], linhas: Iterable[tuple]) -> None:
-    """Copia as linhas, em lote (COPY), para uma tabela temporária `carga` com as colunas da tabela.
-
-    A temporária some no fim da transação. Ela existe porque o COPY não sabe pular uma linha que já
-    está no banco, e o INSERT que vem depois sabe (ON CONFLICT).
-    """
     conexao.execute(sql.SQL("CREATE TEMP TABLE carga (LIKE {} INCLUDING DEFAULTS) ON COMMIT DROP")
                     .format(sql.Identifier(tabela)))
     with conexao.cursor() as cursor:
@@ -238,11 +206,6 @@ def _conferir_conjunto(conjunto: str) -> str:
 
 
 def gravar_previsao(conexao: psycopg.Connection, horaria: pd.DataFrame, conjunto: str) -> int:
-    """Grava a previsão horária da grade ou das estações. Devolve quantas linhas entraram.
-
-    `horaria` é a tabela de `openmeteo.buscar`. Cada rodada é um insert: uma linha que já está no
-    banco (a mesma rodada buscada de novo) é pulada, e nada é atualizado.
-    """
     if horaria.empty:
         return 0
     tabela = f"previsao_horaria_{_conferir_conjunto(conjunto)}"
@@ -256,7 +219,6 @@ def gravar_previsao(conexao: psycopg.Connection, horaria: pd.DataFrame, conjunto
 
 
 def gravar_semanas(conexao: psycopg.Connection, semanal: pd.DataFrame, conjunto: str) -> int:
-    """Grava as semanas do EC46 (a tabela de `openmeteo.buscar_semanas`). Devolve as que entraram."""
     if semanal.empty:
         return 0
     colunas = ["conjunto", *openmeteo.COLUNAS_SEMANAIS]
@@ -269,16 +231,6 @@ def gravar_semanas(conexao: psycopg.Connection, semanal: pd.DataFrame, conjunto:
 
 
 def gravar_estacoes(conexao: psycopg.Connection, estacoes: pd.DataFrame, so_as_novas: bool = False) -> int:
-    """Grava ou atualiza o cadastro das estações (colunas de `COLUNAS_ESTACAO`, as que houver).
-
-    Devolve quantas entraram ou mudaram: uma estação igual ao que já está no cadastro não é
-    reescrita, e o `atualizada_em` diz quando ela mudou pela última vez. Um valor que não veio
-    (a consulta por hora não traz a altitude, por exemplo) não apaga o que já estava lá.
-
-    `so_as_novas` acrescenta as que faltam e não mexe nas outras. É como entram as estações da
-    consulta por hora, que traz as que já fecharam e saíram da lista do INMET: o cadastro de
-    verdade é o da lista, e a consulta por hora só preenche o buraco.
-    """
     if estacoes.empty:
         return 0
     colunas = [coluna for coluna in COLUNAS_ESTACAO if coluna in estacoes]
@@ -299,11 +251,6 @@ def gravar_estacoes(conexao: psycopg.Connection, estacoes: pd.DataFrame, so_as_n
 
 
 def _gravar_inmet(conexao: psycopg.Connection, leituras: pd.DataFrame, medidas: list[str]) -> int:
-    """Grava as medidas dadas, atualizando a hora que já estiver no banco só se alguma mudou.
-
-    As outras medidas da hora ficam como estavam: a consulta por hora não apaga a bateria que a
-    consulta por estação gravou, e vice-versa.
-    """
     if leituras.empty:
         return 0
     medidas = [medida for medida in medidas if medida in leituras]
@@ -324,17 +271,10 @@ def _gravar_inmet(conexao: psycopg.Connection, leituras: pd.DataFrame, medidas: 
 
 
 def gravar_inmet(conexao: psycopg.Connection, leituras: pd.DataFrame) -> int:
-    """Grava as leituras da consulta por hora. Devolve quantas horas entraram ou mudaram.
-
-    `leituras` tem `estacao`, `hora_utc` e as medidas de `COLUNAS_INMET`. As estações precisam
-    estar no cadastro (`gravar_estacoes`). Rebuscar os últimos 3 dias, como o coletor faz, só
-    reescreve a hora que o INMET mudou.
-    """
     return _gravar_inmet(conexao, leituras, COLUNAS_INMET)
 
 
 def gravar_extras_inmet(conexao: psycopg.Connection, extras: pd.DataFrame) -> int:
-    """Grava a sensação térmica, a bateria e a temperatura do processador, da consulta por estação."""
     return _gravar_inmet(conexao, extras, COLUNAS_INMET_EXTRAS)
 
 
@@ -342,11 +282,6 @@ def gravar_extras_inmet(conexao: psycopg.Connection, extras: pd.DataFrame) -> in
 # LER
 # =====================================================
 def _sem_deixar_transacao(funcao):
-    """A leitura que encontrou a conexão parada a deixa parada, e não no meio de uma transação.
-
-    O psycopg abre uma transação no primeiro comando, mesmo num SELECT, e ela fica aberta até
-    alguém confirmar. Se a conexão já estava numa transação (uma gravação em curso), ela segue.
-    """
     @functools.wraps(funcao)
     def ler(conexao: psycopg.Connection, *args, **kwargs):
         parada = conexao.info.transaction_status == TransactionStatus.IDLE
@@ -372,7 +307,6 @@ def _horas_em_utc(tabela: pd.DataFrame, colunas: list[str]) -> pd.DataFrame:
 
 
 def _numeros(tabela: pd.DataFrame, colunas: list[str]) -> pd.DataFrame:
-    """As medidas como número: uma coluna toda vazia voltaria do banco como None, e não NaN."""
     for coluna in colunas:
         tabela[coluna] = pd.to_numeric(tabela[coluna]).astype(float)
     return tabela
@@ -380,7 +314,6 @@ def _numeros(tabela: pd.DataFrame, colunas: list[str]) -> pd.DataFrame:
 
 @_sem_deixar_transacao
 def rodadas_guardadas(conexao: psycopg.Connection, conjunto: str) -> dict[str, datetime]:
-    """A rodada mais nova de cada modelo que está no banco, para a grade ou para as estações."""
     tabela = sql.Identifier(f"previsao_horaria_{_conferir_conjunto(conjunto)}")
     linhas = conexao.execute(sql.SQL("SELECT modelo, max(rodada_utc) FROM {} GROUP BY modelo").format(tabela)).fetchall()
     return {modelo: pd.Timestamp(rodada).tz_convert("UTC") for modelo, rodada in linhas}
@@ -388,7 +321,6 @@ def rodadas_guardadas(conexao: psycopg.Connection, conjunto: str) -> dict[str, d
 
 @_sem_deixar_transacao
 def ler_previsao(conexao: psycopg.Connection, conjunto: str, modelo: str, rodada=None) -> pd.DataFrame:
-    """A previsão horária de um modelo, com as colunas de `openmeteo.buscar`. Sem rodada, a mais nova."""
     tabela = f"previsao_horaria_{_conferir_conjunto(conjunto)}"
     if rodada is None:
         rodada = rodadas_guardadas(conexao, conjunto).get(modelo)
@@ -404,7 +336,6 @@ def ler_previsao(conexao: psycopg.Connection, conjunto: str, modelo: str, rodada
 
 @_sem_deixar_transacao
 def ler_semanas(conexao: psycopg.Connection, conjunto: str, rodada=None) -> pd.DataFrame:
-    """As semanas do EC46, com as colunas de `openmeteo.buscar_semanas`. Sem rodada, a mais nova."""
     _conferir_conjunto(conjunto)
     if rodada is None:
         rodada = conexao.execute("SELECT max(rodada_utc) FROM previsao_semanal WHERE conjunto = %s",
@@ -421,10 +352,6 @@ def ler_semanas(conexao: psycopg.Connection, conjunto: str, rodada=None) -> pd.D
 
 @_sem_deixar_transacao
 def horas_guardadas(conexao: psycopg.Connection, inicio, fim) -> set[pd.Timestamp]:
-    """As horas de [início, fim] (UTC) que já têm alguma leitura do INMET no banco.
-
-    É por elas que a carga do histórico retoma de onde parou, sem buscar de novo o que já tem.
-    """
     linhas = conexao.execute("SELECT DISTINCT hora_utc FROM inmet_horaria WHERE hora_utc >= %s AND hora_utc <= %s",
                              (_em_utc(inicio), _em_utc(fim))).fetchall()
     return {pd.Timestamp(hora).tz_convert("UTC") for (hora,) in linhas}
@@ -432,7 +359,6 @@ def horas_guardadas(conexao: psycopg.Connection, inicio, fim) -> set[pd.Timestam
 
 @_sem_deixar_transacao
 def fora_do_cadastro(conexao: psycopg.Connection, codigos: Iterable[str]) -> list[str]:
-    """Os códigos dados que não estão no cadastro das estações, em ordem."""
     linhas = conexao.execute("SELECT codigo FROM unnest(%s::text[]) AS codigo "
                              "WHERE codigo NOT IN (SELECT codigo FROM estacao) ORDER BY codigo",
                              (list(codigos),)).fetchall()
@@ -441,7 +367,6 @@ def fora_do_cadastro(conexao: psycopg.Connection, codigos: Iterable[str]) -> lis
 
 @_sem_deixar_transacao
 def estacoes_com_leituras(conexao: psycopg.Connection, inicio, fim) -> list[str]:
-    """As estações que têm alguma leitura na janela (início, fim], em ordem de código."""
     linhas = conexao.execute("SELECT DISTINCT estacao FROM inmet_horaria WHERE hora_utc > %s AND hora_utc <= %s "
                              "ORDER BY estacao", (_em_utc(inicio), _em_utc(fim))).fetchall()
     return [estacao for (estacao,) in linhas]
@@ -449,10 +374,6 @@ def estacoes_com_leituras(conexao: psycopg.Connection, inicio, fim) -> list[str]
 
 @_sem_deixar_transacao
 def ler_inmet(conexao: psycopg.Connection, inicio, fim, estacoes: list[str] | None = None) -> pd.DataFrame:
-    """As leituras horárias na janela (início, fim], em UTC, de todas as estações ou só das dadas.
-
-    A janela é aberta no começo, como em todo o projeto: a leitura das 00:00 fecha o dia anterior.
-    """
     colunas = ["estacao", "hora_utc", *COLUNAS_INMET, *COLUNAS_INMET_EXTRAS]
     filtro = sql.SQL(" AND estacao = ANY(%s)") if estacoes is not None else sql.SQL("")
     argumentos = (_em_utc(inicio), _em_utc(fim), *([list(estacoes)] if estacoes is not None else []))

@@ -11,7 +11,6 @@ def utc(texto):
 
 
 def test_recorte_segue_a_hora_que_termina_na_leitura(serie):
-    """A leitura das HH:00 fecha a hora anterior: entra a do fim da janela, não a do início."""
     dados = serie("2026-07-30", "2026-08-01")
     recorte = calculos.recortar(dados, utc("2026-07-30 04:00"), utc("2026-07-31 04:00"))
     assert len(recorte) == 24
@@ -36,11 +35,6 @@ def test_indice_do_extremo_e_data_hora(serie):
 
 
 def test_a_coluna_de_horario_local_leva_a_sigla_do_estado(serie):
-    """O valor sempre saiu do fuso certo; o rótulo é que dizia (MS) em qualquer estado.
-
-    Uma planilha de SC com a coluna "Data/Hora (MS)" faz quem lê entender horário de Campo
-    Grande onde está o de Florianópolis.
-    """
     dados = serie("2026-07-30", "2026-07-31")
     indice = calculos.indice_extremo(dados, "TEM_MAX", minimo=False)
 
@@ -61,8 +55,6 @@ def test_idw_reproduz_o_valor_na_posicao_da_estacao():
 
 
 def test_idw_mede_a_distancia_em_quilometros():
-    """Estação A fica 1° a leste do ponto e B 1° ao norte: em graus, a mesma distância. Em MS,
-    1° de longitude (~104 km) é mais curto que 1° de latitude (~111 km), então A pesa mais."""
     resultado = calculos.interpolar_idw([-54.0, -55.0], [-21.0, -20.0], [10.0, 0.0], np.array([[-55.0]]), np.array([[-21.0]]))
     assert resultado[0, 0] == pytest.approx(10 * 110.6**2 / (103.9**2 + 110.6**2), abs=0.02)  # ≈ 5,3 (em graus seria 5,0)
 
@@ -86,18 +78,12 @@ def test_idw_de_campo_constante_e_constante():
 # PODA DAS ESTAÇÕES DE APOIO
 # =====================================================
 def estado_denso():
-    """Um estado com 36 estações e a grade que vira desenho.
-
-    Denso de propósito: com poucas estações, `k` mais próximas passa a ser "todas", e aí não há o
-    que podar — o cenário precisa ter mais estações do que vizinhos para a poda significar algo.
-    """
     lon, lat = calculos.criar_grade((-55.0, -54.0, -21.0, -20.0), 30)
     colunas, linhas = np.meshgrid(np.linspace(-54.95, -54.05, 6), np.linspace(-20.95, -20.05, 6))
     return lon, lat, colunas.ravel(), linhas.ravel()
 
 
 def test_a_poda_guarda_quem_encosta_no_estado_e_larga_quem_esta_longe():
-    """Estar dentro da margem não basta: é preciso chegar às mais próximas de alguma célula."""
     lon, lat, proprias_lon, proprias_lat = estado_denso()
     #                      logo além da divisa | 210 km a leste | 100 km a leste
     apoio_lon = np.array([-53.95, -52.00, -53.00])
@@ -110,7 +96,6 @@ def test_a_poda_guarda_quem_encosta_no_estado_e_larga_quem_esta_longe():
 
 
 def test_a_poda_nao_muda_a_superficie_interpolada():
-    """É a promessa da poda: corta requisição e deixa o desenho igual, bit a bit."""
     lon, lat, proprias_lon, proprias_lat = estado_denso()
     apoio_lon = np.array([-53.95, -53.90, -53.00, -52.00, -50.00, -56.50])
     apoio_lat = np.array([-20.50, -20.90, -20.50, -20.50, -20.50, -20.50])
@@ -135,7 +120,6 @@ def test_a_poda_nao_muda_a_superficie_interpolada():
 
 
 def test_a_folga_da_poda_so_acrescenta_estacao():
-    """A folga existe para guardar quem só vira vizinha quando outra falta naquela hora."""
     lon, lat, proprias_lon, proprias_lat = estado_denso()
     apoio_lon = np.array([-53.95, -53.90, -53.85, -53.80, -53.70, -53.60])
     apoio_lat = np.full(len(apoio_lon), -20.50)
@@ -159,7 +143,6 @@ def test_a_poda_sem_apoio_nenhum_nao_quebra():
 
 
 def test_a_poda_devolve_a_mascara_na_ordem_que_recebeu():
-    """A máscara é posicional: quem chama filtra a tabela dele com ela."""
     lon, lat, proprias_lon, proprias_lat = estado_denso()
     apoio_lon = np.array([-50.00, -53.95, -50.50])
     apoio_lat = np.array([-20.50, -20.50, -20.50])

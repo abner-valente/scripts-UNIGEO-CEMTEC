@@ -35,14 +35,12 @@ ESPERA_PARA_RECONECTAR = 60    # segundos
 
 
 def _saida_em_utf8() -> None:
-    """Pelo Agendador, a saída vai para um arquivo em cp1252, que não escreve os emojis (ver main.py)."""
     for fluxo in (sys.stdout, sys.stderr):
         if hasattr(fluxo, "reconfigure"):
             fluxo.reconfigure(encoding="utf-8", errors="replace")
 
 
 def ler_data(texto: str) -> datetime:
-    """'AAAA-MM-DD' ou 'DD/MM/AAAA' como a 00:00 UTC do dia."""
     for formato in ("%Y-%m-%d", "%d/%m/%Y"):
         try:
             return datetime.strptime(texto, formato).replace(tzinfo=timezone.utc)
@@ -79,11 +77,6 @@ def _primeira_linha(erro: Exception) -> str:
 
 
 def carregar_historico(papel: str, schema: str, desde: datetime, ate: datetime | None) -> coletor_inmet.Coleta:
-    """A carga do histórico, que reconecta e retoma quando a conexão com o banco cai.
-
-    Como a carga pula as horas que já estão no banco, retomar é só chamá-la de novo: o dia que
-    estava no meio, e que o banco desfez, volta inteiro.
-    """
     total = coletor_inmet.Coleta()
     for vez in range(RECONEXOES_NO_HISTORICO + 1):
         try:
@@ -99,7 +92,6 @@ def carregar_historico(papel: str, schema: str, desde: datetime, ate: datetime |
 
 
 def executar(opcoes: argparse.Namespace) -> int:
-    """Roda o trabalho pedido e devolve o código de saída: 0 deu tudo certo, 1 algo falhou."""
     if opcoes.trabalho == "inmet" and config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
         print("❌ O token do INMET não está configurado no .env (modelo: .env.example).")
         return 1

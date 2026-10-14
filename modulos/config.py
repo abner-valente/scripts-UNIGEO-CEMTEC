@@ -31,17 +31,6 @@ PASTA_SAIDA = RAIZ / "saida"
 # =====================================================
 @dataclass(frozen=True)
 class Recorte:
-    """Quem é o estado, onde ele fica e em que hora ele vive.
-
-    Existe para a UF deixar de ser uma constante do módulo. O painel serve várias pessoas no
-    mesmo processo: se a escolha de uma trocasse um valor global, a outra veria o mapa do estado
-    errado no meio da própria consulta. Então o recorte **anda junto com a chamada**, e quem não
-    passa nenhum recebe o padrão.
-
-    `limites` é (oeste, leste, sul, norte) em graus, com folga sobre o contorno real: é o
-    enquadramento do desenho, não a divisa.
-    """
-
     uf: str
     nome: str
     shape_uf: Path
@@ -95,16 +84,10 @@ ILHA_DISTANTE = 1.0            # graus (~110 km)
 
 
 def shapes_de(uf: str) -> tuple[Path, Path]:
-    """Os dois shapefiles de uma UF, na convenção de nome da pasta shp/."""
     return PASTA_SHP / f"{uf}_UF_2022.shp", PASTA_SHP / f"{uf}_mun_simplificado.shp"
 
 
 def ufs_disponiveis() -> list[str]:
-    """As UFs que têm shapefile na pasta — é o que limita quais estados dá para mapear.
-
-    Os arquivos saem da ferramenta `ferramentas/simplificar_municipios.py`, sob demanda: carregar
-    os 5.570 municípios do país a cada mapa pesaria na máquina sem servir para nada.
-    """
     disponiveis = []
     for uf in sorted(ESTADOS):
         contorno, municipios = shapes_de(uf)
@@ -115,12 +98,6 @@ def ufs_disponiveis() -> list[str]:
 
 @lru_cache(maxsize=None)
 def recorte_de(uf: str) -> Recorte:
-    """O recorte de uma UF: escrito à mão quando existe, derivado do shapefile quando não.
-
-    MS é escrito à mão de propósito — derivar o enquadramento da geometria mudaria os números
-    por arredondamento, e com eles todo mapa já publicado. Para as demais, o enquadramento sai do
-    contorno mais uma margem, que é como os de MS foram escolhidos na origem.
-    """
     if uf in RECORTES:
         return RECORTES[uf]
     if uf not in ESTADOS:
@@ -283,26 +260,11 @@ NOMES_MODO = {"dia": "Data específica", "periodo": "Período", "tempo_real": "T
 
 
 def _gmt(momento: datetime) -> str:
-    """O fuso como ele aparece nos subtítulos: GMT-04 em MS, GMT-03 no Paraná."""
     return f"GMT{momento.utcoffset().total_seconds() / 3600:+03.0f}"
 
 
 @dataclass(frozen=True)
 class Periodo:
-    """Janela de tempo de uma consulta.
-
-    Crie com um dos construtores:
-        Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30))  -> data específica
-        Periodo.de_datas(date(2026, 8, 1), date(2026, 8, 31))   -> período
-        Periodo.de_datas(date(2026, 9, 14), date(2026, 9, 15), 8, 8)  -> das 08 h de 14/09 às 08 h de 15/09
-        Periodo.tempo_real()                                     -> últimas 24 h
-
-    Os dias seguem o horário de MS (da 00 h às 24 h locais); início e fim ficam guardados em
-    UTC, como as leituras do INMET. Cada leitura horária se refere à hora que termina no horário
-    indicado, então a janela (início, fim) reúne as leituras com início < horário <= fim.
-    Regras que valem só para um produto ficam no arquivo do produto, em modulos/produtos/.
-    """
-
     inicio: datetime  # UTC
     fim: datetime     # UTC
     modo: str         # "dia", "periodo" ou "tempo_real"
@@ -314,10 +276,6 @@ class Periodo:
     @classmethod
     def de_datas(cls, data_inicial: date, data_final: date, hora_inicial: int = 0, hora_final: int = 24,
                  fuso: ZoneInfo = FUSO_MS) -> "Periodo":
-        """Da hora inicial da data inicial até a hora final da data final, no horário do recorte.
-
-        Sem horas, são dias inteiros: da 00 h da data inicial às 24 h da data final.
-        """
         for hora in (hora_inicial, hora_final):
             if not 0 <= hora <= 24:
                 raise ValueError(f"Hora inválida: {hora} (use uma hora cheia de 0 a 24).")
@@ -332,7 +290,6 @@ class Periodo:
 
     @classmethod
     def tempo_real(cls, agora: datetime | None = None, fuso: ZoneInfo = FUSO_MS) -> "Periodo":
-        """Últimas 24 horas até o momento atual."""
         agora = (agora or datetime.now(FUSO_UTC)).astimezone(FUSO_UTC)
         return cls(agora - timedelta(hours=24), agora, "tempo_real", fuso)
 
@@ -342,12 +299,10 @@ class Periodo:
 
     @property
     def primeiro_dia(self) -> date:
-        """Primeiro dia da consulta, no horário de MS."""
         return self.inicio.astimezone(self.fuso).date()
 
     @property
     def ultimo_dia(self) -> date:
-        """Último dia da consulta, no horário de MS."""
         return (self.fim.astimezone(self.fuso) - timedelta(microseconds=1)).date()
 
     @property
@@ -356,17 +311,14 @@ class Periodo:
 
     @property
     def horas(self) -> int:
-        """Duração da consulta, em horas."""
         return round((self.fim - self.inicio).total_seconds() / 3600)
 
     @property
     def dias_inteiros(self) -> bool:
-        """True quando a consulta começa e termina à 00 h de MS (sem horários informados)."""
         return all(momento.astimezone(self.fuso).time() == time.min for momento in (self.inicio, self.fim))
 
     @property
     def inicio_do_dia(self) -> datetime:
-        """00 h (horário de MS) do dia em que a consulta termina, em UTC. No tempo real: a 00 h de hoje."""
         fim_local = self.fim.astimezone(self.fuso)
         return fim_local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(FUSO_UTC)
 
@@ -374,12 +326,10 @@ class Periodo:
 
     @property
     def janela(self) -> tuple[datetime, datetime]:
-        """Intervalo da consulta: (início, fim]."""
         return self.inicio, self.fim
 
     @property
     def janela_busca(self) -> tuple[datetime, datetime]:
-        """Intervalo baixado da API (no tempo real, inclui o histórico usado nos acumulados)."""
         if self.modo == "tempo_real":
             return self.fim - timedelta(hours=HORAS_BUSCA_TEMPO_REAL), self.fim
         return self.inicio, self.fim
@@ -388,7 +338,6 @@ class Periodo:
 
     @property
     def identificador(self) -> str:
-        """Trecho usado nos nomes de pastas e arquivos."""
         if self.modo == "tempo_real":
             return f"{self.fim.astimezone(self.fuso):%Y%m%d_%H%M}"
         if not self.dias_inteiros:
@@ -413,11 +362,6 @@ class Periodo:
         )
 
     def descrever_janela(self, inicio: datetime, fim: datetime) -> str:
-        """Texto de uma janela para os subtítulos dos mapas, igual em todos os produtos.
-
-        Só as datas quando a janela cobre dias inteiros; com horário e fuso (GMT-04, o horário
-        de MS) quando começa ou termina no meio de um dia, que é quando a hora faz diferença.
-        """
         inicio, fim = inicio.astimezone(self.fuso), fim.astimezone(self.fuso)
         if inicio.time() == time.min and fim.time() == time.min:
             primeiro, ultimo = inicio.date(), (fim - timedelta(microseconds=1)).date()
@@ -425,5 +369,4 @@ class Periodo:
         return f"{inicio:%d/%m/%Y %H:%M} a {fim:%d/%m/%Y %H:%M} {_gmt(inicio)}"
 
     def pasta_saida(self, produto: str) -> Path:
-        """Pasta dos resultados: saida/<produto>/<modo>/<identificador>/."""
         return PASTA_SAIDA / produto / self.modo / self.identificador

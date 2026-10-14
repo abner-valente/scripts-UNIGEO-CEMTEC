@@ -51,7 +51,6 @@ TIMEOUT = 180       # o zip municipal de um estado grande passa de 20 MB
 
 
 def fonte_ibge(uf: str, camada: str) -> Path:
-    """O shapefile bruto de uma camada da UF, baixado do IBGE se ainda não estiver em shp/fonte/."""
     destino = PASTA_FONTE / uf / camada
     ja_baixado = sorted(destino.glob("*.shp"))
     if ja_baixado:
@@ -72,13 +71,11 @@ def fonte_ibge(uf: str, camada: str) -> Path:
 
 
 def fonte_municipal(uf: str) -> Path:
-    """De onde saem as divisas municipais: o arquivo da casa, se houver, senão o do IBGE."""
     da_casa = config.PASTA_SHP / f"{uf}_mun.shp"
     return da_casa if da_casa.exists() else fonte_ibge(uf, "Municipios")
 
 
 def _simplificada(camada: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """A mesma camada com a geometria simplificada na tolerância do projeto."""
     saida = camada.copy()
     saida["geometry"] = camada.geometry.simplify(TOLERANCIA, preserve_topology=True)
     return saida
@@ -89,18 +86,6 @@ def _vertices(camada: gpd.GeoDataFrame) -> int:
 
 
 def gravar_contorno(uf: str, destino: Path) -> None:
-    """Grava o contorno do estado, simplificado, com o nome que os mapas esperam.
-
-    Simplificar importa mais aqui do que parece. O IBGE mapeia o litoral em detalhe fino: o
-    contorno de SC tem 193 mil vértices contra 25 mil do de MT, que não tem costa. Isso são 3,1 MB
-    de repositório — clonados pela nuvem do Streamlit a cada publicação — para uma diferença de
-    **1 célula em 10.000** na máscara do recorte, e ainda deixa cada mapa 1,4× mais lento de
-    desenhar, porque o contorno vira o caminho de corte de toda figura.
-
-    Os contornos de MS e de MT já estão no repositório sem passar por aqui, e continuam como
-    estão: são pequenos e já valeram por mapas publicados. Regerar o de MS com `--refazer` mudaria
-    o corte dele em menos de 100 m — invisível, mas sem motivo.
-    """
     contorno = gpd.read_file(fonte_ibge(uf, "UF"), encoding="utf-8")
     simplificado = _simplificada(contorno)
     simplificado.to_file(destino, encoding="utf-8")
@@ -113,7 +98,6 @@ def gravar_contorno(uf: str, destino: Path) -> None:
 
 
 def simplificar(uf: str, destino: Path) -> None:
-    """Grava a versão simplificada das divisas municipais e diz quanto sobrou."""
     origem = fonte_municipal(uf)
     municipios = gpd.read_file(origem, encoding="utf-8")
     simplificado = _simplificada(municipios)

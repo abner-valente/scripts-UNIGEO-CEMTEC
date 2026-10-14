@@ -10,7 +10,6 @@ RAIZ = Path(__file__).resolve().parent.parent
 
 
 def test_cada_funcao_repassa_o_pedido_ao_inmet(monkeypatch):
-    """Com a fonte "apis", o pedido chega ao inmet com os mesmos argumentos, e a resposta volta igual."""
     pedidos = {}
 
     def anotar(nome):
@@ -37,7 +36,6 @@ def test_cada_funcao_repassa_o_pedido_ao_inmet(monkeypatch):
 
 
 def test_uma_fonte_que_nao_existe_para_com_o_nome_dela(monkeypatch):
-    """Um FONTE_DADOS escrito errado no servidor não pode cair em silêncio para as APIs."""
     monkeypatch.setattr(config, "FONTE_DADOS", "bancoo")
 
     with pytest.raises(ValueError, match="FONTE_DADOS='bancoo'.*apis"):
@@ -45,7 +43,6 @@ def test_uma_fonte_que_nao_existe_para_com_o_nome_dela(monkeypatch):
 
 
 def test_o_erro_da_fonte_e_o_que_os_produtos_tratam():
-    """Enquanto a única fonte é o INMET, quem trata ErroFonte trata a falha da API."""
     assert issubclass(inmet.ErroINMET, fonte.ErroFonte)
 
 
@@ -63,11 +60,5 @@ def _quem_importa_o_inmet(pasta: Path) -> list[str]:
 
 
 def test_produtos_e_painel_pedem_os_dados_a_fonte_e_nao_ao_inmet():
-    """A costura só funciona se ninguém passar por fora dela.
-
-    Quem importar o inmet direto continua lendo das APIs quando a instalação pedir o banco, e a
-    diferença só aparece no servidor. O inmet é de quem busca: o fonte.py e, mais tarde, os
-    coletores.
-    """
     assert _quem_importa_o_inmet(RAIZ / "modulos" / "produtos") == []
     assert _quem_importa_o_inmet(RAIZ / "app") == []

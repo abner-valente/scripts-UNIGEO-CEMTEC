@@ -24,7 +24,6 @@ def base():
 
 
 def test_superficie_cobre_todas_as_celulas_que_tocam_o_estado(base):
-    """Sem isso, a cor para antes da divisa e deixa falhas em degrau nas bordas do mapa interpolado."""
     lon, lat, dentro = base.lon_grade, base.lat_grade, base.dentro_uf
     estado = base.uf.geometry.union_all()
     shapely.prepare(estado)
@@ -47,14 +46,12 @@ def test_estacoes_com_zero_entram_no_mapa():
 
 
 def test_casas_decimais_dos_rotulos():
-    """Contagens (como horas) saem inteiras; medidas continuam com uma casa."""
     horas = mapas.EspecMapa("Risco", "Horas", "t", "s", "a", "YlOrRd", "h", "r", decimais=0)
     assert mapas._formato(horas)(5.0) == "5"
     assert mapas._formato(CHUVA)(5.0) == "5.0"
 
 
 def test_indicadores_ocupam_sempre_a_mesma_posicao():
-    """Cada indicador tem posição fixa sob a estação, mesmo quando os outros não aparecem."""
     tabela = pd.DataFrame({
         "Latitude": [-20.0, -22.0], "Longitude": [-55.0, -53.0], "Nível": [2, 1],
         "A": [True, False], "B": [False, True], "C": [True, False],
@@ -86,7 +83,6 @@ def test_dia_sem_chuva_em_nenhuma_estacao_ainda_gera_os_mapas(monkeypatch, tmp_p
 
 
 def test_mapa_devolve_a_figura_sem_gravar_nada(base):
-    """O explorador desenha na tela: pede a figura e não passa caminho nenhum."""
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
 
@@ -97,7 +93,6 @@ def test_mapa_devolve_a_figura_sem_gravar_nada(base):
 
 
 def test_na_tela_o_mapa_sai_sem_titulo_nem_logos(base, monkeypatch, tmp_path):
-    """Numa miniatura, título e logos institucionais só tomariam o lugar do mapa."""
     monkeypatch.setattr(config, "DPI", 40)
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
@@ -113,7 +108,6 @@ def test_na_tela_o_mapa_sai_sem_titulo_nem_logos(base, monkeypatch, tmp_path):
 
 
 def test_na_tela_o_mapa_sai_sem_barra_de_cores_e_sem_valores(base):
-    """A barra vertical e os valores de 62 estações não sobrevivem ao tamanho de uma coluna."""
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
 
@@ -128,7 +122,6 @@ def test_na_tela_o_mapa_sai_sem_barra_de_cores_e_sem_valores(base):
 
 
 def test_na_tela_nao_sai_a_grade_de_latitude_e_longitude(base):
-    """Numa miniatura a moldura de coordenadas toma a borda inteira do desenho e não se lê."""
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
 
@@ -142,7 +135,6 @@ def test_na_tela_nao_sai_a_grade_de_latitude_e_longitude(base):
 
 
 def test_na_tela_os_valores_saem_maiores(base):
-    """Encolhido para uma coluna, o corpo do relatório vira borrão."""
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
     escala = 1.5
@@ -155,7 +147,6 @@ def test_na_tela_os_valores_saem_maiores(base):
 
 
 def test_na_tela_o_valor_vai_contornado_e_sem_caixa(base):
-    """Num mapa do tamanho de uma coluna, o que cobre a estação vizinha é a caixa, não a letra."""
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
 
@@ -168,7 +159,6 @@ def test_na_tela_o_valor_vai_contornado_e_sem_caixa(base):
 
 
 def test_a_base_segue_o_enquadramento_do_recorte(base):
-    """O recorte anda junto com a chamada: quem pedir outro enquadramento recebe outra grade."""
     apertado = replace(config.RECORTE, limites=(-56.0, -53.0, -22.0, -19.0))
 
     outra = mapas.carregar_base(apertado)
@@ -181,7 +171,6 @@ def test_a_base_segue_o_enquadramento_do_recorte(base):
 
 
 def test_o_apoio_entra_na_interpolacao(base, monkeypatch):
-    """Se alguém tirar o apoio da conta, o desenho continua igual e ninguém percebe — daí o espião."""
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
     vizinha = mapas._preparar_dados(
@@ -201,7 +190,6 @@ def test_o_apoio_entra_na_interpolacao(base, monkeypatch):
 
 
 def test_o_apoio_muda_a_superficie_e_nao_o_desenho(base):
-    """As vizinhas seguram a borda: entram no IDW, mas não viram ponto, rótulo nem ranking."""
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
     vizinha = mapas._preparar_dados(
@@ -221,7 +209,6 @@ def test_o_apoio_muda_a_superficie_e_nao_o_desenho(base):
 
 
 def test_poucas_estacoes_nao_viram_superficie(base):
-    """Com dois pontos a interpolação inventaria o estado inteiro: melhor não desenhar."""
     tabela = ESTACOES.head(2).assign(**{"Chuva (mm)": [1.0, 2.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
     assert mapas.mapa_interpolado(gdf, CHUVA, base, tela=mapas.Tela()) is None
@@ -229,7 +216,6 @@ def test_poucas_estacoes_nao_viram_superficie(base):
 
 
 def test_as_vizinhas_entram_so_no_mapa_interpolado(monkeypatch, tmp_path, base):
-    """O mapa pontual é o do estado; as vizinhas só seguram a borda da superfície."""
     recebidos = {}
     monkeypatch.setattr(mapas, "mapa_pontual",
                         lambda dados, espec, base, caminho: recebidos.setdefault("pontual", len(dados)))
@@ -248,12 +234,6 @@ def test_as_vizinhas_entram_so_no_mapa_interpolado(monkeypatch, tmp_path, base):
 
 
 def test_a_vizinha_nao_estica_a_escala_de_cores(monkeypatch, base):
-    """Uma vizinha fora da faixa do estado não pode mudar a cor do miolo.
-
-    Sem níveis dados, a escala se estica à superfície. Sem a trava, a borda puxada pela vizinha
-    levava a régua junto: em MS, em 29/09/2026, a mínima foi de 18,3 para 16,4 °C por causa de uma
-    estação do lado de lá, e um terço dos pixels do mapa mudou de cor sem o miolo ter mudado.
-    """
     vistas = []
     monkeypatch.setattr(mapas, "mapa_de_grade", lambda grade, *args, **kwargs: vistas.append(grade))
     gdf = mapas._preparar_dados(ESTACOES.assign(**{"Chuva (mm)": [10.0, 12.0, 14.0, 16.0, 18.0]}), CHUVA)
@@ -284,8 +264,6 @@ def _cor_de_cada_classe(figura, niveis):
 
 
 def test_classes_desiguais_tem_uma_cor_por_classe_como_a_barra_da_tela():
-    """Pela régua do valor, as classes de 1 a 50 mm da chuva saíam quase brancas no mapa, e a barra
-    da tela (que pinta por classe) mostrava azuis bem mais fortes: quem lia pela barra errava."""
     from matplotlib import colormaps
     from matplotlib.colors import BoundaryNorm, to_hex
     base = mapas.carregar_base()
@@ -326,7 +304,6 @@ def test_na_anomalia_o_normal_sai_branco_mesmo_com_a_escala_assimetrica():
 
 
 def test_o_mapa_de_grade_sai_sem_estacoes():
-    """A superfície da previsão vem do modelo: sem a previsão das estações, o mapa sai sem os pontos."""
     base = mapas.carregar_base()
     espec = mapas.EspecMapa("", "v", "t", "s", "", "Blues", "mm", "5 MAIORES ACUMULADOS")
 
@@ -336,7 +313,6 @@ def test_o_mapa_de_grade_sai_sem_estacoes():
 
 
 def test_o_ranking_das_anomalias_e_pelo_tamanho_do_desvio():
-    """Numa semana fria, "as maiores" seriam as menos frias; o que se procura é o maior desvio."""
     base = mapas.carregar_base()
     pontos = gpd.GeoDataFrame(pd.DataFrame({"Estação": list("ABCDEF"), "v": [0.4, -3.4, -0.3, -2.9, 1.0, -0.1]}),
                               geometry=gpd.points_from_xy([-54.0] * 6, [-20.0 - i * 0.3 for i in range(6)]),

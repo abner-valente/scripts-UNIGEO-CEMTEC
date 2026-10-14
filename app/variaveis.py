@@ -33,12 +33,6 @@ MAPA, GRAFICO = "mapa", "grafico"
 
 @dataclass(frozen=True)
 class Produto:
-    """Uma coisa que se escolhe na tela, com a regra que a define.
-
-    `regra` não é comentário: vai impressa embaixo do mapa e do gráfico. É ela que responde à
-    pergunta "que média é essa?" sem ninguém precisar abrir o código.
-    """
-
     nome: str
     grandeza: str                  # agrupa os produtos no seletor (Temperatura, Vento, ...)
     modos: tuple[str, ...]
@@ -57,15 +51,6 @@ class Produto:
 # CÁLCULOS
 # =====================================================
 def _compensada_do_dia(dados: pd.DataFrame, colunas: tuple[str, ...]) -> float:
-    """Média compensada do INMET de um dia: (T9 + 2·T21 + Tmín + Tmáx) / 5.
-
-    As 9 h e as 21 h são horário do estado escolhido, como a equipe definiu — `dt_local` já vem
-    no fuso dele. Ambas caem dentro do nosso dia (da leitura das 01 h à das 00 h), então não há
-    deslocamento de dia nenhum.
-
-    Sem a leitura das 9 h ou das 21 h a fórmula não fecha, e o dia fica em branco: um buraco no
-    gráfico é honesto, um número inventado não.
-    """
     inst, maxima, minima = colunas
     horas = dados["dt_local"].dt.hour
     t9, t21 = dados.loc[horas == 9, inst].dropna(), dados.loc[horas == 21, inst].dropna()
@@ -75,12 +60,6 @@ def _compensada_do_dia(dados: pd.DataFrame, colunas: tuple[str, ...]) -> float:
 
 
 def _compensada(dados: pd.DataFrame, colunas: tuple[str, ...]) -> float:
-    """A compensada do dia; num período de vários dias, a média das compensadas diárias.
-
-    É assim que se fecha a média de um mês. Aplicar a fórmula ao período inteiro casaria as 9 h
-    do primeiro dia com a máxima de outro — um número que não é de dia nenhum. Dia incompleto sai
-    da média em vez de zerá-la.
-    """
     por_dia = dados.groupby(_fatias(dados, DIA), sort=False).apply(
         lambda dia: _compensada_do_dia(dia, colunas), include_groups=False)
     return por_dia.mean()
@@ -112,7 +91,6 @@ DIRECAO = "VEN_DIR"
 
 
 def _direcao_da_maior(dados: pd.DataFrame, coluna: str) -> float:
-    """A direção da hora em que aquela medida foi a maior — é a hora que o mapa está mostrando."""
     validos = dados.dropna(subset=[coluna, DIRECAO])
     if validos.empty:
         return float("nan")
@@ -120,12 +98,6 @@ def _direcao_da_maior(dados: pd.DataFrame, coluna: str) -> float:
 
 
 def _direcao_resultante(dados: pd.DataFrame, coluna: str) -> float:
-    """A resultante das horas: soma vetorial, cada hora pesada pela sua velocidade.
-
-    É a conta que responde "de onde veio o vento no período". A média dos ângulos não responde:
-    12 h de norte e 12 h de sul dariam leste, um rumo que não soprou em hora nenhuma. Aqui os
-    dois se cancelam e sobra o resto, que é o que de fato aconteceu.
-    """
     validos = dados.dropna(subset=[coluna, DIRECAO])
     if validos.empty:
         return float("nan")
@@ -284,14 +256,6 @@ HORAS_JANELA_CURTA = 96
 
 
 def escala(produto: Produto, horas_janela: float | None = None):
-    """Como colorir este produto: `("faixa", (mín, máx))`, `("classes", níveis)` ou None.
-
-    None quer dizer escala ajustada ao dado — é o caso da pressão, que a equipe preferiu manter
-    assim porque a API manda a pressão da estação, sem redução ao nível do mar: entre estações de
-    altitudes diferentes o mapa desenha mais o relevo do que o tempo.
-
-    `horas_janela` é a duração do que está sendo somado, e só importa para chuva e radiação.
-    """
     if produto.grandeza in FAIXAS_FIXAS:
         return "faixa", FAIXAS_FIXAS[produto.grandeza]
     curta = horas_janela is None or horas_janela <= HORAS_JANELA_CURTA
@@ -308,22 +272,14 @@ def escala(produto: Produto, horas_janela: float | None = None):
 # CONSULTA AO CATÁLOGO
 # =====================================================
 def disponiveis(modo: str, onde: str = MAPA) -> list[Produto]:
-    """Produtos que existem nesse modo e nesse lugar da tela, na ordem do catálogo."""
     return [produto for produto in PRODUTOS if modo in produto.modos and onde in produto.onde]
 
 
 def grandezas(modo: str, onde: str = MAPA) -> list[str]:
-    """Grandezas com ao menos um produto nesse modo, sem repetir e na ordem do catálogo."""
     return list(dict.fromkeys(produto.grandeza for produto in disponiveis(modo, onde)))
 
 
 def rotulo_curto(produto: Produto) -> str:
-    """O nome sem repetir a grandeza — "Temperatura máxima da hora" vira "Máxima da hora".
-
-    Num gráfico de Temperatura, a legenda não precisa dizer "Temperatura" quatro vezes. Mas se o
-    que sobra começa por preposição ("Chuva na hora" viraria "Na hora"), o nome inteiro fica: um
-    rótulo curto demais deixa de nomear coisa alguma.
-    """
     curto = produto.nome.replace(produto.grandeza, "").strip()
     if not curto or curto.split()[0] in {"na", "no", "da", "do", "de", "em"}:
         return produto.nome
@@ -341,31 +297,24 @@ def por_nome(nome: str) -> Produto:
 # CÁLCULO
 # =====================================================
 def calcular(produto: Produto, leituras: pd.DataFrame) -> float:
-    """Colapsa um punhado de leituras horárias no número do produto."""
     if leituras.empty or any(coluna not in leituras for coluna in produto.colunas):
         return float("nan")
     return CALCULOS[produto.calculo](leituras, produto.colunas)
 
 
 def _colapsar(produto: Produto, agrupado) -> pd.Series:
-    """Aplica a regra do produto a cada grupo, pelo caminho rápido quando dá."""
     if produto.calculo in ATALHOS:
         return agrupado[produto.colunas[0]].agg(ATALHOS[produto.calculo])
     return agrupado.apply(lambda dados: calcular(produto, dados), include_groups=False)
 
 
 def por_estacao(produto: Produto, leituras: pd.DataFrame) -> pd.Series:
-    """Um número por estação para a janela inteira — é o que o mapa interpola."""
     if leituras.empty or any(coluna not in leituras for coluna in produto.colunas):
         return pd.Series(dtype=float)
     return _colapsar(produto, leituras.groupby("Estação", sort=False)).rename(produto.nome)
 
 
 def direcoes(produto: Produto, leituras: pd.DataFrame) -> pd.Series:
-    """De onde veio o vento em cada estação, para a seta sobre o mapa.
-
-    Vazia quando o produto não leva seta — que é o caso de tudo o que não é vento.
-    """
     if produto.direcao is None or leituras.empty or DIRECAO not in leituras:
         return pd.Series(dtype=float)
     regra = DIRECOES[produto.direcao]
@@ -375,17 +324,11 @@ def direcoes(produto: Produto, leituras: pd.DataFrame) -> pd.Series:
 
 
 def _fatias(leituras: pd.DataFrame, modo: str) -> pd.Series:
-    """A que hora ou a que dia pertence cada leitura.
-
-    No modo diário a leitura das 00:00 fecha o dia anterior, como nos produtos: sem recuar essa
-    hora, uma semana viraria oito dias, e o último teria uma leitura só.
-    """
     marcas = leituras["dt_local"]
     return (marcas - pd.Timedelta(hours=1)).dt.normalize() if modo == DIA else marcas
 
 
 def momentos(leituras: pd.DataFrame, modo: str) -> list:
-    """As horas (ou os dias) que a janela contém — as paradas do deslizante do mapa."""
     if leituras.empty or modo == PERIODO:
         return []
     return sorted(_fatias(leituras, modo).unique())
@@ -396,13 +339,6 @@ MAX_MARCAS_DE_DIA = 62
 
 
 def marcas_dos_dias(paradas: list, dia_de=lambda parada: pd.Timestamp(parada).date()) -> list[float]:
-    """Onde riscar a virada de cada dia na linha do tempo do deslizante, em % da largura dele.
-
-    O deslizante põe a parada i em i/(n-1) da largura, e o risco vai na primeira parada de cada
-    dia novo. As paradas podem ser horas ou dias, e não precisam ser seguidas: no risco de fogo,
-    o deslizante pode parar só nas horas de risco alto. `dia_de` diz o dia de cada parada, no
-    fuso do estado. Num período longo, com dia demais, risca só a virada do mês.
-    """
     if len(paradas) < 2:
         return []
     dias = [dia_de(parada) for parada in paradas]
@@ -413,14 +349,12 @@ def marcas_dos_dias(paradas: list, dia_de=lambda parada: pd.Timestamp(parada).da
 
 
 def recorte(leituras: pd.DataFrame, modo: str, momento=None) -> pd.DataFrame:
-    """Só as leituras daquela hora, daquele dia — ou todas, no período inteiro."""
     if modo == PERIODO or momento is None:
         return leituras
     return leituras[_fatias(leituras, modo) == momento]
 
 
 def no_tempo(produto: Produto, leituras: pd.DataFrame, modo: str) -> pd.DataFrame:
-    """Uma coluna por estação e uma linha por hora ou por dia — é o que o gráfico desenha."""
     if leituras.empty:
         return pd.DataFrame()
     if any(coluna not in leituras for coluna in produto.colunas):

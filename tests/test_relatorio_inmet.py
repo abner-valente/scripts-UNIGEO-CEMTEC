@@ -32,7 +32,6 @@ def test_colunas_de_chuva_de_cada_modo():
 # ---------- Cálculos por estação ----------
 
 def test_dia_no_horario_de_ms(serie):
-    """Dia 30/07 em MS = leituras das 05 UTC de 30/07 às 04 UTC de 31/07 (cada leitura fecha a hora anterior)."""
     dados = serie("2026-07-29", "2026-08-01", CHUVA=0.0)
     dados.loc[dados["dt_utc"] == utc("2026-07-30 04:00"), "CHUVA"] = 50.0  # 23 h–24 h de 29/07 em MS: fica de fora
     dados.loc[dados["dt_utc"] == utc("2026-07-30 05:00"), "CHUVA"] = 3.0   # 0 h–1 h de 30/07 em MS
@@ -41,7 +40,6 @@ def test_dia_no_horario_de_ms(serie):
 
 
 def test_consulta_com_horarios(serie):
-    """Das 08 h de 14/09 às 08 h de 15/09 em MS = leituras das 13 UTC de 14/09 às 12 UTC de 15/09."""
     periodo = Periodo.de_datas(date(2026, 9, 14), date(2026, 9, 15), 8, 8)
     dados = serie("2026-09-14", "2026-09-16", CHUVA=0.0)
     dados.loc[dados["dt_utc"] == utc("2026-09-14 12:00"), "CHUVA"] = 50.0  # 07 h–08 h de 14/09: fica de fora
@@ -153,14 +151,12 @@ def test_falha_ao_listar_as_estacoes(api_simulada, monkeypatch):
 
 
 def test_nenhuma_estacao_com_dados_interrompe_o_relatorio(api_simulada, monkeypatch):
-    """Sem nenhuma estação (token errado, INMET instável) não faz sentido gerar planilha e mapas vazios."""
     monkeypatch.setattr(inmet, "baixar_estacoes", lambda inicio, fim, uf=config.UF, fuso=None: [])
     assert relatorio_inmet.executar(DIA) == 1
 
 
 
 def test_as_vizinhas_sao_baixadas_mas_nao_entram_na_planilha(api_simulada, capsys):
-    """Elas seguram a borda do mapa e não aparecem em aba nenhuma, nem no ranking."""
     assert relatorio_inmet.executar(DIA) == 0
 
     saida = capsys.readouterr().out

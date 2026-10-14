@@ -42,23 +42,16 @@ NIVEL_ALTO = 3
 # A REGRA 30-30-30
 # =====================================================
 def condicoes_atendidas(temp_max, umidade_min, rajada_kmh) -> tuple:
-    """Cada uma das três condições (True onde é atendida), na ordem temperatura, umidade e rajada."""
     return (np.asarray(temp_max) >= config.LIMIAR_TEMP_MAX,
             np.asarray(umidade_min) <= config.LIMIAR_UMIDADE_MIN,
             np.asarray(rajada_kmh) >= config.LIMIAR_RAJADA)
 
 
 def contar_condicoes(temp_max, umidade_min, rajada_kmh):
-    """Quantas das três condições são atendidas (0 a 3). Funciona com números, séries ou grades."""
     return sum(condicao.astype(int) for condicao in condicoes_atendidas(temp_max, umidade_min, rajada_kmh))
 
 
 def leituras_validas(dados: pd.DataFrame, periodo: Periodo) -> pd.DataFrame:
-    """Leituras da janela que têm as três variáveis, com a rajada já convertida para km/h.
-
-    Horas a que falta alguma das três ficam de fora: sem elas não dá para dizer quantas condições
-    valeram naquela hora.
-    """
     recorte = calculos.recortar(dados, *periodo.janela)
     if not set(COLUNAS_NECESSARIAS) <= set(recorte.columns):
         return recorte.iloc[0:0]
@@ -67,26 +60,15 @@ def leituras_validas(dados: pd.DataFrame, periodo: Periodo) -> pd.DataFrame:
 
 
 def niveis_por_hora(leituras: pd.DataFrame) -> pd.Series:
-    """Nível de risco (0 a 3) de cada hora, indexado pelo horário UTC da leitura."""
     niveis = contar_condicoes(leituras["TEM_MAX"], leituras["UMD_MIN"], leituras["rajada_kmh"])
     return pd.Series(niveis, index=pd.Index(leituras["dt_utc"]), dtype=int)
 
 
 def dia_da_leitura(horas: pd.DatetimeIndex, fuso=None):
-    """Dia (no horário do recorte) a que cada leitura pertence.
-
-    Cada leitura fecha a hora anterior, então a das 00:00 pertence ao dia que acabou de terminar.
-    Sem esse ajuste, uma consulta de sete dias produz oito dias, o último com uma hora só.
-    """
     return (horas - pd.Timedelta(hours=1)).tz_convert(fuso or config.FUSO_MS).date
 
 
 def horas_da_janela(periodo: Periodo) -> pd.DatetimeIndex:
-    """Horas cheias contidas na janela (início, fim].
-
-    No tempo real o fim cai no meio de uma hora (ex.: 13h25), por isso as pontas são ajustadas
-    para horas cheias, que é como as leituras do INMET chegam.
-    """
     inicio, fim = (pd.Timestamp(momento) for momento in periodo.janela)
     primeira = inicio.ceil("h")
     if primeira <= inicio:  # a janela é aberta no início: a leitura do próprio início não entra
@@ -99,11 +81,6 @@ def horas_da_janela(periodo: Periodo) -> pd.DatetimeIndex:
 # =====================================================
 def resumir_estacao(leituras: pd.DataFrame, estacao: pd.Series, periodo: Periodo,
                     uf: str = config.UF) -> dict:
-    """Linha da planilha: nível máximo, horas em cada nível e os valores que dispararam as condições.
-
-    Num período, acrescenta também em quantos dias a estação chegou a cada nível. A sigla vai
-    junto porque nomeia as colunas de horário local — são elas que dizem de que fuso se fala.
-    """
     niveis = niveis_por_hora(leituras)
     linha = {
         "Estação": estacao["Estação"],
@@ -128,24 +105,18 @@ def resumir_estacao(leituras: pd.DataFrame, estacao: pd.Series, periodo: Periodo
 
 
 def _dias_por_nivel(niveis: pd.Series, fuso=None) -> dict:
-    """Em quantos dias (no horário do estado) o pior nível da estação foi o alto e em quantos foi o médio."""
     por_dia = niveis.groupby(dia_da_leitura(pd.DatetimeIndex(niveis.index), fuso)).max()
     return {"Dias com Risco Alto": int((por_dia == NIVEL_ALTO).sum()),
             "Dias com Risco Médio": int((por_dia == NIVEL_MEDIO).sum())}
 
 
 def montar_tabela(resumos: list[dict]) -> pd.DataFrame:
-    """Tabela da planilha, das estações de maior para as de menor risco."""
     return pd.DataFrame(resumos).sort_values(
         [COLUNA_NIVEL, COLUNA_HORAS_ALTO], ascending=False, ignore_index=True
     )
 
 
 def _primeiro_horario(niveis: pd.Series, nivel: int, fuso=None) -> str:
-    """Primeira hora em que a estação alcançou esse nível, no horário do estado (vazio se nunca alcançou).
-
-    Serve para acompanhar quando o risco começou a subir, mesmo nos dias que não chegam ao nível alto.
-    """
     alcancadas = niveis[niveis >= nivel]
     if alcancadas.empty:
         return ""
@@ -156,7 +127,6 @@ def _primeiro_horario(niveis: pd.Series, nivel: int, fuso=None) -> str:
 # GRADES HORÁRIAS (as três variáveis interpoladas separadamente)
 # =====================================================
 def estacoes_na_hora(coletados: list, hora) -> pd.DataFrame:
-    """Estações com leitura completa naquela hora, com os valores e o nível de risco **da hora**."""
     linhas = []
     for estacao, leituras in coletados:
         leitura = leituras[leituras["dt_utc"] == hora]
@@ -180,7 +150,6 @@ def estacoes_na_hora(coletados: list, hora) -> pd.DataFrame:
 
 
 def grade_da_hora(pontos: pd.DataFrame, base: BaseCartografica) -> np.ndarray:
-    """Grade de níveis (0 a 3) daquela hora: interpola as três variáveis e aplica a regra por célula."""
     campos = [
         calculos.interpolar_idw(pontos["Longitude"], pontos["Latitude"], pontos[coluna],
                                 base.lon_grade, base.lat_grade, config.IDW_VIZINHOS, config.IDW_POTENCIA)
@@ -192,25 +161,16 @@ def grade_da_hora(pontos: pd.DataFrame, base: BaseCartografica) -> np.ndarray:
 
 @dataclass(frozen=True)
 class HoraAvaliada:
-    """O que foi calculado para uma hora: a grade de níveis e as estações com o nível daquela hora."""
-
     grade: np.ndarray
     estacoes: pd.DataFrame
 
     @property
     def nivel_estacoes(self) -> int:
-        """Maior nível observado nas estações naquela hora."""
         return int(self.estacoes[COLUNA_NIVEL_HORA].max())
 
 
 def analisar_horas(coletados: list, periodo: Periodo, base: BaseCartografica,
                    apoio: list = ()) -> dict:
-    """Avalia cada hora da janela. Horas com poucas estações para interpolar ficam de fora.
-
-    As vizinhas (`apoio`) entram na **grade** e em nada mais. As estações guardadas na hora são
-    só as do estado — e é por elas que se decide que hora ganha mapa: uma estação do Paraná em
-    risco alto não pode gerar o mapa horário de uma hora em que nenhuma de MS chegou lá.
-    """
     horas = {}
     for hora in horas_da_janela(periodo):
         estacoes = estacoes_na_hora(coletados, hora)
@@ -222,11 +182,6 @@ def analisar_horas(coletados: list, periodo: Periodo, base: BaseCartografica,
 
 
 def horas_para_mapear(horas: dict, todas_as_horas: bool = False) -> dict:
-    """Horas que ganham mapa próprio.
-
-    O critério é o nível observado **nas estações**, não o da superfície interpolada: a estação é
-    o dado medido, e a superfície pode mostrar nível 2 onde nenhuma estação chegou a 2.
-    """
     if todas_as_horas:
         return dict(horas)
     return {hora: avaliada for hora, avaliada in horas.items()
@@ -241,54 +196,39 @@ def _espec_classes(titulo: str, subtitulo: str, arquivo: str) -> EspecClasses:
 
 
 def espec_nivel_maximo(sigla: str, subtitulo: str) -> EspecClasses:
-    """O mapa do pior nível que cada lugar alcançou na janela.
-
-    Esta e as duas seguintes são públicas porque o painel baixa os mesmos mapas na moldura do
-    relatório: o título que a equipe publica não pode ter duas versões.
-    """
     return _espec_classes(f"Risco de Fogo — Nível Máx. em {sigla}", subtitulo,
                           f"Mapa_Risco_Fogo_Nivel_{sigla}")
 
 
 def espec_horas_em_risco_alto(sigla: str, subtitulo: str) -> EspecMapa:
-    """O mapa de exposição: em quantas horas cada lugar esteve no risco alto."""
     return EspecMapa(ABA, COLUNA_HORAS_ALTO, f"Horas Agregadas de risco alto de fogo em {sigla}", subtitulo,
                      f"Mapa_Risco_Fogo_Horas_{sigla}", "YlOrRd", "Horas em risco alto",
                      "5 MAIORES EXPOSIÇÕES", decimais=0)  # horas são contagens: sem casas decimais
 
 
 def espec_da_hora(local, sigla: str) -> EspecClasses:
-    """O mapa de uma hora, com ela e o fuso no subtítulo: 03/09/2026 11:00 GMT-04."""
     return _espec_classes(f"Risco de Fogo em {sigla}", f"{local:%d/%m/%Y %H:%M} {config._gmt(local)}",
                           f"Mapa_Risco_Fogo_{sigla}")
 
 
 def rotulos_condicoes() -> list[str]:
-    """Como cada condição aparece nas legendas, com o seu limiar.
-
-    Pública porque a aba de risco do painel mostra as mesmas legendas: a tela e o relatório
-    não podem nomear a mesma condição de dois jeitos.
-    """
     return [f"Temperatura máx. ≥ {config.LIMIAR_TEMP_MAX:g} °C",
             f"Umidade mín. ≤ {config.LIMIAR_UMIDADE_MIN:g} %",
             f"Rajada ≥ {config.LIMIAR_RAJADA:g} km/h"]
 
 
 def indicadores_condicoes() -> Indicadores:
-    """Pontos das condições atendidas nos mapas horários: temperatura à esquerda, umidade no meio, rajada à direita."""
     return Indicadores(COLUNAS_CONDICOES, rotulos_condicoes(), config.CORES_CONDICOES,
                        "Condições atendidas (esquerda → direita)")
 
 
 def _niveis_continuos(grade: np.ndarray):
-    """Faixas da barra de cores; se a grade for constante, abre a escala para o contourf funcionar."""
     minimo, maximo = float(np.min(grade)), float(np.max(grade))
     return 20 if maximo > minimo else np.linspace(minimo, minimo + 1, 11)
 
 
 def gerar_mapas(tabela: pd.DataFrame, horas: dict, periodo: Periodo, base: BaseCartografica,
                 pasta: Path, todas_as_horas: bool = False) -> None:
-    """Mapas de síntese (nível máximo e horas em risco alto) e os mapas horários."""
     gdf = mapas.preparar_pontos(tabela, COLUNA_NIVEL, TITULO)
     if gdf is None:
         return
@@ -318,11 +258,6 @@ def gerar_mapas(tabela: pd.DataFrame, horas: dict, periodo: Periodo, base: BaseC
 
 
 def _mapas_horarios(horas: dict, base: BaseCartografica, pasta: Path, todas_as_horas: bool) -> None:
-    """Um mapa interpolado por hora, nas horas selecionadas por horas_para_mapear.
-
-    As estações de cada mapa (rótulos e contagem da legenda) são as daquela hora, com o nível
-    daquela hora — e não a tabela do dia, que traz o nível máximo.
-    """
     selecionadas = horas_para_mapear(horas, todas_as_horas)
     if not selecionadas:
         print(f"ℹ️ Nenhuma estação chegou ao {config.ROTULOS_RISCO[config.NIVEL_MAPA_HORARIO].lower()} "
@@ -343,7 +278,6 @@ def _mapas_horarios(horas: dict, base: BaseCartografica, pasta: Path, todas_as_h
 # GRÁFICOS (só no período)
 # =====================================================
 def tabela_horaria(completas: list, fuso=None) -> pd.DataFrame:
-    """Uma linha por estação e hora, com as condições atendidas, o nível e o dia daquela leitura."""
     quadros = []
     for estacao, leituras in completas:
         atendidas = condicoes_atendidas(leituras["TEM_MAX"], leituras["UMD_MIN"], leituras["rajada_kmh"])
@@ -362,29 +296,17 @@ NIVEIS_DO_PIOR = [NIVEL_ALTO, NIVEL_MEDIO, 1]
 
 
 def horas_por_nivel(horas: pd.DataFrame) -> pd.DataFrame:
-    """Quantas horas cada estação passou em cada nível, com as colunas do alto para o baixo.
-
-    Sem filtrar as linhas: reindexar as colunas já descarta o nível 0 e mantém as estações que
-    não atenderam condição nenhuma, que precisam aparecer (em cinza) no calendário.
-    """
     return (horas.pivot_table(index="Estação", columns=COLUNA_NIVEL_HORA, values="dia", aggfunc="count")
             .reindex(columns=NIVEIS_DO_PIOR).fillna(0))
 
 
 def calendario_de_niveis(horas: pd.DataFrame, ordem) -> pd.DataFrame:
-    """O pior nível de cada estação em cada dia, com as estações na ordem dada.
-
-    O dia em que a estação não teve nenhuma hora com as três medidas fica vazio, e não zero: zero
-    é "mediu, e nenhuma condição valeu". Até 13/10/2026 ele virava zero, e uma estação parada saía
-    no calendário como se tivesse medido.
-    """
     return (horas.pivot_table(index="Estação", columns="dia", values=COLUNA_NIVEL_HORA, aggfunc="max")
             .reindex(ordem))
 
 
 def gerar_graficos(horas: pd.DataFrame, periodo: Periodo, pasta: Path,
                    recorte: config.Recorte = config.RECORTE) -> None:
-    """Três gráficos do período: horas por nível, calendário dos dias e as condições de cada dia."""
     titulo = f"Risco de Fogo por Estação em {recorte.uf}"
     janela = periodo.descrever_janela(*periodo.janela)
 
@@ -420,7 +342,6 @@ def gerar_graficos(horas: pd.DataFrame, periodo: Periodo, pasta: Path,
 # EXECUÇÃO
 # =====================================================
 def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
-    """Coleta os dados, calcula o risco e grava a planilha e os mapas. Retorna 0 se deu certo."""
     opcoes = opcoes or {}
     recorte = opcoes.get("recorte", config.RECORTE)
     print("=" * 60)

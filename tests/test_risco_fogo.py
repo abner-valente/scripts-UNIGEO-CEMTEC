@@ -44,7 +44,6 @@ def test_contagem_das_condicoes(temperatura, umidade, rajada, nivel):
 # ---------- Hora a hora ----------
 
 def test_condicoes_em_horas_diferentes_nao_viram_risco_alto(serie):
-    """O ponto central do produto: calor às 14 h, seca às 17 h e vento às 05 h não é 30-30-30."""
     dados = serie("2026-09-16", "2026-09-17 05:00", TEM_MAX=FRIO, UMD_MIN=UMIDO, VEN_RAJ=CALMO)
     dados.loc[dados["dt_utc"] == utc("2026-09-16 18:00"), "TEM_MAX"] = QUENTE   # 14 h em MS
     dados.loc[dados["dt_utc"] == utc("2026-09-16 21:00"), "UMD_MIN"] = SECO     # 17 h em MS
@@ -113,7 +112,6 @@ def test_resumo_conta_as_horas_de_cada_nivel(serie):
 
 
 def test_as_colunas_de_horario_do_risco_levam_a_sigla_do_estado(serie):
-    """São duas colunas de horário local na planilha do risco; as duas diziam (MS) em toda UF."""
     dados = serie("2026-09-16", "2026-09-17 05:00", TEM_MAX=QUENTE, UMD_MIN=SECO, VEN_RAJ=VENTOSO)
     linha = risco_fogo.resumir_estacao(risco_fogo.leituras_validas(dados, DIA), ESTACAO, DIA, "SC")
 
@@ -157,7 +155,6 @@ def test_hrtodas_mapeia_todas_as_horas():
 
 
 def test_criterio_olha_as_estacoes_e_nao_a_superficie():
-    """A superfície pode chegar ao risco alto por interpolação sem que nenhuma estação tenha chegado."""
     horas = {1: _hora(nivel_estacoes=2, nivel_grade=3)}
     assert risco_fogo.horas_para_mapear(horas) == {}
 
@@ -165,7 +162,6 @@ def test_criterio_olha_as_estacoes_e_nao_a_superficie():
 # ---------- Mapas horários ----------
 
 def test_estacoes_da_hora_trazem_as_condicoes_e_o_nivel_daquela_hora(serie):
-    """Nos mapas horários, cada estação leva as condições e o nível da hora, e não o máximo do dia."""
     dados = serie("2026-09-16", "2026-09-17 05:00", TEM_MAX=FRIO, UMD_MIN=UMIDO, VEN_RAJ=CALMO)
     dados.loc[dados["dt_utc"] == utc("2026-09-16 18:00"), ["TEM_MAX", "UMD_MIN", "VEN_RAJ"]] = [QUENTE, SECO, VENTOSO]
     dados.loc[dados["dt_utc"] == utc("2026-09-16 20:00"), "UMD_MIN"] = SECO
@@ -181,7 +177,6 @@ def test_estacoes_da_hora_trazem_as_condicoes_e_o_nivel_daquela_hora(serie):
 
 
 def test_mapa_horario_recebe_as_estacoes_da_hora(monkeypatch, tmp_path):
-    """Rótulos e legenda do mapa horário vêm das estações daquela hora."""
     desenhados = []
     monkeypatch.setattr(risco_fogo.mapas, "mapa_classes_interpolado",
                         lambda grade, gdf, coluna, espec, base, caminho, indicadores=None:
@@ -200,7 +195,6 @@ def test_mapa_horario_recebe_as_estacoes_da_hora(monkeypatch, tmp_path):
 # ---------- Execução completa ----------
 
 def test_periodo_conta_os_dias_de_cada_nivel(serie):
-    """Num período, a planilha diz em quantos dias a estação chegou a cada nível."""
     dados = serie("2026-09-14", "2026-09-17 05:00", TEM_MAX=QUENTE, UMD_MIN=UMIDO, VEN_RAJ=CALMO)  # nível 1
     dados.loc[dados["dt_utc"] == utc("2026-09-14 18:00"), ["UMD_MIN", "VEN_RAJ"]] = [SECO, VENTOSO]  # 14/09: nível 3
     dados.loc[dados["dt_utc"] == utc("2026-09-15 18:00"), "UMD_MIN"] = SECO                          # 15/09: nível 2
@@ -212,7 +206,6 @@ def test_periodo_conta_os_dias_de_cada_nivel(serie):
 
 
 def test_a_leitura_da_meia_noite_pertence_ao_dia_que_terminou():
-    """Sem isso, uma consulta de sete dias produz oito dias, o último com uma hora só."""
     horas = pd.DatetimeIndex([utc("2026-09-16 04:00"), utc("2026-09-16 05:00")])  # 00 h e 01 h de MS
     assert [str(dia) for dia in risco_fogo.dia_da_leitura(horas)] == ["2026-09-15", "2026-09-16"]
 
@@ -274,11 +267,6 @@ def test_execucao_completa(api_simulada, tmp_path):
 # ---------- Estações vizinhas ----------
 
 def test_as_vizinhas_entram_na_grade_e_nao_decidem_a_hora(monkeypatch):
-    """Uma vizinha em risco alto mexe na borda, mas não gera mapa horário para o estado.
-
-    O mapa horário sai quando uma estação **do estado** chega ao risco alto. Se a do Paraná
-    contasse, MS ganharia o mapa de uma hora em que nenhuma estação dele chegou lá.
-    """
     pontos_na_grade = []
     monkeypatch.setattr(risco_fogo, "grade_da_hora",
                         lambda pontos, base: pontos_na_grade.append(len(pontos)) or np.zeros((2, 2)))
@@ -302,7 +290,6 @@ def test_as_vizinhas_entram_na_grade_e_nao_decidem_a_hora(monkeypatch):
 
 
 def test_os_titulos_dos_mapas_sao_os_que_a_equipe_publica():
-    """O painel baixa estes mesmos mapas: um título mudado aqui muda nos dois lugares."""
     local = datetime(2026, 9, 3, 11, tzinfo=config.recorte_de("SC").fuso)
 
     nivel = risco_fogo.espec_nivel_maximo("SC", "03/09/2026")
@@ -318,14 +305,12 @@ def test_os_titulos_dos_mapas_sao_os_que_a_equipe_publica():
 # ---------- Os gráficos do período ----------
 
 def horas_de_teste() -> pd.DataFrame:
-    """A tabela horária do produto, pequena: Alfa mede nos dois dias, Beta só no segundo."""
     linhas = [("Alfa", date(2026, 10, 6), 3), ("Alfa", date(2026, 10, 6), 1), ("Alfa", date(2026, 10, 7), 0),
               ("Beta", date(2026, 10, 7), 2), ("Beta", date(2026, 10, 7), 2)]
     return pd.DataFrame(linhas, columns=["Estação", "dia", risco_fogo.COLUNA_NIVEL_HORA])
 
 
 def test_as_horas_por_nivel_vao_do_alto_para_o_baixo():
-    """Pedido da equipe (13/10/2026): a estação que chegou ao risco alto mostra o vermelho primeiro."""
     por_nivel = risco_fogo.horas_por_nivel(horas_de_teste())
 
     assert list(por_nivel.columns) == [risco_fogo.NIVEL_ALTO, risco_fogo.NIVEL_MEDIO, 1]
@@ -334,7 +319,6 @@ def test_as_horas_por_nivel_vao_do_alto_para_o_baixo():
 
 
 def test_o_dia_sem_dado_fica_vazio_no_calendario_e_nao_vira_sem_condicao():
-    """Zero é "mediu, e nenhuma condição valeu". Até 13/10/2026 o dia sem dado virava zero."""
     calendario = risco_fogo.calendario_de_niveis(horas_de_teste(), ["Beta", "Alfa"])
 
     assert list(calendario.index) == ["Beta", "Alfa"]

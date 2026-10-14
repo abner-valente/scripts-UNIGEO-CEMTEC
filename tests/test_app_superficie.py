@@ -48,7 +48,6 @@ def test_fora_do_estado_a_imagem_e_transparente(grade):
 
 
 def test_o_norte_fica_no_alto_da_imagem(grade):
-    """Trocar a orientação deixaria o mapa de cabeça para baixo sobre o mapa base."""
     png = imagem(superficie.superficie_png(ESTACOES, "Temperatura", grade, "RdYlBu_r"))
 
     dentro = np.flipud(grade.dentro)
@@ -68,7 +67,6 @@ def test_a_escala_vai_do_menor_ao_maior_valor_medido():
 
 
 def test_estado_todo_com_o_mesmo_valor_nao_quebra(grade):
-    """Chuva zero no estado inteiro é o caso comum: sem variação, tudo vai para o pé da escala."""
     parado = ESTACOES.assign(Temperatura=0.0)
     png = imagem(superficie.superficie_png(parado, "Temperatura", grade, "RdYlBu_r"))
     dentro = np.flipud(grade.dentro)
@@ -89,7 +87,6 @@ def test_o_uri_carrega_o_png():
 # ESCALA FIXA
 # =====================================================
 def test_escala_fixa_da_a_mesma_cor_ao_mesmo_valor():
-    """É o ponto da escala fixa: 25 °C tem a mesma cor num dia frio e num dia quente."""
     faixa = np.linspace(0, 45, 21)
     frio = np.array([[10.0, 25.0, 12.0]])
     quente = np.array([[40.0, 25.0, 41.0]])
@@ -98,7 +95,6 @@ def test_escala_fixa_da_a_mesma_cor_ao_mesmo_valor():
 
 
 def test_sem_escala_fixa_a_mesma_temperatura_muda_de_cor():
-    """O problema que a escala fixa resolve: a cor dependia do resto do mapa."""
     frio = pd.Series([10.0, 25.0, 12.0])
     quente = pd.Series([40.0, 25.0, 41.0])
 
@@ -107,7 +103,6 @@ def test_sem_escala_fixa_a_mesma_temperatura_muda_de_cor():
 
 
 def test_classes_agrupam_valores_da_mesma_faixa():
-    """Dentro de uma classe a cor é uma só: 12 mm e 18 mm caem na mesma faixa de 10 a 20."""
     classes = np.array([0.2, 1, 5, 10, 20])
     dentro_da_faixa = superficie._pela_escala(np.array([[12.0, 18.0, 25.0]]), classes)[0]
 
@@ -116,7 +111,6 @@ def test_classes_agrupam_valores_da_mesma_faixa():
 
 
 def test_abaixo_da_primeira_classe_de_chuva_nao_se_pinta(grade):
-    """Pintar 0 mm de azul claro inventaria chuva que não houve."""
     classes = [0.2, 1, 5, 10, 20]
     seco = ESTACOES.assign(Chuva=[0.0, 0.0, 0.0, 0.0, 0.0])
 
@@ -126,7 +120,6 @@ def test_abaixo_da_primeira_classe_de_chuva_nao_se_pinta(grade):
 
 
 def test_valor_acima_do_teto_fica_na_cor_do_extremo(grade):
-    """Numa escala fixa, o que passa do teto não pode sumir do mapa."""
     faixa = np.linspace(0, 45, 21)
     quente = ESTACOES.assign(Temperatura=[60.0] * 5)  # acima do teto da escala
 

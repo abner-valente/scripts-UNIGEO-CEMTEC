@@ -40,7 +40,6 @@ VIZINHAS = [
 
 
 def serie_horaria(inicio: str, fim: str, **valores) -> pd.DataFrame:
-    """Registros horários em [início, fim), em UTC, no formato devolvido por inmet.baixar_dados_estacao."""
     horas = pd.date_range(pd.Timestamp(inicio, tz="UTC"), pd.Timestamp(fim, tz="UTC"), freq="h", inclusive="left")
     dados = pd.DataFrame({"dt_utc": horas, **{**VALORES_PADRAO, **valores}})
     dados["dt_local"] = dados["dt_utc"].dt.tz_convert(config.FUSO_MS)
@@ -54,7 +53,6 @@ def serie():
 
 @pytest.fixture(autouse=True)
 def sem_esperas(monkeypatch):
-    """Nenhum teste dorme: as pausas entre requisições e entre tentativas ficam em zero."""
     monkeypatch.setattr(config, "PAUSA_ENTRE_REQUISICOES", 0)
     monkeypatch.setattr(config, "PAUSA_ENTRE_TENTATIVAS", 0)
     monkeypatch.setattr(config, "PAUSA_NO_LIMITE", 0)
@@ -63,16 +61,6 @@ def sem_esperas(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def sem_rede(monkeypatch):
-    """Nenhum teste fala com a internet: quem tentar, falha na hora e diz o endereço.
-
-    Existe porque em 01/10/2026 os testes dos produtos passaram a consultar o INMET de verdade
-    sem ninguém notar — passavam porque a API respondia. Na CI isso é teste que depende do
-    humor de um servidor alheio. Toda requisição passa por Session.request, então fechar ali
-    fecha tudo; o teste que quiser simular a rede troca Session.get por cima, e ganha.
-
-    O erro não é RequestException de propósito: o _consultar trataria como falha passageira
-    e tentaria de novo, escondendo o problema atrás das retentativas.
-    """
     def recusar(self, metodo, url, *args, **kwargs):
         raise RuntimeError(f"teste tentou acessar a rede: {metodo} {url.split('/token/')[0]}")
 
@@ -81,7 +69,6 @@ def sem_rede(monkeypatch):
 
 @pytest.fixture
 def api_simulada(monkeypatch, tmp_path):
-    """Troca a API do INMET por dados sintéticos e grava as saídas numa pasta temporária."""
     estacoes = pd.DataFrame(ESTACOES, columns=["CD_ESTACAO", "DC_NOME", "VL_LONGITUDE", "VL_LATITUDE"])
     estacoes["SG_ESTADO"] = config.UF
     estacoes["Estação"] = estacoes["DC_NOME"].map(inmet.formatar_nome_estacao)
@@ -124,11 +111,6 @@ def api_simulada(monkeypatch, tmp_path):
 
 @pytest.fixture(scope="module")
 def conexao():
-    """Uma conexão com o banco de teste, no schema `climageo_teste` recriado do zero.
-
-    Na máquina de quem programa, a conexão vem do BANCO_TESTE do .env; na CI, de um PostgreSQL 16
-    com PostGIS que o GitHub Actions sobe só para os testes. Sem ela, o teste é pulado.
-    """
     if not os.getenv("BANCO_TESTE", "").strip():
         pytest.skip("sem BANCO_TESTE no .env: os testes do banco ficam para a CI")
     with banco.conectar("teste", schema=SCHEMA_DE_TESTE) as aberta:
@@ -139,7 +121,6 @@ def conexao():
 
 @pytest.fixture
 def limpa(conexao):
-    """Cada teste começa com as tabelas vazias e sem partições."""
     for tabela in banco.PARTICOES:
         for nome in banco.particoes(conexao, tabela):
             conexao.execute(f'DROP TABLE "{nome}"')

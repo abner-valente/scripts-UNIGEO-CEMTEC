@@ -27,7 +27,6 @@ LISTA = pd.DataFrame([
 
 
 def hora_do_inmet(momento: datetime, tem_ins: float = 30.0) -> pd.DataFrame:
-    """Uma hora como `inmet.baixar_hora` devolve: duas da lista, uma que fechou (A004) e uma vazia."""
     linhas = [("A702", "CAMPO GRANDE", "MS", -20.44, -54.72, tem_ins, 1234.567),
               ("A721", "DOURADOS", "MS", -22.19, -54.91, tem_ins - 2, 1000.05),
               ("A004", "NIQUELANDIA", "GO", -14.47, -48.46, tem_ins + 1, np.nan),
@@ -43,7 +42,6 @@ def hora_do_inmet(momento: datetime, tem_ins: float = 30.0) -> pd.DataFrame:
 
 @pytest.fixture
 def inmet_simulado(monkeypatch):
-    """O INMET do teste: anota as horas e as estações pedidas, e falha nas que o teste mandar."""
     pedidas = {"horas": [], "estacoes": [], "falhar": set(), "tem_ins": 30.0}
 
     def baixar_hora(momento):
@@ -164,8 +162,6 @@ def test_sem_a_lista_a_coleta_segue(limpa, inmet_simulado, monkeypatch, capsys):
 
 def test_a_estacao_sem_como_cadastrar_fica_de_fora_e_nao_derruba_as_outras(limpa, inmet_simulado, monkeypatch,
                                                                             capsys):
-    """Fora da lista e sem UF na consulta por hora: a leitura dela quebraria a chave do cadastro, e
-    a gravação das outras cairia junto, toda hora, até o INMET mudar."""
     simulada = inmet.baixar_hora
 
     def com_uma_sem_uf(momento):
@@ -193,7 +189,6 @@ def test_os_extras_vem_por_estacao_e_nao_apagam_a_consulta_por_hora(limpa, inmet
 
 
 def test_os_extras_gravam_em_lotes(limpa, inmet_simulado, monkeypatch):
-    """Uma conexão parada por 10 minutos o servidor derruba, e as ~500 estações levam uns 9."""
     coletor_inmet.coletar_ultimas(limpa, agora=AGORA, quantas=2)
     gravacoes = []
     gravar = banco.gravar_extras_inmet
@@ -295,7 +290,6 @@ def test_o_coletar_com_ate_sem_historico_e_recusado():
 
 
 def test_o_coletar_no_banco_de_teste(conexao, limpa, inmet_simulado, monkeypatch):
-    """O caminho inteiro, como o Agendador o chama: sai 0 quando tudo deu certo e 1 quando algo falhou."""
     monkeypatch.setattr(config, "TOKEN_INMET", "token-de-teste")
     monkeypatch.setattr(coletor_inmet, "HORAS_REBUSCADAS", 3)
     monkeypatch.setattr(coletor_inmet, "ultimas_horas",
@@ -309,7 +303,6 @@ def test_o_coletar_no_banco_de_teste(conexao, limpa, inmet_simulado, monkeypatch
 
 @pytest.fixture
 def historico_simulado(monkeypatch):
-    """O coletar.py sem banco: a conexão é de mentira, e a carga anota com que datas foi chamada."""
     monkeypatch.setattr(config, "TOKEN_INMET", "token-de-teste")
     monkeypatch.setattr(coletar, "ESPERA_PARA_RECONECTAR", 0)
     monkeypatch.setattr(banco, "conectar", lambda *args, **kwargs: nullcontext("conexão"))
@@ -326,7 +319,6 @@ def historico_simulado(monkeypatch):
 
 
 def test_o_historico_reconecta_e_retoma_quando_a_conexao_cai(historico_simulado, capsys):
-    """São ~22 horas sem ninguém olhando: o servidor derruba a conexão parada por 10 minutos."""
     historico_simulado["quedas"] = 1
 
     assert coletar.main(["inmet", "--historico", "2018-01-01", "--ate", "2018-01-01"]) == 0
@@ -346,7 +338,6 @@ def test_o_historico_desiste_depois_de_tantas_quedas(historico_simulado, monkeyp
 
 
 def test_o_ate_inclui_o_ultimo_dia_inteiro(historico_simulado):
-    """--ate 2018-12-31 é até o fim do dia 31: a 00:00 de 01/01 fecha a última hora dele."""
     coletar.main(["inmet", "--historico", "2018-01-01", "--ate", "2018-12-31"])
 
     assert historico_simulado["datas"] == [(datetime(2018, 1, 1, tzinfo=timezone.utc),

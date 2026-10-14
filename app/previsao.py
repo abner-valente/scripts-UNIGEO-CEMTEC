@@ -35,33 +35,15 @@ CORES = {"ECMWF": "#1f77b4", "GFS": "#ff7f0e", "ICON": "#2ca02c"}
 # =====================================================
 @dataclass(frozen=True)
 class Obtida:
-    """A previsão de um modelo, e o aviso quando ela não é a rodada mais nova."""
-
     tabela: pd.DataFrame
     aviso: str | None = None
 
 
 def rodada_da(tabela: pd.DataFrame) -> datetime | None:
-    """A rodada carimbada na tabela, que é uma só: cada tabela guardada é de um modelo."""
     return None if tabela.empty else tabela["rodada_utc"].iloc[0]
 
 
 class Guarda:
-    """A última previsão de cada modelo, guardada no processo e dividida por todos.
-
-    O painel roda o script a cada clique, mas a previsão só muda quando sai uma rodada nova, de 6
-    em 6 horas. Guardada aqui, a primeira pessoa depois da rodada espera a busca, e as outras
-    recebem a mesma tabela. A chave é a rodada, e não o relógio (decisão 7 do escopo).
-
-    Cada modelo é buscado e guardado sozinho. As rodadas saem em horas diferentes (o ICON fica
-    pronto umas 3 h e meia depois do horário dela, o ECMWF quase 8 h depois), e um pedido com
-    os três modelos teria de ser refeito inteiro a cada uma: 2,1 chamadas por ponto contra 1.
-
-    Se o Open-Meteo falhar, a página segue com a rodada guardada e um aviso com a data dela, como
-    pede o escopo. Uma trava por modelo impede que duas pessoas busquem a mesma rodada ao mesmo
-    tempo, o que gastaria a cota duas vezes.
-    """
-
     def __init__(self) -> None:
         self._tabelas: dict[tuple[str, str], pd.DataFrame] = {}
         self._travas: dict[tuple[str, str], threading.Lock] = {}
@@ -72,7 +54,6 @@ class Guarda:
             return self._travas.setdefault(chave, threading.Lock())
 
     def precisa_buscar(self, pontos: str, modelo: str, rodada: datetime | None) -> bool:
-        """Se a próxima `obter` vai ao Open-Meteo: não há nada guardado, ou saiu rodada nova."""
         guardada = self._tabelas.get((pontos, modelo))
         if guardada is None:
             return True
@@ -80,13 +61,6 @@ class Guarda:
 
     def obter(self, pontos: str, modelo: str, rodada: datetime | None,
               buscar: Callable[[], pd.DataFrame]) -> Obtida:
-        """A previsão do modelo, buscando só se a rodada guardada ficou para trás.
-
-        `pontos` nomeia o conjunto de pontos ("estações", "grade"), e `rodada` é a que o
-        Open-Meteo diz estar servindo, ou None quando nem isso respondeu. A comparação é "ficou
-        para trás", e não "é diferente": a busca pode trazer uma rodada mais nova que a conferida
-        minutos antes, e essa não deve ser buscada de novo.
-        """
         chave = (pontos, modelo)
         with self._trava(chave):
             # Conferido dentro da trava: quem esperou a busca de outra pessoa já sai com ela
@@ -110,8 +84,6 @@ class Guarda:
 # =====================================================
 @dataclass(frozen=True)
 class Serie:
-    """Uma linha do gráfico: de que coluna sai e a regra impressa embaixo dele."""
-
     coluna: str        # da tabela horária do openmeteo, ou da diária, conforme o modo
     nome: str
     regra: str
@@ -119,8 +91,6 @@ class Serie:
 
 @dataclass(frozen=True)
 class Grandeza:
-    """Um gráfico da página, com as séries de cada modo."""
-
     nome: str
     unidade: str
     decimais: int
@@ -165,11 +135,6 @@ GRANDEZAS = {g.nome: g for g in (
 
 
 def _por_modo(horaria: pd.DataFrame, modo: str, fuso, desde: pd.Timestamp) -> pd.DataFrame:
-    """A tabela do modo, com o instante local em `dt_local`, só do momento `desde` em diante.
-
-    No diário entram só os dias inteiros: o último da previsão e o último do ICON param no meio, e
-    uma máxima de meio dia pareceria uma queda de temperatura que nenhum modelo previu.
-    """
     if modo == HORA:
         tabela = horaria.assign(dt_local=horaria["hora_prevista_utc"].dt.tz_convert(fuso))
         return tabela[tabela["dt_local"] >= desde]
@@ -181,11 +146,6 @@ def _por_modo(horaria: pd.DataFrame, modo: str, fuso, desde: pd.Timestamp) -> pd
 
 def series(horaria: pd.DataFrame, grandeza: str, modo: str, desde: pd.Timestamp,
            fuso=config.FUSO_MS) -> pd.DataFrame:
-    """As linhas do gráfico de uma grandeza num ponto: `dt_local`, `Modelo`, `valor` e `Série`.
-
-    `horaria` é a previsão do ponto, com um ou mais modelos. `desde` corta o que já passou: no
-    modo horário, a hora em curso; no diário, o dia de hoje inteiro.
-    """
     colunas = ["dt_local", "Modelo", "valor", "Série"]
     if horaria.empty:
         return pd.DataFrame(columns=colunas)
@@ -198,7 +158,6 @@ def series(horaria: pd.DataFrame, grandeza: str, modo: str, desde: pd.Timestamp,
 
 
 def chuva_total(horaria: pd.DataFrame, desde: pd.Timestamp, fuso=config.FUSO_MS) -> pd.DataFrame:
-    """Quanto cada modelo prevê de chuva somando de `desde` até onde ele alcança, e até quando."""
     tabela = _por_modo(horaria, HORA, fuso, desde)
     return (tabela.groupby("modelo")
             .agg(chuva=("chuva", lambda valores: valores.sum(min_count=1)), ate=("dt_local", "max"))
@@ -206,7 +165,6 @@ def chuva_total(horaria: pd.DataFrame, desde: pd.Timestamp, fuso=config.FUSO_MS)
 
 
 def planilha(horaria: pd.DataFrame, fuso=config.FUSO_MS) -> pd.DataFrame:
-    """A previsão diária do ponto como vai para o CSV: um dia por linha e modelo, com o risco."""
     dias = diario_com_risco(horaria, fuso)
     dias = dias.assign(modelo=dias["modelo"].map(openmeteo.NOMES),
                        rodada_utc=dias["rodada_utc"].dt.strftime("%Y-%m-%d %H:%M"))
@@ -223,8 +181,6 @@ DIAS_DA_SEMANA = ("seg", "ter", "qua", "qui", "sex", "sáb", "dom")
 
 @dataclass(frozen=True)
 class MapaPrevisto:
-    """Um mapa da página: de que coluna do dia ele sai, e como se colore e se nomeia."""
-
     nome: str          # na tela
     titulo: str        # no PNG do boletim
     coluna: str        # do dia tirado das horas (`openmeteo.diario`)
@@ -269,31 +225,19 @@ PADRAO_MAPAS = ("Temperatura máxima", "Temperatura mínima", "Chuva do dia")
 
 
 def nome_do_dia(dia: date) -> str:
-    """Como o deslizante escreve o dia: "qui 09/10". O dia da semana é o que se procura."""
     return f"{DIAS_DA_SEMANA[dia.weekday()]} {dia:%d/%m}"
 
 
 def dias_inteiros(diaria: pd.DataFrame, hoje: date) -> list[date]:
-    """Os dias que a previsão tem inteiros, de hoje em diante: são as paradas do deslizante.
-
-    Um dia pela metade (o último, e o do fim do ICON) faria um mapa de máxima de meio dia, que
-    pareceria uma queda de temperatura que nenhum modelo previu.
-    """
     dias = diaria.loc[diaria["horas"] == 24, "dia_previsto"]
     return sorted(dia for dia in dias.unique() if dia >= hoje)
 
 
 def dias_somados(mapa: MapaPrevisto, dia: date, hoje: date) -> int:
-    """Quantos dias o mapa soma: um, ou de hoje até o escolhido no acumulado."""
     return (dia - hoje).days + 1 if mapa.acumulado else 1
 
 
 def valores_do_dia(diaria: pd.DataFrame, mapa: MapaPrevisto, dia: date, hoje: date) -> pd.Series:
-    """O valor de cada ponto no dia, indexado pelo ponto.
-
-    No acumulado, a soma de hoje até o dia escolhido, e só onde todos esses dias estão inteiros:
-    somar o que houver daria menos chuva onde faltou um dia, e não onde choveu menos.
-    """
     inteiros = diaria[diaria["horas"] == 24]
     if not mapa.acumulado:
         return inteiros[inteiros["dia_previsto"] == dia].set_index("ponto")[mapa.coluna]
@@ -304,13 +248,6 @@ def valores_do_dia(diaria: pd.DataFrame, mapa: MapaPrevisto, dia: date, hoje: da
 
 
 def niveis(mapa: MapaPrevisto, dias: int = 1, ajustar: bool = False):
-    """Os níveis de cor, os mesmos dos mapas do observado (decisão 9 do escopo), ou None.
-
-    None deixa a escala se ajustar ao dado. A regra é a de `variaveis.escala`, que só olha a
-    grandeza: o mapa previsto passa por ela como um produto do observado, e uma temperatura
-    prevista de 34 °C sai com a mesma cor de uma medida. Na chuva, a duração conta: até 4 dias,
-    as classes curtas (até 100 mm); acima, as longas (até 300 mm).
-    """
     if ajustar:
         return None
     escolhida = variaveis.escala(mapa, 24.0 * dias)
@@ -322,17 +259,6 @@ def niveis(mapa: MapaPrevisto, dias: int = 1, ajustar: bool = False):
 
 def superficie(valores: pd.Series, pontos: pd.DataFrame, lon_grade: np.ndarray, lat_grade: np.ndarray,
                passo: float = config.GRADE_PREVISAO) -> np.ndarray | None:
-    """A previsão dos pontos da grade levada à grade fina do mapa, por interpolação bilinear.
-
-    Não é interpolação de estação: a superfície é a do modelo, que já calculou cada ponto, e aqui
-    ela só muda de resolução, de 0,5° para a do mapa. Bilinear, como fazem os visualizadores de
-    previsão: comparada em 08/10, a linear por triângulos deixava facetas retas no mapa, e a cúbica
-    inventava bolhas entre os pontos. A bilinear nunca passa dos valores do modelo.
-
-    Os pontos só cobrem o estado e uma fileira além da divisa; os nós que faltam no retângulo
-    recebem o ponto mais próximo, para a conta não esbarrar em buraco. None se o modelo não trouxe
-    o dado nesse dia.
-    """
     tabela = pontos.set_index("ponto").join(valores.rename("valor"), how="inner").dropna(subset=["valor"])
     if len(tabela) < 4:
         return None
@@ -360,12 +286,6 @@ def superficie(valores: pd.Series, pontos: pd.DataFrame, lon_grade: np.ndarray, 
 
 def nas_estacoes(diaria: pd.DataFrame, estacoes: pd.DataFrame, mapa: MapaPrevisto, dia: date,
                  hoje: date) -> pd.DataFrame:
-    """A previsão do mesmo modelo no ponto de cada estação, para os números e o ranking do mapa.
-
-    Os números sobre o mapa não são lidos da superfície: são a previsão pedida no ponto exato da
-    estação, que é a que se compara depois com o que ela mediu. A coluna do valor leva o nome do
-    mapa, como os pontos do observado.
-    """
     if diaria.empty:
         return _estacoes_com(pd.Series(dtype=float), estacoes, mapa.nome)
     direcoes = None
@@ -376,7 +296,6 @@ def nas_estacoes(diaria: pd.DataFrame, estacoes: pd.DataFrame, mapa: MapaPrevist
 
 def _estacoes_com(valores: pd.Series, estacoes: pd.DataFrame, nome: str,
                   direcoes: pd.Series | None = None) -> pd.DataFrame:
-    """As estações com o valor de cada uma (indexado pelo código), prontas para o mapa."""
     tabela = pd.DataFrame({"Estação": estacoes["Estação"].to_numpy(),
                            "Latitude": pd.to_numeric(estacoes["VL_LATITUDE"]).to_numpy(),
                            "Longitude": pd.to_numeric(estacoes["VL_LONGITUDE"]).to_numpy()},
@@ -388,14 +307,12 @@ def _estacoes_com(valores: pd.Series, estacoes: pd.DataFrame, nome: str,
 
 
 def subtitulo(modelo: str, rodada: datetime, mapa: MapaPrevisto, dia: date, hoje: date) -> str:
-    """A janela, o modelo e a rodada no subtítulo do PNG do boletim."""
     quando = (f"de {hoje:%d/%m} a {dia:%d/%m/%Y}" if mapa.acumulado and dia > hoje
               else f"para {dia:%d/%m/%Y}")
     return f"Previsão {quando} · {openmeteo.NOMES[modelo]}, rodada de {rodada:%d/%m %H} UTC"
 
 
 def carimbo(modelo: str, rodada: datetime, mapa: MapaPrevisto, dia: date, hoje: date) -> str:
-    """O fim do nome do arquivo: o modelo, o dia (ou a janela) e a rodada."""
     quando = f"{hoje:%Y%m%d}_a_{dia:%Y%m%d}" if mapa.acumulado and dia > hoje else f"{dia:%Y%m%d}"
     return f"{openmeteo.NOMES[modelo]}_{quando}_rodada_{rodada:%Y%m%d_%H}UTC"
 
@@ -418,8 +335,6 @@ RANKING_SEMANAS = "5 MAIORES DESVIOS DO NORMAL"
 
 @dataclass(frozen=True)
 class MapaSemanal:
-    """Um mapa da página das semanas: uma anomalia do EC46, com a escala e o texto dela."""
-
     nome: str
     titulo: str        # no PNG do boletim
     coluna: str        # da tabela de `openmeteo.buscar_semanas`
@@ -451,44 +366,29 @@ PADRAO_SEMANAIS = ("Anomalia da temperatura média", "Anomalia da chuva")
 
 
 def semanas_inteiras(semanal: pd.DataFrame, rodada: datetime) -> list[date]:
-    """As semanas que o EC46 cobre inteiras: as que começam no dia da rodada ou depois.
-
-    A semana vai de segunda a domingo. A que já tinha começado quando a rodada saiu só tem os dias
-    que faltavam, e a média de três dias passaria por média de semana. A que passa do dia 46 o
-    Open-Meteo já devolve vazia.
-    """
     return sorted(semana for semana in semanal["semana"].unique() if semana >= rodada.date())
 
 
 def nome_da_semana(semana: date) -> str:
-    """Como o deslizante e o título escrevem a semana: "12/10 a 18/10"."""
     return f"{semana:%d/%m} a {semana + timedelta(days=6):%d/%m}"
 
 
 def valores_da_semana(semanal: pd.DataFrame, mapa: MapaSemanal, semana: date) -> pd.Series:
-    """A anomalia de cada ponto na semana, indexada pelo ponto."""
     return semanal[semanal["semana"] == semana].set_index("ponto")[mapa.coluna]
 
 
 def nas_estacoes_na_semana(semanal: pd.DataFrame, estacoes: pd.DataFrame, mapa: MapaSemanal,
                            semana: date) -> pd.DataFrame:
-    """A anomalia do EC46 no ponto de cada estação, para os números e o ranking do mapa.
-
-    A coluna do valor leva o título ("Anomalia da temperatura média"), e não o nome curto, que é o
-    mesmo de um mapa dos dias.
-    """
     valores = pd.Series(dtype=float) if semanal.empty else valores_da_semana(semanal, mapa, semana)
     return _estacoes_com(valores, estacoes, mapa.titulo)
 
 
 def subtitulo_da_semana(rodada: datetime, semana: date) -> str:
-    """A semana e a rodada no subtítulo do PNG do boletim."""
     return (f"Semana de {semana:%d/%m} a {semana + timedelta(days=6):%d/%m/%Y} · "
             f"EC46 (média dos membros), rodada de {rodada:%d/%m %H} UTC")
 
 
 def carimbo_da_semana(rodada: datetime, semana: date) -> str:
-    """O fim do nome do arquivo: a semana e a rodada."""
     return f"EC46_semana_{semana:%Y%m%d}_rodada_{rodada:%Y%m%d_%H}UTC"
 
 
@@ -506,11 +406,6 @@ CHAVES_DO_DIA = ["modelo", "rodada_utc", "ponto", "latitude", "longitude", "dia_
 
 
 def risco_por_hora(horaria: pd.DataFrame) -> pd.DataFrame:
-    """As horas com as três condições e o nível (0 a 3), pela regra do produto.
-
-    Horas a que falta alguma das três ficam de fora, como no produto: sem elas não dá para dizer
-    quantas condições valeram.
-    """
     completas = horaria.dropna(subset=list(VARIAVEIS_DO_RISCO))
     atendidas = risco_fogo.condicoes_atendidas(*(completas[coluna] for coluna in VARIAVEIS_DO_RISCO))
     tabela = completas.assign(**dict(zip(risco_fogo.COLUNAS_CONDICOES, atendidas)))
@@ -518,13 +413,11 @@ def risco_por_hora(horaria: pd.DataFrame) -> pd.DataFrame:
 
 
 def _dia_previsto(horaria: pd.DataFrame, fuso) -> pd.Series:
-    """O dia de cada hora pela regra do produto: a das 00:00 fecha o dia anterior."""
     return pd.Series(risco_fogo.dia_da_leitura(pd.DatetimeIndex(horaria["hora_prevista_utc"]), fuso),
                      index=horaria.index)
 
 
 def risco_por_dia(horaria: pd.DataFrame, fuso=config.FUSO_MS) -> pd.DataFrame:
-    """O pior nível e as horas em risco alto de cada dia, por modelo, rodada e ponto."""
     horas = risco_por_hora(horaria)
     if horas.empty:
         return pd.DataFrame(columns=CHAVES_DO_DIA + ["risco_max", "horas_risco_alto"])
@@ -535,11 +428,6 @@ def risco_por_dia(horaria: pd.DataFrame, fuso=config.FUSO_MS) -> pd.DataFrame:
 
 
 def diario_com_risco(horaria: pd.DataFrame, fuso=config.FUSO_MS) -> pd.DataFrame:
-    """O dia do `openmeteo.diario`, com o pior nível de risco e as horas em risco alto.
-
-    É o dia da decisão 6 do escopo, com o `risco_max` dela. Desde 09/10/2026 ele não é guardado no
-    banco: sai das horas na leitura, por esta função.
-    """
     dias = openmeteo.diario(horaria, fuso)
     risco = risco_por_dia(horaria, fuso)
     if dias.empty:
@@ -549,13 +437,6 @@ def diario_com_risco(horaria: pd.DataFrame, fuso=config.FUSO_MS) -> pd.DataFrame
 
 def risco_na_grade(horaria: pd.DataFrame, pontos: pd.DataFrame, dia: date, lon_grade: np.ndarray,
                    lat_grade: np.ndarray, fuso=config.FUSO_MS) -> tuple[np.ndarray, np.ndarray] | None:
-    """O pior nível e as horas em risco alto do dia, célula a célula da grade do mapa.
-
-    Como o produto faz com as estações: em cada hora, as três variáveis viram superfície e a regra
-    é aplicada em cada célula. Aplicar a regra nos pontos e interpolar o nível daria degraus
-    falsos entre um ponto e outro, porque o nível não é um número que se possa tirar média.
-    None se o modelo não trouxer as três variáveis em nenhuma hora do dia.
-    """
     completas = horaria.dropna(subset=list(VARIAVEIS_DO_RISCO))
     if completas.empty:
         return None
@@ -574,7 +455,6 @@ def risco_na_grade(horaria: pd.DataFrame, pontos: pd.DataFrame, dia: date, lon_g
 
 
 def subtitulo_do_risco(modelo: str, rodada: datetime, dia: date) -> str:
-    """O subtítulo dos mapas de risco: o dia, o modelo, a rodada e a regra."""
     return (f"Previsão para {dia:%d/%m/%Y} · {openmeteo.NOMES[modelo]}, rodada de {rodada:%d/%m %H} UTC · "
             "regra 30-30-30")
 
@@ -589,7 +469,6 @@ PREVISTA, NORMAL = "Prevista (EC46)", "Normal da época"
 
 
 def semana_contra_o_normal(semanal: pd.DataFrame, ponto: str, grandeza: str, rodada: datetime) -> pd.DataFrame:
-    """Uma linha por semana inteira: a previsão, a normal da época e a anomalia, que é a diferença."""
     coluna, anomalia, _ = SERIES_SEMANAIS[grandeza]
     colunas = ["semana", "rotulo", "prevista", "normal", "anomalia"]
     if semanal.empty or coluna not in semanal:

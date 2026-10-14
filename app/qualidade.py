@@ -24,12 +24,10 @@ TENSAO_MINIMA = 11.5  # volts; abaixo disso a estação costuma sair do ar em po
 
 
 def dia_da_leitura(horas: pd.Series) -> pd.Series:
-    """Dia a que a leitura pertence: a das 00:00 fecha o dia anterior, como nos produtos."""
     return (horas - pd.Timedelta(hours=1)).dt.date
 
 
 def valores_impossiveis(tabela: pd.DataFrame) -> pd.DataFrame:
-    """Leituras fora da faixa plausível de cada variável."""
     achados = []
     for coluna, (minimo, maximo) in LIMITES.items():
         if coluna not in tabela:
@@ -47,7 +45,6 @@ def valores_impossiveis(tabela: pd.DataFrame) -> pd.DataFrame:
 
 
 def sensores_travados(tabela: pd.DataFrame, horas_minimas: int = HORAS_TRAVADO) -> pd.DataFrame:
-    """Trechos em que a mesma leitura se repete por várias horas seguidas."""
     achados = []
     for (estacao, coluna), serie in _series_por_estacao(tabela):
         valores = serie.dropna()
@@ -63,25 +60,18 @@ def sensores_travados(tabela: pd.DataFrame, horas_minimas: int = HORAS_TRAVADO) 
 
 
 def completude_por_dia(tabela: pd.DataFrame) -> pd.DataFrame:
-    """Percentual das 24 horas de cada dia em que a estação registrou leitura."""
     dias = dia_da_leitura(tabela["dt_local"])
     contagem = tabela.pivot_table(index="Estação", columns=dias, values="dt_utc", aggfunc="count")
     return (contagem.fillna(0) / 24 * 100).clip(upper=100).round(0)
 
 
 def completude_por_variavel(tabela: pd.DataFrame, colunas: list[str] | None = None) -> pd.DataFrame:
-    """Percentual das horas registradas em que cada variável veio com valor, por estação.
-
-    É diferente da completude por dia: a estação pode registrar a hora e mesmo assim não medir
-    tudo. É aqui que aparece o sensor que parou sozinho, sem a estação sair do ar.
-    """
     medidas = [coluna for coluna in (colunas or LIMITES) if coluna in tabela]
     horas = tabela.groupby("Estação").size()
     return (tabela.groupby("Estação")[medidas].count().div(horas, axis=0) * 100).round(0)
 
 
 def resumo_por_estacao(tabela: pd.DataFrame, horas_esperadas: int) -> pd.DataFrame:
-    """Uma linha por estação, da pior para a melhor: é por onde se começa a olhar."""
     impossiveis = valores_impossiveis(tabela).groupby("Estação").size()
     travados = sensores_travados(tabela).groupby("Estação")["Horas"].sum()
     resumo = pd.DataFrame({
@@ -100,7 +90,6 @@ def resumo_por_estacao(tabela: pd.DataFrame, horas_esperadas: int) -> pd.DataFra
 
 
 def _series_por_estacao(tabela: pd.DataFrame):
-    """Percorre (estação, coluna) devolvendo a série no tempo, para as colunas de travamento."""
     for estacao, dados in tabela.groupby("Estação"):
         ordenados = dados.sort_values("dt_local")
         for coluna in COLUNAS_TRAVAMENTO:
