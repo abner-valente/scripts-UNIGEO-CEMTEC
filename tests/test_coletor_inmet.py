@@ -42,13 +42,13 @@ def hora_do_inmet(momento: datetime, tem_ins: float = 30.0) -> pd.DataFrame:
 
 @pytest.fixture
 def inmet_simulado(monkeypatch):
-    pedidas = {"horas": [], "estacoes": [], "falhar": set(), "tem_ins": 30.0}
+    pedidas = {"horas": [], "estacoes": [], "falhar": set(), "tem_ins": 30.0, "corrigidas": {}}
 
     def baixar_hora(momento):
         pedidas["horas"].append(momento)
         if momento in pedidas["falhar"]:
             raise inmet.ErroINMET("conexão encerrada")
-        return hora_do_inmet(momento, pedidas["tem_ins"])
+        return hora_do_inmet(momento, pedidas["corrigidas"].get(momento, pedidas["tem_ins"]))
 
     def baixar_dados_estacao(codigo, inicio, fim, fuso=config.FUSO_MS):
         pedidas["estacoes"].append(codigo)
@@ -203,6 +203,32 @@ def test_os_extras_gravam_em_lotes(limpa, inmet_simulado, monkeypatch):
     assert coleta.falhas == ["A702"] and coleta.gravadas == sum(gravacoes)
 
 
+def test_a_revisao_rebusca_os_dias_pedidos_um_dia_por_vez(limpa, inmet_simulado, monkeypatch):
+    trechos = []
+    original = coletor_inmet.coletar_horas
+    monkeypatch.setattr(coletor_inmet, "coletar_horas",
+                        lambda conexao, horas: trechos.append(len(horas)) or original(conexao, horas))
+
+    coleta = coletor_inmet.revisar(limpa, 2, agora=AGORA)
+
+    assert trechos == [24, 24]
+    assert inmet_simulado["horas"][0] == datetime(2026, 10, 7, 15, tzinfo=timezone.utc)
+    assert coleta.leituras == coleta.gravadas == 48 * 3 and coleta.falhas == []
+
+
+def test_a_revisao_leva_ao_banco_a_correcao_que_os_3_dias_nao_pegam(limpa, inmet_simulado):
+    coletor_inmet.revisar(limpa, 30, agora=AGORA)
+    corrigida = datetime(2026, 9, 25, 6, tzinfo=timezone.utc)
+    inmet_simulado["corrigidas"][corrigida] = 21.5   # o INMET trocou um valor fora da curva
+
+    assert coletor_inmet.coletar_ultimas(limpa, agora=AGORA).gravadas == 0
+    coleta = coletor_inmet.revisar(limpa, 30, agora=AGORA)
+
+    assert coleta.gravadas == 3   # as três estações daquela hora, e nada mais
+    assert limpa.execute("SELECT tem_ins FROM inmet_horaria WHERE estacao = 'A702' AND hora_utc = %s",
+                         (corrigida,)).fetchone()[0] == 21.5
+
+
 def test_o_coletor_faz_no_maximo_uma_consulta_por_segundo(monkeypatch):
     relogio = [100.0]
     esperas = []
@@ -322,6 +348,19 @@ def test_o_coletar_sem_banco_sai_com_erro(monkeypatch, capsys):
 def test_o_coletar_com_ate_sem_historico_e_recusado():
     with pytest.raises(SystemExit):
         coletar.argumentos(["inmet", "--ate", "2026-10-01"])
+
+
+@pytest.mark.parametrize("linha", [["inmet", "--revisar", "0"], ["inmet", "--revisar", "trinta"],
+                                   ["inmet", "--revisar", "30", "--extras"]])
+def test_o_coletar_recusa_a_revisao_mal_pedida(linha):
+    with pytest.raises(SystemExit):
+        coletar.argumentos(linha)
+
+
+def test_o_coletar_revisa_os_dias_pedidos(conexao, limpa, inmet_simulado, monkeypatch):
+    monkeypatch.setattr(config, "TOKEN_INMET", "token-de-teste")
+    assert coletar.main(["inmet", "--revisar", "2", "--teste"]) == 0
+    assert len(inmet_simulado["horas"]) == 48
 
 
 def test_o_coletar_no_banco_de_teste(conexao, limpa, inmet_simulado, monkeypatch):

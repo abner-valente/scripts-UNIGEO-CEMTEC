@@ -5,6 +5,7 @@ Feitos para o Agendador de Tarefas do Windows, pelo servidor\\coletar.bat, e rod
     python coletar.py esquema                        # cria as tabelas que faltam (na instalação, e quando o esquema mudar)
     python coletar.py inmet                          # de hora em hora: o cadastro e os últimos 3 dias
     python coletar.py inmet --extras                 # uma vez por dia: a sensação térmica, a bateria e o processador
+    python coletar.py inmet --revisar 30             # uma vez por semana: os últimos 30 dias, com as correções do INMET
     python coletar.py inmet --historico 2018-01-01   # uma vez só: as horas desde a data, retomando de onde parou
     python coletar.py inmet --historico 2018-01-01 --ate 2018-12-31   # só um trecho (o último dia entra inteiro)
     python coletar.py previsao                       # de hora em hora: as rodadas novas dos modelos e do EC46
@@ -53,6 +54,12 @@ def ler_data(texto: str) -> datetime:
     raise argparse.ArgumentTypeError(f"data inválida: {texto!r} (use AAAA-MM-DD ou DD/MM/AAAA)")
 
 
+def dias_positivos(texto: str) -> int:
+    if not texto.isdigit() or int(texto) < 1:
+        raise argparse.ArgumentTypeError(f"número de dias inválido: {texto!r}")
+    return int(texto)
+
+
 def argumentos(linha: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Coletores do banco da UNIGEO.")
     comum = argparse.ArgumentParser(add_help=False)
@@ -65,6 +72,9 @@ def argumentos(linha: list[str] | None = None) -> argparse.Namespace:
     modo = do_inmet.add_mutually_exclusive_group()
     modo.add_argument("--extras", action="store_true",
                       help="a sensação térmica, a bateria e o processador, por estação (uma vez por dia)")
+    modo.add_argument("--revisar", type=dias_positivos, metavar="DIAS",
+                      help="rebusca os últimos DIAS dias, para o banco receber o que o INMET corrigiu "
+                           "(uma vez por semana, 30 dias)")
     modo.add_argument("--historico", type=ler_data, metavar="DATA",
                       help="as horas desde DATA (UTC), pulando as que já estão no banco")
     do_inmet.add_argument("--ate", type=ler_data, metavar="DATA",
@@ -131,6 +141,8 @@ def executar(opcoes: argparse.Namespace) -> int:
                 return 0
             if opcoes.extras:
                 coleta = coletor_inmet.coletar_extras(conexao)
+            elif opcoes.revisar:
+                coleta = coletor_inmet.revisar(conexao, opcoes.revisar)
             else:
                 coleta = coletor_inmet.coletar_ultimas(conexao)
     except (banco.ErroBanco, psycopg.Error) as erro:

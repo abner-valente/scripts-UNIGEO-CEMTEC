@@ -216,6 +216,26 @@ def coletar_ultimas(conexao: psycopg.Connection, agora: datetime | None = None,
     return coleta
 
 
+def revisar(conexao: psycopg.Connection, dias: int, agora: datetime | None = None) -> Coleta:
+    comeco = time.monotonic()
+    horas = ultimas_horas(agora, dias * 24)
+    print(f"🔎 Revisando {len(horas)} horas, de {_rotulo(horas[0])} a {_rotulo(horas[-1])} UTC: entra no banco "
+          "o que o INMET corrigiu...")
+    total = Coleta()
+    # Um dia por vez: o servidor derruba a conexão parada por 10 minutos, e as 720 horas de 30 dias levam 12
+    for primeira in range(0, len(horas), 24):
+        trecho = horas[primeira:primeira + 24]
+        coleta = coletar_horas(conexao, trecho)
+        total.somar(coleta)
+        if coleta.gravadas:
+            print(f"   {trecho[0]:%d/%m %H}h a {trecho[-1]:%d/%m %H}h UTC: {coleta.gravadas} leituras novas ou "
+                  "corrigidas", flush=True)
+        if coleta.interrompida:
+            break
+    relatar(total, time.monotonic() - comeco, "horas")
+    return total
+
+
 def coletar_extras(conexao: psycopg.Connection, agora: datetime | None = None,
                    quantas: int = HORAS_REBUSCADAS) -> Coleta:
     comeco = time.monotonic()
