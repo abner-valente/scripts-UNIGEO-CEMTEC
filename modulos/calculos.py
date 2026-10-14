@@ -14,7 +14,9 @@ def recortar(dados: pd.DataFrame, inicio: datetime, fim: datetime) -> pd.DataFra
 
 
 def acumulado_chuva(dados: pd.DataFrame, inicio: datetime, fim: datetime) -> float:
-    return round(float(recortar(dados, inicio, fim)["CHUVA"].fillna(0).sum()), 1)
+    # min_count=1: a hora sem leitura não soma nada, mas a janela sem nenhuma leitura de chuva
+    # (a estação que só mandou bateria) fica sem dado (NaN), e não com 0 mm
+    return round(float(recortar(dados, inicio, fim)["CHUVA"].sum(min_count=1)), 1)
 
 
 def indice_extremo(dados: pd.DataFrame, coluna: str, minimo: bool):
