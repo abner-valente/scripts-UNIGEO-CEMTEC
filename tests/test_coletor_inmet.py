@@ -260,9 +260,44 @@ def test_o_historico_para_quando_o_inmet_sai_do_ar(limpa, inmet_simulado, monkey
     coleta = coletor_inmet.carregar_historico(limpa, datetime(2026, 10, 1, tzinfo=timezone.utc),
                                               datetime(2026, 10, 5, tzinfo=timezone.utc))
 
-    assert len(inmet_simulado["horas"]) == 24          # um dia inteiro sem resposta, e para
-    assert len(coleta.falhas) == 24
+    assert len(inmet_simulado["horas"]) == coletor_inmet.FALHAS_SEGUIDAS     # e não o dia inteiro
+    assert coleta.interrompida
     assert "a carga para aqui" in capsys.readouterr().out
+
+
+def test_a_coleta_de_hora_em_hora_para_quando_o_inmet_sai_do_ar(limpa, inmet_simulado, monkeypatch):
+    def fora_do_ar(momento):
+        inmet_simulado["horas"].append(momento)
+        raise inmet.ErroINMET("500 Server Error")
+
+    monkeypatch.setattr(inmet, "baixar_hora", fora_do_ar)
+
+    coleta = coletor_inmet.coletar_ultimas(limpa, agora=AGORA)
+
+    assert len(inmet_simulado["horas"]) == coletor_inmet.FALHAS_SEGUIDAS   # e não as 72
+    assert coleta.interrompida and coleta.consultas == coletor_inmet.FALHAS_SEGUIDAS
+
+
+def test_falhas_soltas_nao_param_a_coleta(limpa, inmet_simulado):
+    for hora in (3, 4, 5, 7, 8, 9):
+        inmet_simulado["falhar"].add(datetime(2026, 10, 9, hora, tzinfo=timezone.utc))
+
+    coleta = coletor_inmet.coletar_ultimas(limpa, agora=AGORA)
+
+    assert not coleta.interrompida and len(coleta.falhas) == 6
+    assert len(inmet_simulado["horas"]) == coletor_inmet.HORAS_REBUSCADAS
+
+
+def test_os_extras_param_quando_o_inmet_sai_do_ar(limpa, inmet_simulado, monkeypatch):
+    coletor_inmet.coletar_ultimas(limpa, agora=AGORA, quantas=2)
+    monkeypatch.setattr(coletor_inmet, "FALHAS_SEGUIDAS", 2)
+    monkeypatch.setattr(coletor_inmet, "ESTACOES_POR_LOTE", 1)
+    inmet_simulado["falhar"].update({"A004", "A702"})
+
+    coleta = coletor_inmet.coletar_extras(limpa, agora=AGORA)
+
+    assert inmet_simulado["estacoes"] == ["A004", "A702"]   # a A721 nem é pedida
+    assert coleta.interrompida
 
 
 # =====================================================
@@ -305,13 +340,16 @@ def test_o_coletar_no_banco_de_teste(conexao, limpa, inmet_simulado, monkeypatch
 def historico_simulado(monkeypatch):
     monkeypatch.setattr(config, "TOKEN_INMET", "token-de-teste")
     monkeypatch.setattr(coletar, "ESPERA_PARA_RECONECTAR", 0)
+    monkeypatch.setattr(coletar, "ESPERA_COM_O_INMET_FORA", 0)
     monkeypatch.setattr(banco, "conectar", lambda *args, **kwargs: nullcontext("conexão"))
-    chamadas = {"datas": [], "quedas": 0}
+    chamadas = {"datas": [], "quedas": 0, "fora_do_ar": 0}
 
     def carregar(conexao, desde, ate):
         chamadas["datas"].append((desde, ate))
         if len(chamadas["datas"]) <= chamadas["quedas"]:
             raise psycopg.OperationalError("terminating connection due to idle-session timeout")
+        if len(chamadas["datas"]) <= chamadas["quedas"] + chamadas["fora_do_ar"]:
+            return coletor_inmet.Coleta(consultas=4, falhas=["03/01/2025 00:00"] * 4, interrompida=True)
         return coletor_inmet.Coleta(consultas=24)
 
     monkeypatch.setattr(coletor_inmet, "carregar_historico", carregar)
@@ -352,3 +390,22 @@ def test_o_ctrl_c_diz_como_retomar(monkeypatch, capsys):
 
     assert coletar.main(["inmet"]) == 130
     assert "retoma de onde parou" in capsys.readouterr().out
+
+
+def test_o_historico_espera_o_inmet_voltar_e_retoma(historico_simulado, capsys):
+    historico_simulado["fora_do_ar"] = 2
+
+    assert coletar.main(["inmet", "--historico", "2025-01-01"]) == 0     # as falhas de antes foram repetidas
+
+    assert len(historico_simulado["datas"]) == 3
+    assert capsys.readouterr().out.count("Tento de novo") == 2
+
+
+def test_o_historico_desiste_se_o_inmet_nao_volta(historico_simulado, monkeypatch, capsys):
+    monkeypatch.setattr(coletar, "ESPERAS_COM_O_INMET_FORA", 2)
+    historico_simulado["fora_do_ar"] = 99
+
+    assert coletar.main(["inmet", "--historico", "2025-01-01"]) == 1
+
+    assert len(historico_simulado["datas"]) == 3
+    assert "seguiu fora do ar" in capsys.readouterr().out

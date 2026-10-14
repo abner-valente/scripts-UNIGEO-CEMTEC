@@ -32,6 +32,9 @@ SCHEMA_DE_TESTE = "climageo_teste"
 # reconecta e retoma pelas horas que faltam, até tantas vezes
 RECONEXOES_NO_HISTORICO = 5
 ESPERA_PARA_RECONECTAR = 60    # segundos
+# Com o INMET fora do ar, a carga do histórico espera e retoma sozinha, por até 2 horas
+ESPERAS_COM_O_INMET_FORA = 8
+ESPERA_COM_O_INMET_FORA = 15 * 60   # segundos
 
 
 def _saida_em_utf8() -> None:
@@ -78,17 +81,31 @@ def _primeira_linha(erro: Exception) -> str:
 
 def carregar_historico(papel: str, schema: str, desde: datetime, ate: datetime | None) -> coletor_inmet.Coleta:
     total = coletor_inmet.Coleta()
-    for vez in range(RECONEXOES_NO_HISTORICO + 1):
+    quedas = esperas = 0
+    while True:
         try:
             with banco.conectar(papel, schema=schema) as conexao:
-                total.somar(coletor_inmet.carregar_historico(conexao, desde, ate))
-            return total
+                coleta = coletor_inmet.carregar_historico(conexao, desde, ate)
         except (banco.ErroBanco, psycopg.OperationalError) as erro:
-            if vez == RECONEXOES_NO_HISTORICO:
+            quedas += 1
+            if quedas > RECONEXOES_NO_HISTORICO:
                 raise
             print(f"⚠️ A conexão com o banco caiu ({_primeira_linha(erro)}). Reconectando em "
-                  f"{ESPERA_PARA_RECONECTAR} s para retomar de onde parou ({vez + 1}/{RECONEXOES_NO_HISTORICO})...")
+                  f"{ESPERA_PARA_RECONECTAR} s para retomar de onde parou ({quedas}/{RECONEXOES_NO_HISTORICO})...")
             time.sleep(ESPERA_PARA_RECONECTAR)
+            continue
+        total.somar(coleta)
+        # As horas que falharam antes voltam a ser pedidas na retomada: valem as falhas da última volta
+        total.falhas, total.interrompida = coleta.falhas, coleta.interrompida
+        if not coleta.interrompida:
+            return total
+        esperas += 1
+        if esperas > ESPERAS_COM_O_INMET_FORA:
+            print("❌ O INMET seguiu fora do ar. Rode de novo mais tarde; a carga retoma de onde parou.")
+            return total
+        print(f"⏸️ Tento de novo em {ESPERA_COM_O_INMET_FORA // 60} min ({esperas}/{ESPERAS_COM_O_INMET_FORA})...",
+              flush=True)
+        time.sleep(ESPERA_COM_O_INMET_FORA)
 
 
 def executar(opcoes: argparse.Namespace) -> int:

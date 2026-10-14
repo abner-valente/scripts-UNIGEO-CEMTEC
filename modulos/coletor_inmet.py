@@ -33,6 +33,10 @@ INICIO_DO_HISTORICO = datetime(2018, 1, 1, tzinfo=timezone.utc)   # plano, passo
 # Os extras gravam a cada tantas estações: uma conexão parada por 10 minutos o servidor derruba, e
 # as ~500 consultas por estação levam uns 9
 ESTACOES_POR_LOTE = 50
+# Consultas seguidas sem resposta (cada uma já com as suas tentativas) que dizem que o INMET está
+# fora do ar: a coleta para, e o resto fica para depois. Em 14/10/2026 ele respondeu 500 a tudo
+# por horas, e o coletor insistia hora por hora
+FALHAS_SEGUIDAS = 4
 
 # As medidas: o código da API e o nome no banco, que é o mesmo em minúsculas
 MEDIDAS = {coluna.upper(): coluna for coluna in banco.COLUNAS_INMET}
@@ -46,6 +50,7 @@ class Coleta:
     gravadas: int = 0       # as que entraram no banco ou mudaram nele
     estacoes_novas: int = 0
     falhas: list[str] = field(default_factory=list)   # as horas (ou estações) cuja consulta falhou
+    interrompida: bool = False   # parou porque o INMET saiu do ar
 
     def somar(self, outra: "Coleta") -> None:
         self.consultas += outra.consultas
@@ -53,6 +58,15 @@ class Coleta:
         self.gravadas += outra.gravadas
         self.estacoes_novas += outra.estacoes_novas
         self.falhas += outra.falhas
+        self.interrompida = self.interrompida or outra.interrompida
+
+
+def _fora_do_ar(coleta: Coleta, seguidas: int) -> bool:
+    if seguidas < FALHAS_SEGUIDAS:
+        return False
+    print(f"    ⛔ {seguidas} consultas seguidas sem resposta: o INMET parece fora do ar, e o resto fica para depois")
+    coleta.interrompida = True
+    return True
 
 
 # =====================================================
@@ -151,15 +165,21 @@ def atualizar_cadastro(conexao: psycopg.Connection) -> int | None:
 
 
 def coletar_horas(conexao: psycopg.Connection, horas: list[datetime]) -> Coleta:
-    coleta = Coleta(consultas=len(horas))
+    coleta = Coleta()
     partes = []
+    seguidas = 0
     for hora in horas:
         _RITMO.esperar()
+        coleta.consultas += 1
         try:
             partes.append(inmet.baixar_hora(hora))
+            seguidas = 0
         except inmet.ErroINMET as erro:
             print(f"    ❌ {_rotulo(hora)} UTC: {erro}")
             coleta.falhas.append(_rotulo(hora))
+            seguidas += 1
+            if _fora_do_ar(coleta, seguidas):
+                break
     partes = [parte for parte in partes if not parte.empty]
     if not partes:
         return coleta
@@ -205,15 +225,20 @@ def coletar_extras(conexao: psycopg.Connection, agora: datetime | None = None,
     print(f"🔋 Buscando a sensação térmica, a bateria e o processador de {len(estacoes)} estações, "
           f"de {_rotulo(inicio)} a {_rotulo(fim)} UTC...")
     coleta = Coleta(consultas=len(estacoes))
+    seguidas = 0
     for primeira in range(0, len(estacoes), ESTACOES_POR_LOTE):
         partes = []
         for codigo in estacoes[primeira:primeira + ESTACOES_POR_LOTE]:
             _RITMO.esperar()
             try:
                 dados = inmet.baixar_dados_estacao(codigo, inicio, fim)
+                seguidas = 0
             except inmet.ErroINMET as erro:
                 print(f"    ❌ {codigo}: {erro}")
                 coleta.falhas.append(codigo)
+                seguidas += 1
+                if _fora_do_ar(coleta, seguidas):
+                    break
                 continue
             if dados is not None:
                 partes.append(leituras_para_o_banco(dados, EXTRAS))
@@ -222,6 +247,8 @@ def coletar_extras(conexao: psycopg.Connection, agora: datetime | None = None,
             extras = pd.concat(partes, ignore_index=True)
             coleta.leituras += len(extras)
             coleta.gravadas += banco.gravar_extras_inmet(conexao, extras)
+        if coleta.interrompida:
+            break
     relatar(coleta, time.monotonic() - comeco, "estações")
     return coleta
 
@@ -247,9 +274,8 @@ def carregar_historico(conexao: psycopg.Connection, desde: datetime = INICIO_DO_
             falhas = f", {len(coleta.falhas)} falharam" if coleta.falhas else ""
             print(f"   {dia:%d/%m/%Y}: {len(faltam)} hora{'s' if len(faltam) > 1 else ''}, "
                   f"{coleta.leituras} leituras{falhas} ({time.monotonic() - antes:.0f} s)", flush=True)
-            if len(coleta.falhas) == len(faltam):
-                print(f"❌ O INMET não respondeu a nenhuma hora de {dia:%d/%m/%Y}: a carga para aqui. "
-                      "Rode de novo mais tarde; ela retoma de onde parou.")
+            if coleta.interrompida:
+                print(f"❌ O INMET parou de responder em {dia:%d/%m/%Y}: a carga para aqui.")
                 break
         dia += timedelta(days=1)
     relatar(total, time.monotonic() - comeco, "horas")
