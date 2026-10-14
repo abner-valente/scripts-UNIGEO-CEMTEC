@@ -9,7 +9,7 @@ import pandas as pd
 import psycopg
 import pytest
 
-from modulos import banco, coletor_inmet, config, fonte, inmet
+from modulos import banco, coletor_inmet, config, fonte, inmet, openmeteo
 
 RAIZ = Path(__file__).resolve().parent.parent
 
@@ -161,3 +161,57 @@ def test_o_banco_fora_do_ar_e_um_erro_da_fonte(monkeypatch, capsys):
         fonte.estacoes("MS")
     assert fonte.leituras_de_apoio(config.RECORTE, [], [], DIA, DIA) == []
     assert "a borda sai só com as do estado" in capsys.readouterr().out
+
+
+# =====================================================
+# A PREVISÃO PELA FONTE "BANCO"
+# =====================================================
+RODADAS = [datetime(2026, 10, 13, 12, tzinfo=timezone.utc), datetime(2026, 10, 14, 0, tzinfo=timezone.utc)]
+
+
+def prevista(pontos: list[str], modelo: str, rodada: datetime) -> pd.DataFrame:
+    horas = pd.date_range(rodada, periods=2, freq="h")
+    return pd.DataFrame([{"modelo": modelo, "rodada_utc": pd.Timestamp(rodada), "ponto": ponto,
+                          "latitude": -20.0, "longitude": -54.0, "hora_prevista_utc": hora,
+                          **{coluna: 1.0 for coluna in openmeteo.VARIAVEIS.values()}}
+                         for ponto in pontos for hora in horas])
+
+
+@pytest.fixture
+def previsao_no_banco(limpa, monkeypatch):
+    monkeypatch.setattr(config, "FONTE_DADOS", "banco")
+    monkeypatch.setattr(fonte, "_conectar", lambda: nullcontext(limpa))
+    for rodada in RODADAS:
+        banco.gravar_previsao(limpa, prevista(["A702", "A703", "A704"], "ecmwf_ifs025", rodada), "estacao")
+    banco.gravar_previsao(limpa, prevista(["A702"], "gfs_seamless", RODADAS[0]), "estacao")
+    semanal = pd.DataFrame([{"modelo": config.MODELO_SEMANAS, "rodada_utc": pd.Timestamp(RODADAS[1]), "ponto": ponto,
+                             "latitude": -20.0, "longitude": -54.0, "semana": datetime(2026, 10, 19).date(),
+                             **{coluna: 0.5 for coluna in openmeteo.VARIAVEIS_SEMANAIS.values()}}
+                            for ponto in ("A702", "A703")])
+    banco.gravar_semanas(limpa, semanal, "estacao")
+    return limpa
+
+
+def test_a_rodada_da_previsao_no_banco_e_a_ultima_guardada_de_cada_modelo(previsao_no_banco):
+    assert fonte.rodadas_da_previsao("estacao", config.MODELOS_PREVISAO) == {
+        "ecmwf_ifs025": RODADAS[1], "gfs_seamless": RODADAS[0]}      # o ICON não tem rodada
+    assert fonte.rodada_das_semanas("estacao") == RODADAS[1]
+    assert fonte.rodada_das_semanas("grade") is None
+    assert fonte.origem_da_previsao() == "o banco"
+
+
+def test_a_previsao_do_banco_traz_a_rodada_pedida_so_nos_pontos_pedidos(previsao_no_banco):
+    pedidos = pd.DataFrame({"ponto": ["A702", "A704"]})
+    tabela = fonte.previsao("estacao", pedidos, "ecmwf_ifs025", RODADAS[0])
+    assert list(tabela.columns) == openmeteo.COLUNAS_HORARIAS
+    assert sorted(tabela["ponto"].unique()) == ["A702", "A704"]
+    assert set(tabela["rodada_utc"]) == {pd.Timestamp(RODADAS[0])} and len(tabela) == 4
+    semanas = fonte.semanas("estacao", pedidos, RODADAS[1])
+    assert semanas["ponto"].tolist() == ["A702"] and list(semanas.columns) == openmeteo.COLUNAS_SEMANAIS
+
+
+def test_a_grade_da_previsao_e_a_do_banco_ou_a_da_busca_sob_demanda(monkeypatch):
+    assert len(fonte.pontos_da_grade()) == len(openmeteo.pontos_da_grade(passo=config.GRADE_PREVISAO))
+    monkeypatch.setattr(config, "FONTE_DADOS", "banco")
+    assert len(fonte.pontos_da_grade()) == len(openmeteo.pontos_da_grade(passo=config.GRADE_PREVISAO_BANCO))
+    assert len(fonte.pontos_da_grade_semanal()) == len(openmeteo.pontos_da_grade(passo=config.GRADE_PREVISAO))

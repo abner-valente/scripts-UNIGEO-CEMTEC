@@ -52,6 +52,12 @@ def serie():
 
 
 @pytest.fixture(autouse=True)
+def fonte_das_apis(monkeypatch):
+    # Os testes não herdam o FONTE_DADOS do .env da máquina; os da fonte "banco" a pedem
+    monkeypatch.setattr(config, "FONTE_DADOS", "apis")
+
+
+@pytest.fixture(autouse=True)
 def sem_esperas(monkeypatch):
     monkeypatch.setattr(config, "PAUSA_ENTRE_REQUISICOES", 0)
     monkeypatch.setattr(config, "PAUSA_ENTRE_TENTATIVAS", 0)

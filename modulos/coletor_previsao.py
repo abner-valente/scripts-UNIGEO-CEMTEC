@@ -23,7 +23,7 @@ from . import banco, config, openmeteo
 RODADAS_GUARDADAS = (0, 12)   # horas UTC
 # A grade do coletor é mais fina que a do painel sob demanda: 607 pontos em vez de 178. Com as
 # estações, duas rodadas por dia dos três modelos gastam ~4.100 das 10 mil chamadas diárias.
-GRADE_DO_COLETOR = 0.25
+GRADE_DO_COLETOR = config.GRADE_PREVISAO_BANCO
 GRADE_DAS_SEMANAS = config.GRADE_PREVISAO   # a mesma do painel
 # Se outro programa no mesmo endereço gastou o minuto da cota, a busca espera ele virar, até tantas vezes
 TENTATIVAS_NO_LIMITE_POR_MINUTO = 3

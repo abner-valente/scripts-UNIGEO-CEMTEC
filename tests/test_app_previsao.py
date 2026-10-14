@@ -308,6 +308,17 @@ def test_a_superficie_bilinear_reproduz_um_campo_plano():
     assert np.allclose(grade, 2.0 * lon_fina + 3.0 * lat_fina)
 
 
+def test_a_superficie_tira_o_passo_da_grade_dos_pontos():
+    # A grade do banco é de 0,25°, e a da busca sob demanda, de 0,5°
+    pontos = rede(passo=0.25)
+    assert (previsao.espacamento(pontos), previsao.espacamento(rede())) == (0.25, 0.5)
+    valores = pd.Series(2.0 * pontos["longitude"].to_numpy() + 3.0 * pontos["latitude"].to_numpy(),
+                        index=pontos["ponto"].to_numpy())
+    lon_fina, lat_fina = np.meshgrid(np.linspace(-55.8, -54.2, 9), np.linspace(-21.8, -20.2, 9))
+
+    assert np.allclose(previsao.superficie(valores, pontos, lon_fina, lat_fina), 2.0 * lon_fina + 3.0 * lat_fina)
+
+
 def test_a_superficie_nao_passa_da_faixa_do_modelo():
     pontos = rede()
     valores = pd.Series(np.where(pontos["latitude"] > -21, 30.0, 10.0), index=pontos["ponto"].to_numpy())

@@ -196,7 +196,8 @@ TIMEOUT_OPENMETEO = 120        # segundos: um pedido de centenas de pontos leva 
 # Os modelos que a equipe de meteorologia prefere (07/10/2026). O ICON só vai até o dia 7,5.
 MODELOS_PREVISAO = ("ecmwf_ifs025", "gfs_seamless", "icon_seamless")
 DIAS_PREVISAO = 14             # o 15º dia faria cada ponto pesar 15/14 na cota
-GRADE_PREVISAO = 0.5           # graus entre os pontos da grade; 0,25 quando a busca for agendada
+GRADE_PREVISAO = 0.5           # graus entre os pontos da grade, na busca sob demanda
+GRADE_PREVISAO_BANCO = 0.25    # a do coletor, que o banco guarda (modulos/coletor_previsao.py)
 OPENMETEO_POR_MINUTO = 600     # limite gratuito de chamadas por minuto
 # As semanas: a anomalia semanal do EC46, a previsão estendida do ECMWF, na média dos membros
 URL_OPENMETEO_SAZONAL = "https://seasonal-api.open-meteo.com/v1/seasonal"

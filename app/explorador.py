@@ -803,59 +803,70 @@ def guarda_da_previsao() -> previsao.Guarda:
     return previsao.Guarda()
 
 
+# O nome de cada conjunto de pontos na guarda da página e no banco
+CONJUNTOS_NO_BANCO = {"grade": "grade", "estações": "estacao", "grade-semanas": "grade",
+                      "estações-semanas": "estacao"}
+
+
 @st.cache_data(ttl=300, show_spinner=False)
-def rodadas_atuais() -> tuple[dict | None, str | None]:
+def rodadas_atuais(conjunto: str) -> tuple[dict | None, str | None]:
     try:
-        return openmeteo.rodadas(config.MODELOS_PREVISAO), None
-    except openmeteo.ErroOpenMeteo as erro:
+        return fonte.rodadas_da_previsao(conjunto, config.MODELOS_PREVISAO), None
+    except fonte.ErroPrevisao as erro:
         return None, str(erro)
 
 
 def previsao_dos_pontos(conjunto: str, pontos: pd.DataFrame,
                         modelos: tuple[str, ...]) -> tuple[list[pd.DataFrame], list[str]]:
-    rodadas, falha = rodadas_atuais()
+    no_banco = CONJUNTOS_NO_BANCO[conjunto]
+    rodadas, falha = rodadas_atuais(no_banco)
     tabelas, avisos = [], []
     for modelo in modelos:
-        tabela = _obter_previsao(conjunto, modelo, rodadas[modelo] if rodadas else None, falha,
-                                 lambda modelo=modelo: openmeteo.buscar(pontos, (modelo,)), avisos)
+        rodada = rodadas.get(modelo) if rodadas else None
+        tabela = _obter_previsao(conjunto, modelo, rodada, falha,
+                                 lambda modelo=modelo, rodada=rodada: fonte.previsao(no_banco, pontos, modelo, rodada),
+                                 avisos)
         if tabela is not None:
             tabelas.append(tabela)
     return tabelas, avisos
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def rodada_semanal_atual() -> tuple[datetime | None, str | None]:
+def rodada_semanal_atual(conjunto: str) -> tuple[datetime | None, str | None]:
     try:
-        return openmeteo.rodadas((config.MODELO_SEMANAS,))[config.MODELO_SEMANAS], None
-    except openmeteo.ErroOpenMeteo as erro:
+        return fonte.rodada_das_semanas(conjunto), None
+    except fonte.ErroPrevisao as erro:
         return None, str(erro)
 
 
 def semanas_dos_pontos(conjunto: str, pontos: pd.DataFrame) -> tuple[pd.DataFrame | None, list[str]]:
-    rodada, falha = rodada_semanal_atual()
+    no_banco = CONJUNTOS_NO_BANCO[conjunto]
+    rodada, falha = rodada_semanal_atual(no_banco)
     avisos = []
     tabela = _obter_previsao(conjunto, config.MODELO_SEMANAS, rodada, falha,
-                             lambda: openmeteo.buscar_semanas(pontos), avisos)
+                             lambda: fonte.semanas(no_banco, pontos, rodada), avisos)
     return tabela, avisos
 
 
 def _obter_previsao(conjunto: str, modelo: str, rodada: datetime | None, falha: str | None, buscar,
                     avisos: list[str]) -> pd.DataFrame | None:
     nome = openmeteo.NOMES[modelo]
+    origem = fonte.origem_da_previsao()   # "o Open-Meteo", "o banco"
     guarda = guarda_da_previsao()
     try:
         if not guarda.precisa_buscar(conjunto, modelo, rodada):
             obtida = guarda.obter(conjunto, modelo, rodada, buscar)
         elif rodada is None:
             # Nada guardado e nem os metadados responderam: a busca falharia do mesmo jeito,
-            # depois de esperar as tentativas
-            avisos.append(f"**{nome}** ficou de fora: o Open-Meteo não respondeu ({falha}).")
+            # depois de esperar as tentativas. No banco, sem falha, é o modelo que não tem rodada
+            motivo = f"{origem} não respondeu ({falha})" if falha else f"não há rodada dele n{origem}"
+            avisos.append(f"**{nome}** ficou de fora: {motivo}.")
             return None
         else:
-            with st.spinner(f"Buscando a previsão do {nome} ({conjunto}) no Open-Meteo…"):
+            with st.spinner(f"Buscando a previsão do {nome} ({conjunto}) n{origem}…"):
                 obtida = guarda.obter(conjunto, modelo, rodada, buscar)
-    except openmeteo.ErroOpenMeteo as erro:
-        avisos.append(f"**{nome}** ficou de fora: o Open-Meteo não respondeu ({erro}).")
+    except fonte.ErroPrevisao as erro:
+        avisos.append(f"**{nome}** ficou de fora: {origem} não respondeu ({erro}).")
         return None
     guardada = previsao.rodada_da(obtida.tabela)
     if obtida.aviso and guardada is not None:
@@ -1186,7 +1197,7 @@ def pagina_mapas_previstos() -> None:
         st.info("Escolha ao menos um mapa na barra lateral.")
         st.stop()
 
-    pontos_grade = openmeteo.pontos_da_grade()
+    pontos_grade = fonte.pontos_da_grade()
     grades, avisos = previsao_dos_pontos("grade", pontos_grade, (modelo,))
     nas_estacoes, avisos_estacoes = previsao_dos_pontos("estações", openmeteo.pontos_das_estacoes(estacoes),
                                                         (modelo,))
@@ -1232,7 +1243,7 @@ def pagina_mapas_previstos() -> None:
                 with coluna_tela:
                     painel_do_mapa_previsto(previsao.MAPAS[nome], modelo, rodada, dia, hoje, rotulos, ajustar,
                                             diaria_grade, pontos_grade, diaria_estacoes, estacoes, grades[0])
-    espacamento = f"{config.GRADE_PREVISAO:g}".replace(".", ",")
+    espacamento = f"{previsao.espacamento(pontos_grade):g}".replace(".", ",")
     st.caption(f"A superfície é a do próprio modelo, nos {len(pontos_grade)} pontos da grade de "
                f"{espacamento}° que cobrem o estado, levada à resolução do mapa por interpolação bilinear: "
                "não é IDW de estação. Os números sobre as estações são a previsão do mesmo modelo no ponto "
@@ -1348,7 +1359,7 @@ def pagina_semanas() -> None:
         st.info("Escolha ao menos um mapa na barra lateral.")
         st.stop()
 
-    pontos_grade = openmeteo.pontos_da_grade()
+    pontos_grade = fonte.pontos_da_grade_semanal()
     semanal_grade, avisos = semanas_dos_pontos("grade-semanas", pontos_grade)
     semanal_estacoes, avisos_estacoes = semanas_dos_pontos("estações-semanas",
                                                            openmeteo.pontos_das_estacoes(estacoes))
@@ -1413,7 +1424,7 @@ def pagina_semanas() -> None:
                 with coluna_tela:
                     painel_do_mapa_semanal(mapa, rodada, semana, rotulos, semanal_grade, pontos_grade,
                                            semanal_estacoes, estacoes, titulo)
-    espacamento = f"{config.GRADE_PREVISAO:g}".replace(".", ",")
+    espacamento = f"{previsao.espacamento(pontos_grade):g}".replace(".", ",")
     st.caption(f"A superfície é a do EC46 nos {len(pontos_grade)} pontos da grade de {espacamento}°, levada à "
                "resolução do mapa por interpolação bilinear, como nos mapas dos dias. Os números sobre as "
                "estações são a anomalia no ponto de cada uma, e são eles que entram no ranking do PNG do "

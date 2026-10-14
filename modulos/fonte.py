@@ -7,8 +7,9 @@ planilhas não sabem de onde as leituras vieram. É a costura descrita em
 docs/plano_arquitetura.md (passo 7).
 
 - "apis": cada função repassa o pedido ao `inmet.py`.
-- "banco": lê o cadastro e as leituras do `climageo`, com o usuário que só lê, e devolve as mesmas
-  tabelas que o `inmet.py` devolveria, coluna por coluna.
+- "banco": lê o cadastro, as leituras e a previsão do `climageo`, com o usuário que só lê, e
+  devolve as mesmas tabelas que o `inmet.py` e o `openmeteo.py` devolveriam, coluna por coluna. A
+  grade da previsão é a do coletor (0,25°), e não a da busca sob demanda (0,5°).
 
 As funções procuram o `inmet` na hora de cada chamada, sem guardar referência às funções dele.
 É o que deixa os testes trocarem a API do INMET por dados sintéticos, como sempre fizeram.
@@ -21,13 +22,14 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import psycopg
 
-from . import banco, config, inmet
+from . import banco, config, inmet, openmeteo
 
 # As fontes que esta versão sabe usar
 FONTES = ("apis", "banco")
 
 # O erro que os produtos e o painel tratam, venha de qual fonte vier
 ErroFonte = (inmet.ErroINMET, banco.ErroBanco)
+ErroPrevisao = (openmeteo.ErroOpenMeteo, banco.ErroBanco)
 
 
 def _conferir_fonte() -> None:
@@ -89,6 +91,54 @@ def leituras_de_apoio(recorte: config.Recorte, lon_celulas, lat_celulas, inicio:
               + (f", {len(sem_dados)} sem" if sem_dados else ""))
         return coletados
     return inmet.baixar_apoio(recorte, lon_celulas, lat_celulas, inicio, fim, fuso=fuso)
+
+
+# =====================================================
+# A PREVISÃO
+# =====================================================
+# Os conjuntos de pontos têm o nome do banco: "grade" e "estacao"
+def origem_da_previsao() -> str:
+    return "o banco" if _do_banco() else "o Open-Meteo"
+
+
+def pontos_da_grade() -> pd.DataFrame:
+    return openmeteo.pontos_da_grade(passo=config.GRADE_PREVISAO_BANCO if _do_banco() else config.GRADE_PREVISAO)
+
+
+def pontos_da_grade_semanal() -> pd.DataFrame:
+    return openmeteo.pontos_da_grade(passo=config.GRADE_PREVISAO)   # a do coletor e a do painel são a mesma
+
+
+def rodadas_da_previsao(conjunto: str, modelos: tuple[str, ...]) -> dict[str, datetime]:
+    if _do_banco():
+        with _conexao() as conexao:
+            guardadas = banco.rodadas_guardadas(conexao, conjunto)
+        return {modelo: guardadas[modelo].to_pydatetime() for modelo in modelos if modelo in guardadas}
+    return openmeteo.rodadas(modelos)
+
+
+def previsao(conjunto: str, pontos: pd.DataFrame, modelo: str, rodada: datetime | None) -> pd.DataFrame:
+    if _do_banco():
+        with _conexao() as conexao:
+            tabela = banco.ler_previsao(conexao, conjunto, modelo, rodada)
+        return tabela[tabela["ponto"].isin(pontos["ponto"])].reset_index(drop=True)
+    return openmeteo.buscar(pontos, (modelo,))
+
+
+def rodada_das_semanas(conjunto: str) -> datetime | None:
+    if _do_banco():
+        with _conexao() as conexao:
+            rodada = banco.rodadas_semanais_guardadas(conexao, conjunto).get(config.MODELO_SEMANAS)
+        return None if rodada is None else rodada.to_pydatetime()
+    return openmeteo.rodadas((config.MODELO_SEMANAS,))[config.MODELO_SEMANAS]
+
+
+def semanas(conjunto: str, pontos: pd.DataFrame, rodada: datetime | None) -> pd.DataFrame:
+    if _do_banco():
+        with _conexao() as conexao:
+            tabela = banco.ler_semanas(conexao, conjunto, rodada)
+        return tabela[tabela["ponto"].isin(pontos["ponto"])].reset_index(drop=True)
+    return openmeteo.buscar_semanas(pontos)
 
 
 # =====================================================

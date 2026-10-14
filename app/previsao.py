@@ -17,7 +17,7 @@ import pandas as pd
 from scipy.interpolate import RegularGridInterpolator, griddata
 
 from app import variaveis
-from modulos import config, openmeteo
+from modulos import config, fonte, openmeteo
 from modulos.produtos import risco_fogo
 
 HORA, DIA = variaveis.HORA, variaveis.DIA
@@ -67,11 +67,12 @@ class Guarda:
             guardada = self._tabelas.get(chave)
             if not self.precisa_buscar(pontos, modelo, rodada):
                 if rodada is None:
-                    return Obtida(guardada, "não deu para conferir se há rodada nova no Open-Meteo")
+                    origem = fonte.origem_da_previsao()   # "o banco", "o Open-Meteo"
+                    return Obtida(guardada, f"não deu para conferir se há rodada nova n{origem}")
                 return Obtida(guardada)
             try:
                 nova = buscar()
-            except openmeteo.ErroOpenMeteo as erro:
+            except fonte.ErroPrevisao as erro:
                 if guardada is None:
                     raise
                 return Obtida(guardada, str(erro))
@@ -257,8 +258,15 @@ def niveis(mapa: MapaPrevisto, dias: int = 1, ajustar: bool = False):
     return np.linspace(*valores, 21) if tipo == "faixa" else list(valores)
 
 
+def espacamento(pontos: pd.DataFrame) -> float:
+    # O passo da grade, tirado dos próprios pontos: 0,5° na busca sob demanda, 0,25° no banco
+    latitudes = np.unique(np.round(pontos["latitude"].to_numpy(dtype=float), 4))
+    return float(np.diff(latitudes).min()) if len(latitudes) > 1 else config.GRADE_PREVISAO
+
+
 def superficie(valores: pd.Series, pontos: pd.DataFrame, lon_grade: np.ndarray, lat_grade: np.ndarray,
-               passo: float = config.GRADE_PREVISAO) -> np.ndarray | None:
+               passo: float | None = None) -> np.ndarray | None:
+    passo = espacamento(pontos) if passo is None else passo
     tabela = pontos.set_index("ponto").join(valores.rename("valor"), how="inner").dropna(subset=["valor"])
     if len(tabela) < 4:
         return None
