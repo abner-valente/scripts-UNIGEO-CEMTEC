@@ -85,6 +85,14 @@ class ErroOpenMeteo(Exception):
     pass
 
 
+class CotaEsgotada(ErroOpenMeteo):
+    pass
+
+
+class LimitePorMinuto(CotaEsgotada):
+    pass
+
+
 def custo(pontos: int, variaveis: int = len(VARIAVEIS), modelos: int = len(config.MODELOS_PREVISAO),
           dias: int = config.DIAS_PREVISAO) -> float:
     return pontos * max(1.0, variaveis * modelos / 10) * max(1.0, dias / 14)
@@ -136,7 +144,10 @@ def _pedir(metodo: str, url: str, **kwargs) -> dict | list:
             motivo = f"sem resposta ({erro.__class__.__name__})"
         else:
             if resposta.status_code == 429:
-                raise ErroOpenMeteo(f"cota do Open-Meteo esgotada: {_motivo(resposta)}")
+                # A de cada minuto zera no minuto seguinte; as de cada hora e de cada dia, não
+                motivo = _motivo(resposta)
+                cota = LimitePorMinuto if "minutely" in motivo.lower() else CotaEsgotada
+                raise cota(f"cota do Open-Meteo esgotada: {motivo}")
             if 400 <= resposta.status_code < 500:
                 raise ErroOpenMeteo(f"pedido recusado (HTTP {resposta.status_code}): {_motivo(resposta)}")
             if resposta.status_code >= 500:

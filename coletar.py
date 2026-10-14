@@ -7,6 +7,7 @@ Feitos para o Agendador de Tarefas do Windows, pelo servidor\\coletar.bat, e rod
     python coletar.py inmet --extras                 # uma vez por dia: a sensação térmica, a bateria e o processador
     python coletar.py inmet --historico 2018-01-01   # uma vez só: as horas desde a data, retomando de onde parou
     python coletar.py inmet --historico 2018-01-01 --ate 2018-12-31   # só um trecho (o último dia entra inteiro)
+    python coletar.py previsao                       # de hora em hora: as rodadas novas dos modelos e do EC46
 
 A conexão é a BANCO_GRAVACAO do .env, no schema BANCO_SCHEMA (padrão: climageo). Com --teste
 (`python coletar.py inmet --teste`), é a BANCO_TESTE, no schema climageo_teste, que os testes
@@ -24,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 
 import psycopg
 
-from modulos import banco, coletor_inmet, config, inmet
+from modulos import banco, coletor_inmet, coletor_previsao, config, inmet
 
 SCHEMA_DE_TESTE = "climageo_teste"
 # A carga do histórico leva ~22 horas sem ninguém olhando. Se a conexão cair (o servidor derruba a
@@ -68,6 +69,8 @@ def argumentos(linha: list[str] | None = None) -> argparse.Namespace:
                       help="as horas desde DATA (UTC), pulando as que já estão no banco")
     do_inmet.add_argument("--ate", type=ler_data, metavar="DATA",
                           help="com --historico: até o fim do dia DATA (UTC), inclusive (padrão: agora)")
+    trabalhos.add_parser("previsao", parents=[comum],
+                         help="as rodadas das 00Z e 12Z dos modelos e o EC46, do Open-Meteo (de hora em hora)")
     opcoes = parser.parse_args(linha)
     if getattr(opcoes, "ate", None) and not opcoes.historico:
         parser.error("--ate só vale com --historico")
@@ -118,6 +121,9 @@ def executar(opcoes: argparse.Namespace) -> int:
             # --ate é o último dia, inteiro: até a 00:00 do dia seguinte, que fecha a última hora dele
             ate = opcoes.ate + timedelta(days=1) if opcoes.ate else None
             return 1 if carregar_historico(papel, schema, opcoes.historico, ate).falhas else 0
+        if opcoes.trabalho == "previsao":
+            coleta = coletor_previsao.coletar(lambda: banco.conectar(papel, schema=schema))
+            return 1 if coleta.falhas else 0
         with banco.conectar(papel, schema=schema) as conexao:
             if opcoes.trabalho == "esquema":
                 banco.criar_esquema(conexao)

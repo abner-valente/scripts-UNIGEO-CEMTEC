@@ -320,6 +320,21 @@ def rodadas_guardadas(conexao: psycopg.Connection, conjunto: str) -> dict[str, d
 
 
 @_sem_deixar_transacao
+def rodadas_semanais_guardadas(conexao: psycopg.Connection, conjunto: str) -> dict[str, datetime]:
+    linhas = conexao.execute("SELECT modelo, max(rodada_utc) FROM previsao_semanal WHERE conjunto = %s "
+                             "GROUP BY modelo", (_conferir_conjunto(conjunto),)).fetchall()
+    return {modelo: pd.Timestamp(rodada).tz_convert("UTC") for modelo, rodada in linhas}
+
+
+@_sem_deixar_transacao
+def pontos_das_estacoes(conexao: psycopg.Connection, uf: str) -> pd.DataFrame:
+    # As que estão na lista do INMET, em operação ou em pane; as que fecharam não têm situação
+    tabela = _tabela(conexao, "SELECT codigo AS ponto, latitude, longitude FROM estacao "
+                              "WHERE uf = %s AND situacao IS NOT NULL ORDER BY codigo", (uf,))
+    return _numeros(tabela, ["latitude", "longitude"])
+
+
+@_sem_deixar_transacao
 def ler_previsao(conexao: psycopg.Connection, conjunto: str, modelo: str, rodada=None) -> pd.DataFrame:
     tabela = f"previsao_horaria_{_conferir_conjunto(conjunto)}"
     if rodada is None:

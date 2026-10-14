@@ -186,9 +186,18 @@ def test_cota_esgotada_falha_de_primeira(monkeypatch):
 
     monkeypatch.setattr(openmeteo.requests, "request", falso)
 
-    with pytest.raises(openmeteo.ErroOpenMeteo, match="cota do Open-Meteo esgotada.*Minutely"):
+    with pytest.raises(openmeteo.LimitePorMinuto, match="cota do Open-Meteo esgotada.*Minutely"):
         openmeteo.previsao_horaria(pontos(1))
     assert len(chamadas) == 1
+
+
+@pytest.mark.parametrize("motivo", ["Hourly API request limit exceeded.", "Daily API request limit exceeded."])
+def test_a_cota_da_hora_e_a_do_dia_nao_sao_a_do_minuto(monkeypatch, motivo):
+    monkeypatch.setattr(openmeteo.requests, "request",
+                        lambda *args, **kwargs: Resposta(429, {"error": True, "reason": motivo}))
+    with pytest.raises(openmeteo.CotaEsgotada) as erro:
+        openmeteo.previsao_horaria(pontos(1))
+    assert not isinstance(erro.value, openmeteo.LimitePorMinuto)
 
 
 def test_falha_passageira_e_repetida(monkeypatch, open_meteo):
