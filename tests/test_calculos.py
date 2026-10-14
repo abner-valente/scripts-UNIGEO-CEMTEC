@@ -21,10 +21,22 @@ def test_recorte_segue_a_hora_que_termina_na_leitura(serie):
 
 def test_acumulado_de_chuva(serie):
     dados = serie("2026-07-30", "2026-07-31", CHUVA=0.5)
-    dados.loc[3, "CHUVA"] = np.nan  # leitura sem dado conta como zero
+    dados.loc[3, "CHUVA"] = np.nan  # hora sem leitura: não soma nada, e as outras continuam somando
     # Janela (00 UTC, 12 UTC]: leituras das 01 às 12 UTC, uma delas sem dado
     assert calculos.acumulado_chuva(dados, utc("2026-07-30 00:00"), utc("2026-07-30 12:00")) == 5.5
-    assert calculos.acumulado_chuva(dados, utc("2026-08-01"), utc("2026-08-02")) == 0.0
+
+
+def test_estacao_sem_nenhuma_hora_de_chuva_fica_sem_dado(serie):
+    # Como Juti e Itaquiraí em 12/10/2026: mandaram bateria e processador, e nenhuma hora de chuva
+    dados = serie("2026-07-30", "2026-07-31", CHUVA=np.nan, TEN_BAT=12.6, TEM_CPU=31.0)
+    assert np.isnan(calculos.acumulado_chuva(dados, utc("2026-07-30 00:00"), utc("2026-07-30 12:00")))
+    # Janela sem leitura nenhuma, também
+    assert np.isnan(calculos.acumulado_chuva(dados, utc("2026-08-01"), utc("2026-08-02")))
+
+
+def test_zero_mm_medido_continua_zero(serie):
+    dados = serie("2026-07-30", "2026-07-31", CHUVA=0.0)
+    assert calculos.acumulado_chuva(dados, utc("2026-07-30 00:00"), utc("2026-07-30 12:00")) == 0.0
 
 
 def test_indice_do_extremo_e_data_hora(serie):

@@ -71,6 +71,19 @@ def test_acumulado_soma_so_as_horas_da_janela():
     assert somas["Bonito"] == pytest.approx(24.0)
 
 
+def test_acumulado_de_quem_nao_mediu_chuva_fica_sem_dado():
+    sem = float("nan")
+    tabela = pd.concat([leituras("Juti", "2026-10-11 01:00", 24, sem),                    # só bateria
+                        leituras("Bonito", "2026-10-11 01:00", 24, [sem] * 12 + [1.0] * 12),
+                        leituras("Corumba", "2026-10-11 01:00", 24, 0.0)], ignore_index=True)
+
+    somas = chuva.acumulado(tabela, instante("2026-10-12 00:00"), "24 h")
+
+    assert pd.isna(somas["Juti"])
+    assert somas["Bonito"] == pytest.approx(12.0)   # a chuva parcial soma as horas que tem
+    assert somas["Corumba"] == 0.0                  # e 0 mm medido continua 0 mm
+
+
 def test_acumulado_entra_a_leitura_do_fim_e_nao_a_do_inicio():
     """Convenção do projeto: a leitura de uma hora cobre a hora que termina nela."""
     tabela = leituras("Bonito", "2026-09-24 00:00", 25, [100.0] + [1.0] * 24)
@@ -168,6 +181,25 @@ def test_cascata_separa_as_estacoes():
 
 def test_sem_leituras_a_cascata_sai_vazia_e_nao_quebra():
     assert chuva.cascata(pd.DataFrame(), por_dia=True).empty
+
+
+@pytest.mark.parametrize("por_dia", [False, True], ids=["horaria", "diaria"])
+def test_cascata_deixa_fora_quem_nao_mediu_chuva(por_dia):
+    tabela = pd.concat([leituras("Juti", "2026-10-11 01:00", 24, float("nan")),
+                        leituras("Bonito", "2026-10-11 01:00", 24, 1.0)], ignore_index=True)
+
+    barras = chuva.cascata(tabela, por_dia=por_dia)
+
+    assert set(barras["Estação"]) == {"Bonito"}
+    assert chuva.cascata(leituras("Juti", "2026-10-11 01:00", 24, float("nan")), por_dia=por_dia).empty
+
+
+def test_cascata_de_quem_mediu_algumas_horas_soma_so_as_que_tem():
+    tabela = leituras("Bonito", "2026-10-11 01:00", 24, [float("nan")] * 12 + [1.0] * 12)
+
+    barras = chuva.cascata(tabela, por_dia=True)
+
+    assert barras[barras["tipo"] == "total"]["valor"].iloc[0] == pytest.approx(12.0)
 
 
 def test_a_cascata_do_estado_soma_as_estacoes_num_passo_so():
