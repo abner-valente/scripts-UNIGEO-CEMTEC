@@ -62,6 +62,21 @@ def test_chuva_do_dia_soma_as_horas():
     assert variaveis.calcular(variaveis.por_nome("Chuva acumulada"), dia) == pytest.approx(14.0)
 
 
+def test_chuva_acumulada_de_quem_nao_mediu_fica_sem_dado():
+    acumulada = variaveis.por_nome("Chuva acumulada")
+    tabela = pd.concat([um_dia("Juti", CHUVA=[np.nan] * 24),                          # só bateria
+                        um_dia("Bonito", CHUVA=[np.nan] * 20 + [2.5, 10.0, 1.5, 0.0]),
+                        um_dia("Corumba", CHUVA=[0.0] * 24)], ignore_index=True)
+
+    valores = variaveis.por_estacao(acumulada, tabela)
+
+    assert np.isnan(valores["Juti"])
+    assert valores["Bonito"] == pytest.approx(14.0)   # a chuva parcial soma as horas que tem
+    assert valores["Corumba"] == 0.0                  # e 0 mm medido continua 0 mm
+    assert np.isnan(variaveis.calcular(acumulada, um_dia("Juti", CHUVA=[np.nan] * 24)))
+    assert variaveis.no_tempo(acumulada, tabela, variaveis.DIA)["Juti"].isna().all()
+
+
 def test_radiacao_zera_o_ruido_negativo_antes_de_somar():
     dia = um_dia(RAD_GLO=[-3.5] * 12 + [1000.0] * 12)
     acumulada = variaveis.por_nome("Radiação acumulada")

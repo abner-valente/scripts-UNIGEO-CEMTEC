@@ -52,7 +52,8 @@ def acumulado(leituras: pd.DataFrame, fim: datetime, rotulo: str) -> pd.Series:
     dentro = leituras[(leituras["dt_local"] > comeco) & (leituras["dt_local"] <= termino)]
     if dentro.empty:
         return pd.Series(dtype=float)
-    return dentro.groupby("Estação", sort=False)[COLUNA].sum().rename(rotulo)
+    # min_count=1: a estação sem nenhuma leitura de chuva na janela fica sem dado, e não com 0 mm
+    return dentro.groupby("Estação", sort=False)[COLUNA].sum(min_count=1).rename(rotulo)
 
 
 def cobre(leituras: pd.DataFrame, fim: datetime, rotulo: str) -> bool:
@@ -73,6 +74,9 @@ def cascata(leituras: pd.DataFrame, por_dia: bool, ultimas_horas: int = 24) -> p
     if not por_dia:
         ultimos = sorted(passos["_quando"].unique())[-ultimas_horas:]
         passos = passos[passos["_quando"].isin(ultimos)]
+    # A estação sem nenhuma leitura de chuva nos passos fica fora, e não vira uma cascata de 0 mm.
+    # Quem mediu algumas horas continua somando só as que mediu.
+    passos = passos[passos.groupby("Estação")[COLUNA].transform("count") > 0]
 
     somas = (passos.groupby(["Estação", "_quando"], sort=True)[COLUNA].sum()
              .reset_index().rename(columns={COLUNA: "valor"}))

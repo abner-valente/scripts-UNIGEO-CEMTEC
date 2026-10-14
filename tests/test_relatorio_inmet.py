@@ -94,6 +94,49 @@ def test_acumulados_de_chuva_do_tempo_real(serie):
     assert chuva["Acumulado 72h"] == 72.0
 
 
+def test_estacao_sem_nenhuma_hora_de_chuva_fica_fora_da_aba_de_chuva(serie):
+    # Como Juti e Itaquiraí em 12/10/2026: só bateria e processador, nenhuma hora de chuva
+    dados = serie("2026-07-29", "2026-08-01", CHUVA=np.nan)
+    resumo = relatorio_inmet.resumir_estacao(dados, ESTACAO, DIA)
+    assert "Chuva" not in resumo
+    assert {"Temp_Min", "Temp_Max", "Umidade", "Vento"} <= set(resumo)
+
+
+def test_chuva_parcial_soma_so_as_horas_que_a_estacao_mediu(serie):
+    dados = serie("2026-07-29", "2026-08-01")  # 1 mm por hora
+    # Dia 30/07 em MS = leituras das 05 UTC de 30/07 às 04 UTC de 31/07; 6 delas sem chuva
+    sem_leitura = (dados["dt_utc"] > utc("2026-07-30 10:00")) & (dados["dt_utc"] <= utc("2026-07-30 16:00"))
+    dados.loc[sem_leitura, "CHUVA"] = np.nan
+    assert relatorio_inmet.resumir_estacao(dados, ESTACAO, DIA)["Chuva"]["Acumulado Dia"] == 18.0
+
+
+def test_zero_mm_medido_entra_na_aba_de_chuva(serie):
+    dados = serie("2026-07-29", "2026-08-01", CHUVA=0.0)
+    assert relatorio_inmet.resumir_estacao(dados, ESTACAO, DIA)["Chuva"]["Acumulado Dia"] == 0.0
+
+
+def test_tempo_real_deixa_em_branco_so_a_janela_sem_leitura_de_chuva(serie):
+    dados = serie("2026-09-10", "2026-09-14 14:00")  # 1 mm por hora; última leitura às 13 UTC (9 h em MS)
+    dados.loc[dados["dt_utc"] > utc("2026-09-14 04:00"), "CHUVA"] = np.nan  # hoje, desde 0 h em MS, sem chuva
+    chuva = relatorio_inmet.resumir_estacao(dados, ESTACAO, TEMPO_REAL)["Chuva"]
+    assert np.isnan(chuva["Chuva Hoje (desde 00h MS)"])
+    assert chuva["Acumulado 12h"] == 3.0    # 02, 03 e 04 UTC
+    assert chuva["Acumulado 72h"] == 63.0
+
+
+def test_tabela_de_chuva_tem_o_0_mm_e_nao_tem_quem_nao_mediu(serie):
+    resumos = []
+    for nome, milimetros in (("Seca", 0.0), ("So bateria", np.nan), ("Molhada", 2.0)):
+        dados = serie("2026-07-29", "2026-08-01", CHUVA=milimetros)
+        estacao = pd.Series({"Estação": nome, "VL_LATITUDE": -20.0, "VL_LONGITUDE": -55.0})
+        resumos.append(relatorio_inmet.resumir_estacao(dados, estacao, DIA))
+
+    chuva = relatorio_inmet.montar_tabelas(resumos, DIA)["Chuva"]
+
+    assert chuva["Estação"].tolist() == ["Molhada", "Seca"]
+    assert chuva["Acumulado Dia"].tolist() == [48.0, 0.0]
+
+
 def test_rajada_em_km_h_com_a_direcao_do_mesmo_horario(serie):
     dados = serie("2026-07-30", "2026-07-31")
     dados.loc[10, ["VEN_RAJ", "VEN_DIR"]] = [20.0, 225.0]
@@ -140,6 +183,28 @@ def test_execucao_completa(api_simulada, periodo, colunas_chuva, mapas_esperados
     assert all(len(aba) == api_simulada.estacoes_com_dados for aba in abas.values())
     assert [c for c in abas["Chuva"].columns if c not in ("Estação", "Latitude", "Longitude")] == colunas_chuva
     assert len(list((pasta / "mapas").glob("*.png"))) == mapas_esperados
+
+
+def test_estacao_que_so_mandou_bateria_fica_fora_da_planilha_e_do_mapa_de_chuva(api_simulada, monkeypatch):
+    # Pela API, a estação que só manda bateria e processador vem com as linhas de chuva vazias
+    baixar = inmet.baixar_dados_estacao
+
+    def so_bateria_em_dourados(codigo, *args, **kwargs):
+        dados = baixar(codigo, *args, **kwargs)
+        if codigo == "A702":
+            dados["CHUVA"] = np.nan
+        return dados
+
+    monkeypatch.setattr(inmet, "baixar_dados_estacao", so_bateria_em_dourados)
+    assert relatorio_inmet.executar(DIA) == 0
+
+    pasta = DIA.pasta_saida(relatorio_inmet.NOME)
+    abas = pd.read_excel(pasta / f"Relatorio_{config.UF}_{DIA.identificador}.xlsx", sheet_name=None)
+    dourados = inmet.formatar_nome_estacao("DOURADOS")
+    assert dourados not in set(abas["Chuva"]["Estação"])
+    assert len(abas["Chuva"]) == api_simulada.estacoes_com_dados - 1
+    assert all(dourados in set(abas[aba]["Estação"]) for aba in ("Temp_Min", "Temp_Max", "Umidade", "Vento"))
+    assert len(list((pasta / "mapas").glob("*Chuva*.png"))) == 2   # o pontual e o interpolado continuam saindo
 
 
 def test_falha_ao_listar_as_estacoes(api_simulada, monkeypatch):

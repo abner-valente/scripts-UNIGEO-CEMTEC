@@ -120,6 +120,8 @@ DIRECOES = {"da_maior": _direcao_da_maior, "resultante": _direcao_resultante}
 # por estação e por hora — centenas de grupos —, e passar cada um por uma função Python custaria
 # caro à toa. Os compostos (média dos extremos, compensada) continuam pela função.
 ATALHOS = {"valor": "mean", "maior": "max", "menor": "min", "media": "mean", "soma": "sum"}
+# min_count=1: a estação sem nenhuma hora medida na janela fica sem dado, e não com 0 mm
+ARGUMENTOS_DOS_ATALHOS = {"soma": {"min_count": 1}}
 
 CALCULOS = {
     # Na hora cheia há uma leitura por estação: a média só protege de uma duplicata na API.
@@ -130,7 +132,7 @@ CALCULOS = {
     # Radiação à noite devolve valor levemente negativo: é ruído conhecido do sensor, e somado
     # ao longo do dia viraria um desconto que nunca houve.
     "soma_sem_negativos": lambda dados, colunas: dados[colunas[0]].clip(lower=0).sum(),
-    "soma": lambda dados, colunas: dados[colunas[0]].sum(),
+    "soma": lambda dados, colunas: dados[colunas[0]].sum(min_count=1),
     "media_dos_extremos": lambda dados, colunas: (dados[colunas[0]].mean() + dados[colunas[1]].mean()) / 2,
     "compensada": _compensada,
 }
@@ -304,7 +306,8 @@ def calcular(produto: Produto, leituras: pd.DataFrame) -> float:
 
 def _colapsar(produto: Produto, agrupado) -> pd.Series:
     if produto.calculo in ATALHOS:
-        return agrupado[produto.colunas[0]].agg(ATALHOS[produto.calculo])
+        return agrupado[produto.colunas[0]].agg(ATALHOS[produto.calculo],
+                                                **ARGUMENTOS_DOS_ATALHOS.get(produto.calculo, {}))
     return agrupado.apply(lambda dados: calcular(produto, dados), include_groups=False)
 
 

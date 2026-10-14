@@ -98,11 +98,12 @@ def resumir_estacao(dados: pd.DataFrame, estacao: pd.Series, periodo: Periodo,
             **coordenadas,
         }
 
-    linhas["Chuva"] = {
-        "Estação": nome,
-        **{coluna: calculos.acumulado_chuva(dados, inicio, fim) for coluna, (inicio, fim) in janelas_chuva(periodo).items()},
-        **coordenadas,
-    }
+    acumulados = {coluna: calculos.acumulado_chuva(dados, inicio, fim)
+                  for coluna, (inicio, fim) in janelas_chuva(periodo).items()}
+    # Sem leitura de chuva em janela nenhuma, a estação fica fora da aba e dos mapas de chuva,
+    # como nas outras variáveis: sem medida não é 0 mm
+    if any(pd.notna(valor) for valor in acumulados.values()):
+        linhas["Chuva"] = {"Estação": nome, **acumulados, **coordenadas}
     return linhas
 
 
