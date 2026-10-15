@@ -174,7 +174,9 @@ def test_tabelas_ordenadas_pelo_valor(serie):
     (Periodo.de_datas(date(2026, 9, 14), date(2026, 9, 15), 8, 8), ["Acumulado Período"], 11),
     (TEMPO_REAL, COLUNAS_TEMPO_REAL, 15),
 ], ids=["dia", "periodo", "periodo_com_horas", "tempo_real"])
-def test_execucao_completa(api_simulada, periodo, colunas_chuva, mapas_esperados):
+def test_execucao_completa(api_simulada, periodo, colunas_chuva, mapas_esperados, request):
+    if periodo is not DIA:   # o desenho de verdade fica com o modo "dia"
+        request.getfixturevalue("mapas_sem_desenho")
     assert relatorio_inmet.executar(periodo) == 0
 
     pasta = periodo.pasta_saida(relatorio_inmet.NOME)
@@ -185,7 +187,8 @@ def test_execucao_completa(api_simulada, periodo, colunas_chuva, mapas_esperados
     assert len(list((pasta / "mapas").glob("*.png"))) == mapas_esperados
 
 
-def test_estacao_que_so_mandou_bateria_fica_fora_da_planilha_e_do_mapa_de_chuva(api_simulada, monkeypatch):
+def test_estacao_que_so_mandou_bateria_fica_fora_da_planilha_e_do_mapa_de_chuva(api_simulada, monkeypatch,
+                                                                                mapas_sem_desenho):
     # Pela API, a estação que só manda bateria e processador vem com as linhas de chuva vazias
     baixar = inmet.baixar_dados_estacao
 
@@ -221,7 +224,7 @@ def test_nenhuma_estacao_com_dados_interrompe_o_relatorio(api_simulada, monkeypa
 
 
 
-def test_as_vizinhas_sao_baixadas_mas_nao_entram_na_planilha(api_simulada, capsys):
+def test_as_vizinhas_sao_baixadas_mas_nao_entram_na_planilha(api_simulada, capsys, mapas_sem_desenho):
     assert relatorio_inmet.executar(DIA) == 0
 
     saida = capsys.readouterr().out

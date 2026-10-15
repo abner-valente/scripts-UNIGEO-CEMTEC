@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 import requests
 
-from modulos import banco, config, inmet
+from modulos import banco, config, inmet, mapas
 
 # O schema dos testes do banco, apagado e recriado a cada módulo de testes que o usa
 SCHEMA_DE_TESTE = "climageo_teste"
@@ -55,6 +55,19 @@ def serie():
 def fonte_das_apis(monkeypatch):
     # Os testes não herdam o FONTE_DADOS do .env da máquina; os da fonte "banco" a pedem
     monkeypatch.setattr(config, "FONTE_DADOS", "apis")
+
+
+@pytest.fixture
+def mapas_sem_desenho(monkeypatch):
+    # Para os testes que não são sobre o desenho: o mapa é montado inteiro, mas não passa pelo
+    # ajuste da figura nem vira PNG de verdade, que levavam ~0,4 s por mapa. O arquivo sai vazio,
+    # com o nome certo. Cada produto mantém uma execução completa que desenha de verdade.
+    def finalizar(fig, ax, espec, base, caminho, tela=None):
+        if caminho is not None:
+            caminho.write_bytes(b"")
+            print(f"🗺️ Mapa salvo: {caminho.name}")
+        return fig
+    monkeypatch.setattr(mapas, "_finalizar", finalizar)
 
 
 @pytest.fixture(autouse=True)

@@ -227,7 +227,7 @@ def test_dia_nao_traz_as_colunas_de_dias(serie):
     assert "Dias com Risco Alto" not in linha
 
 
-def test_execucao_completa_de_periodo(api_simulada):
+def test_execucao_completa_de_periodo(api_simulada, mapas_sem_desenho):
     periodo = Periodo.de_datas(date(2026, 9, 14), date(2026, 9, 15))
     assert risco_fogo.executar(periodo) == 0
 

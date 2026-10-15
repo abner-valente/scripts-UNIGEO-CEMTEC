@@ -217,12 +217,12 @@ def test_a_revisao_rebusca_os_dias_pedidos_um_dia_por_vez(limpa, inmet_simulado,
 
 
 def test_a_revisao_leva_ao_banco_a_correcao_que_os_3_dias_nao_pegam(limpa, inmet_simulado):
-    coletor_inmet.revisar(limpa, 30, agora=AGORA)
-    corrigida = datetime(2026, 9, 25, 6, tzinfo=timezone.utc)
+    coletor_inmet.revisar(limpa, 5, agora=AGORA)
+    corrigida = datetime(2026, 10, 5, 6, tzinfo=timezone.utc)   # 4 dias antes: fora dos 3 do coletor
     inmet_simulado["corrigidas"][corrigida] = 21.5   # o INMET trocou um valor fora da curva
 
     assert coletor_inmet.coletar_ultimas(limpa, agora=AGORA).gravadas == 0
-    coleta = coletor_inmet.revisar(limpa, 30, agora=AGORA)
+    coleta = coletor_inmet.revisar(limpa, 5, agora=AGORA)
 
     assert coleta.gravadas == 3   # as três estações daquela hora, e nada mais
     assert limpa.execute("SELECT tem_ins FROM inmet_horaria WHERE estacao = 'A702' AND hora_utc = %s",

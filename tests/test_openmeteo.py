@@ -135,16 +135,19 @@ def test_o_pedido_leva_as_variaveis_os_modelos_e_as_unidades(open_meteo):
     assert (dados["wind_speed_unit"], dados["precipitation_unit"]) == ("kmh", "mm")
 
 
-def test_pedidos_grandes_vao_em_lotes_que_cabem_no_minuto(open_meteo):
+def test_pedidos_grandes_vao_em_lotes_que_cabem_no_minuto(open_meteo, monkeypatch):
     pedidos, esperas = open_meteo
+    # Com o limite de 60 por minuto, cabem 28 pontos por lote (2,1 chamadas cada): 61 pontos são três
+    # lotes, como os 607 da grade de 0,25° no limite de verdade, com um décimo dos dados
+    monkeypatch.setattr(config, "OPENMETEO_POR_MINUTO", 60)
 
-    tabela = openmeteo.previsao_horaria(pontos(607))
+    tabela = openmeteo.previsao_horaria(pontos(61))
 
     lotes = [len(dados["latitude"].split(",")) for _, url, dados in pedidos if not url.endswith("meta.json")]
-    assert sum(lotes) == 607 and len(lotes) == 3
+    assert sum(lotes) == 61 and len(lotes) == 3
     assert all(openmeteo.custo(tamanho) <= config.OPENMETEO_POR_MINUTO for tamanho in lotes)
     assert esperas == [openmeteo.ESPERA_ENTRE_LOTES] * 2
-    assert tabela["ponto"].nunique() == 607
+    assert tabela["ponto"].nunique() == 61
 
 
 def test_a_rodada_e_a_anterior_ate_completar_a_margem(open_meteo):

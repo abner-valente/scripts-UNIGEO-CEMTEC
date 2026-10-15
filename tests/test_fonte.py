@@ -211,7 +211,7 @@ def test_a_previsao_do_banco_traz_a_rodada_pedida_so_nos_pontos_pedidos(previsao
 
 
 def test_a_grade_da_previsao_e_a_do_banco_ou_a_da_busca_sob_demanda(monkeypatch):
-    assert len(fonte.pontos_da_grade()) == len(openmeteo.pontos_da_grade(passo=config.GRADE_PREVISAO))
+    monkeypatch.setattr(openmeteo, "pontos_da_grade", lambda recorte=config.RECORTE, passo=None: passo)
+    assert (fonte.pontos_da_grade(), fonte.pontos_da_grade_semanal()) == (0.5, 0.5)
     monkeypatch.setattr(config, "FONTE_DADOS", "banco")
-    assert len(fonte.pontos_da_grade()) == len(openmeteo.pontos_da_grade(passo=config.GRADE_PREVISAO_BANCO))
-    assert len(fonte.pontos_da_grade_semanal()) == len(openmeteo.pontos_da_grade(passo=config.GRADE_PREVISAO))
+    assert (fonte.pontos_da_grade(), fonte.pontos_da_grade_semanal()) == (0.25, 0.5)
