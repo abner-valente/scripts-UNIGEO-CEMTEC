@@ -163,6 +163,44 @@ def test_as_semanas_do_ec46_voltam_como_entraram(limpa):
     assert banco.ler_semanas(limpa, "grade").empty
 
 
+def semanas_do(modelo: str, rodada, pontos=("A702",)) -> pd.DataFrame:
+    return pd.DataFrame([{"modelo": modelo, "rodada_utc": pd.Timestamp(rodada), "ponto": ponto, "latitude": -20.45,
+                          "longitude": -54.62, "semana": date(2026, 10, 19),
+                          **{coluna: 1.0 for coluna in openmeteo.VARIAVEIS_SEMANAIS.values()}}
+                         for ponto in pontos])[openmeteo.COLUNAS_SEMANAIS]
+
+
+def test_a_rodada_mais_nova_de_cada_modelo_atravessa_as_particoes(limpa):
+    # O ICON tem a rodada mais nova noutro mês, numa partição só dele; o banco salta de modelo em
+    # modelo pelo índice, sem varrer a tabela
+    modelos = ("ecmwf_ifs025", "gfs_seamless", "icon_seamless")
+    banco.gravar_previsao(limpa, previsao(rodada=RODADA, modelos=modelos), "estacao")
+    banco.gravar_previsao(limpa, previsao(rodada=RODADA + timedelta(days=31), modelos=("icon_seamless",)), "estacao")
+    banco.gravar_previsao(limpa, previsao(rodada=RODADA - timedelta(days=1), modelos=("gfs_seamless",)), "estacao")
+
+    assert banco.rodadas_guardadas(limpa, "estacao") == {"ecmwf_ifs025": pd.Timestamp(RODADA),
+                                                          "gfs_seamless": pd.Timestamp(RODADA),
+                                                          "icon_seamless": pd.Timestamp(RODADA + timedelta(days=31))}
+    assert banco.rodadas_guardadas(limpa, "grade") == {}
+
+
+def test_a_ultima_rodada_das_semanas_e_a_do_conjunto_pedido(limpa):
+    ec46 = "ecmwf_ec46_ensemble_mean"
+    banco.gravar_semanas(limpa, semanas_do(ec46, RODADA), "estacao")
+    banco.gravar_semanas(limpa, semanas_do(ec46, RODADA + timedelta(days=1)), "grade")
+
+    assert banco.rodadas_semanais_guardadas(limpa, "estacao") == {ec46: pd.Timestamp(RODADA)}
+    assert banco.rodadas_semanais_guardadas(limpa, "grade") == {ec46: pd.Timestamp(RODADA + timedelta(days=1))}
+
+
+def test_as_semanas_sao_lidas_do_modelo_pedido(limpa):
+    banco.gravar_semanas(limpa, semanas_do("ecmwf_ec46_ensemble_mean", RODADA, pontos=("A702", "A721")), "estacao")
+    banco.gravar_semanas(limpa, semanas_do("outro_modelo", RODADA + timedelta(days=1)), "estacao")
+
+    assert banco.ler_semanas(limpa, "estacao")["ponto"].tolist() == ["A702", "A721"]   # o EC46, na rodada dele
+    assert banco.ler_semanas(limpa, "estacao", modelo="outro_modelo")["modelo"].unique().tolist() == ["outro_modelo"]
+
+
 # =====================================================
 # O INMET
 # =====================================================

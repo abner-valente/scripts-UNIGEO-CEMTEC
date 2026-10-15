@@ -312,18 +312,34 @@ def _numeros(tabela: pd.DataFrame, colunas: list[str]) -> pd.DataFrame:
     return tabela
 
 
+def _ultimas_rodadas(conexao: psycopg.Connection, tabela: str, filtro: sql.Composable = sql.SQL(""),
+                     argumentos: tuple = ()) -> dict[str, datetime]:
+    # A última rodada de cada modelo pela chave primária, que começa por (modelo, rodada_utc). Num
+    # "GROUP BY modelo" o PostgreSQL 16 não usa o índice e varre a tabela inteira, e a das estações
+    # cresce para sempre. Aqui a recursão salta de um modelo ao seguinte pelo índice, e o máximo de
+    # cada um é uma leitura só (medido em 15/10/2026: 0,2 ms contra 129 ms, e crescendo).
+    consulta = sql.SQL("""
+        WITH RECURSIVE modelos AS (
+            (SELECT modelo FROM {tabela} ORDER BY modelo LIMIT 1)
+            UNION ALL
+            SELECT (SELECT t.modelo FROM {tabela} t WHERE t.modelo > m.modelo ORDER BY t.modelo LIMIT 1)
+            FROM modelos m WHERE m.modelo IS NOT NULL
+        )
+        SELECT modelo, (SELECT max(t.rodada_utc) FROM {tabela} t WHERE t.modelo = modelos.modelo{filtro})
+        FROM modelos WHERE modelo IS NOT NULL""").format(tabela=sql.Identifier(tabela), filtro=filtro)
+    linhas = conexao.execute(consulta, argumentos).fetchall()
+    return {modelo: pd.Timestamp(rodada).tz_convert("UTC") for modelo, rodada in linhas if rodada is not None}
+
+
 @_sem_deixar_transacao
 def rodadas_guardadas(conexao: psycopg.Connection, conjunto: str) -> dict[str, datetime]:
-    tabela = sql.Identifier(f"previsao_horaria_{_conferir_conjunto(conjunto)}")
-    linhas = conexao.execute(sql.SQL("SELECT modelo, max(rodada_utc) FROM {} GROUP BY modelo").format(tabela)).fetchall()
-    return {modelo: pd.Timestamp(rodada).tz_convert("UTC") for modelo, rodada in linhas}
+    return _ultimas_rodadas(conexao, f"previsao_horaria_{_conferir_conjunto(conjunto)}")
 
 
 @_sem_deixar_transacao
 def rodadas_semanais_guardadas(conexao: psycopg.Connection, conjunto: str) -> dict[str, datetime]:
-    linhas = conexao.execute("SELECT modelo, max(rodada_utc) FROM previsao_semanal WHERE conjunto = %s "
-                             "GROUP BY modelo", (_conferir_conjunto(conjunto),)).fetchall()
-    return {modelo: pd.Timestamp(rodada).tz_convert("UTC") for modelo, rodada in linhas}
+    return _ultimas_rodadas(conexao, "previsao_semanal", sql.SQL(" AND t.conjunto = %s"),
+                            (_conferir_conjunto(conjunto),))
 
 
 @_sem_deixar_transacao
@@ -356,17 +372,18 @@ def ler_previsao(conexao: psycopg.Connection, conjunto: str, modelo: str, rodada
 
 
 @_sem_deixar_transacao
-def ler_semanas(conexao: psycopg.Connection, conjunto: str, rodada=None) -> pd.DataFrame:
+def ler_semanas(conexao: psycopg.Connection, conjunto: str, rodada=None,
+                modelo: str = config.MODELO_SEMANAS) -> pd.DataFrame:
     _conferir_conjunto(conjunto)
     if rodada is None:
-        rodada = conexao.execute("SELECT max(rodada_utc) FROM previsao_semanal WHERE conjunto = %s",
-                                 (conjunto,)).fetchone()[0]
+        rodada = rodadas_semanais_guardadas(conexao, conjunto).get(modelo)
         if rodada is None:
             return pd.DataFrame(columns=openmeteo.COLUNAS_SEMANAIS)
     colunas = list(openmeteo.COLUNAS_SEMANAIS)
-    resultado = _tabela(conexao, sql.SQL("SELECT {} FROM previsao_semanal WHERE conjunto = %s AND rodada_utc = %s "
-                                         "ORDER BY ponto, semana").format(_lista(colunas)),
-                        (conjunto, _em_utc(rodada)))
+    # Com o modelo no filtro, a leitura vai pela chave primária (modelo, rodada_utc, conjunto, ...)
+    resultado = _tabela(conexao, sql.SQL("SELECT {} FROM previsao_semanal WHERE modelo = %s AND rodada_utc = %s "
+                                         "AND conjunto = %s ORDER BY ponto, semana").format(_lista(colunas)),
+                        (modelo, _em_utc(rodada), conjunto))
     resultado = _numeros(resultado, ["latitude", "longitude", *openmeteo.VARIAVEIS_SEMANAIS.values()])
     return _horas_em_utc(resultado, ["rodada_utc"])[colunas]
 
