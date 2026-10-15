@@ -1477,13 +1477,13 @@ def contornos_interativos(uf: str) -> tuple[dict, dict]:
     return base.uf.__geo_interface__, interativo.municipios(base)
 
 
-def mapa_de_risco_interativo(grade, pontos: pd.DataFrame, uf: str, niveis_escritos: bool) -> pdk.Deck:
+def mapa_interativo(imagem: str, pontos: pd.DataFrame, uf: str, escritos: bool) -> pdk.Deck:
     recorte = config.recorte_de(uf)
     estado, municipios = contornos_interativos(uf)
     # A imagem entra depois de criada a camada: passada no construtor, o pydeck a trataria como
     # expressão a ser avaliada no navegador ("@@=data:image/png;...")
     campo = pdk.Layer("BitmapLayer", data=None, bounds=superficie.limites(recorte))
-    campo.image = interativo.imagem_de_classes(grade, malha_fina(uf).dentro)
+    campo.image = imagem
     camadas = [
         campo,
         # Preenchidos quase transparentes: é o preenchimento que responde ao mouse com o nome
@@ -1496,9 +1496,9 @@ def mapa_de_risco_interativo(grade, pontos: pd.DataFrame, uf: str, niveis_escrit
                   get_fill_color="cor", get_line_color=[25, 25, 25], stroked=True, line_width_min_pixels=1,
                   get_radius=3000, radius_min_pixels=6, radius_max_pixels=14, pickable=True),
     ]
-    if niveis_escritos:
+    if escritos:
         camadas.append(pdk.Layer("TextLayer", data=pontos, get_position=["Longitude", "Latitude"],
-                                 get_text="nivel", get_size=12, get_color=[20, 20, 20],
+                                 get_text="rotulo", get_size=12, get_color=[20, 20, 20],
                                  get_pixel_offset=[0, -17], background=True,
                                  get_background_color=[255, 255, 255, 215]))
     return pdk.Deck(layers=camadas, map_provider=None, map_style=interativo.ESTILO_SEM_FUNDO,
@@ -1535,6 +1535,132 @@ def grafico_do_risco_na_estacao(serie: pd.DataFrame, hora_local=None) -> alt.VCo
                            .encode(x="agora:T"))
         graficos.append(alt.layer(*camadas).properties(height=120))
     return alt.vconcat(*graficos).resolve_scale(x="shared")
+
+
+def grafico_da_chuva_na_estacao(serie: pd.DataFrame, por_dia: bool) -> alt.LayerChart:
+    eixo = alt.Axis(format="%d/%m" if por_dia else "%d/%m %Hh", labelAngle=0)
+    base = alt.Chart(serie).encode(x=alt.X("quando:T", title=None, axis=eixo))
+    barras = base.mark_bar(color="#1e88e5", opacity=0.85).encode(
+        y=alt.Y("chuva:Q", title="Chuva (mm)"),
+        tooltip=[alt.Tooltip("quando:T", title="Dia" if por_dia else "Hora",
+                             format="%d/%m/%Y" if por_dia else "%d/%m %H:%M"),
+                 alt.Tooltip("chuva:Q", title="Chuva (mm)", format=".1f"),
+                 alt.Tooltip("acumulado:Q", title="Acumulado (mm)", format=".1f")])
+    linha = base.mark_line(color="#90a4ae", strokeDash=[5, 3]).encode(
+        y=alt.Y("acumulado:Q", title="Acumulado (mm)"))
+    return alt.layer(barras, linha).resolve_scale(y="independent").properties(height=240)
+
+
+def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, inicio: datetime,
+                     fim: datetime) -> None:
+    horas_do_periodo = pd.date_range(inicio.astimezone(recorte.fuso) + pd.Timedelta(hours=1),
+                                     fim.astimezone(recorte.fuso), freq="h")
+    # Uma consulta só, que fecha o mensal de qualquer instante do período
+    desde = chuva_calc.inicio_necessario(horas_do_periodo[0])
+    if not st.session_state.get("chuva_liberada"):
+        st.info(f"Os acumulados olham para trás: para fechar o mensal, a consulta vai até **{desde:%d/%m}**. "
+                f"São as {len(estacoes)} estações do estado, mais as vizinhas para a borda. Na primeira vez "
+                "demora; depois vem do cache.")
+        if st.button("Carregar a chuva do mês", type="primary", key="liberar_chuva_interativa"):
+            st.session_state["chuva_liberada"] = True
+            st.rerun()
+        return
+    leituras, _ = carregar_leituras(tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]),
+                                    desde.astimezone(config.FUSO_UTC), fim, uf,
+                                    f"Consultando a chuva desde {desde:%d/%m}")
+    vizinhas = estacoes_vizinhas(uf)
+    apoio, _ = carregar_leituras(tuple(vizinhas["CD_ESTACAO"]), tuple(vizinhas["Estação"]),
+                                 desde.astimezone(config.FUSO_UTC), fim, uf,
+                                 "Consultando a chuva das estações vizinhas")
+    if leituras.empty or chuva_calc.COLUNA not in leituras:
+        st.warning("Não veio chuva de nenhuma estação no período.")
+        return
+
+    modo = st.radio("Mapa", ["Acumulado", "Hora a hora", "Por dia"], horizontal=True, key="modo_chuva_interativa")
+    if modo == "Acumulado":
+        janela_tela, ate_tela = st.columns([1, 3])
+        with janela_tela:
+            rotulos_janela = chuva_calc.rotulos()
+            rotulo = st.selectbox("Janela", rotulos_janela, index=rotulos_janela.index("24 h"),
+                                  key="janela_chuva_interativa", help="O mensal começa no dia 1º.")
+        with ate_tela:
+            ate = st.select_slider("Acumulado até", options=list(horas_do_periodo), value=horas_do_periodo[-1],
+                                   format_func=lambda marca: f"{marca:%d/%m %H:%M}", key="ate_chuva_interativa",
+                                   help="A janela conta para trás a partir deste instante.")
+        if not chuva_calc.cobre(leituras, ate, rotulo):
+            st.warning(f"Não há dado que alcance o começo da janela de {rotulo}: o acumulado mostraria menos "
+                       "chuva do que caiu.")
+            return
+        produto = variaveis.por_nome("Chuva acumulada")
+        valores, valores_apoio = (chuva_calc.acumulado(dados, ate, rotulo) for dados in (leituras, apoio))
+        horas = chuva_calc.horas_da_janela(ate, rotulo)
+        comeco, _ = chuva_calc.janela(ate, rotulo)
+        quando, legenda = f"{comeco:%d/%m %H:%M} a {ate:%d/%m %H:%M}", f"Chuva {rotulo}"
+        serie_de, serie_ate = comeco, ate
+    else:
+        tipo = variaveis.HORA if modo == "Hora a hora" else variaveis.DIA
+        inicio_local = inicio.astimezone(recorte.fuso)
+        do_periodo, apoio_periodo = (dados[dados["dt_local"] > inicio_local] for dados in (leituras, apoio))
+        paradas = variaveis.momentos(do_periodo, tipo)
+        if not paradas:
+            st.warning("Sem leituras no período escolhido.")
+            return
+        formatar = ((lambda marca: f"{marca:%d/%m/%Y}") if tipo == variaveis.DIA
+                    else (lambda marca: f"{marca:%d/%m %H:%M}"))
+        momento = st.select_slider("Quando", options=paradas, value=paradas[-1], format_func=formatar,
+                                   key=f"quando_chuva_interativa_{tipo}")
+        produto = variaveis.por_nome("Chuva na hora" if tipo == variaveis.HORA else "Chuva acumulada")
+        valores, valores_apoio = (variaveis.por_estacao(produto, variaveis.recorte(dados, tipo, momento))
+                                  for dados in (do_periodo, apoio_periodo))
+        horas = 1.0 if tipo == variaveis.HORA else 24.0
+        quando = formatar(momento)
+        legenda = "Chuva na hora" if tipo == variaveis.HORA else "Chuva do dia"
+        serie_de, serie_ate = inicio_local, fim.astimezone(recorte.fuso)
+
+    marcar, ajustar_tela = st.columns([1, 1])
+    with marcar:
+        escritos = st.checkbox("Mostrar o valor de cada estação", value=True, key="valores_chuva_interativa",
+                               help="O número sobre cada estação. Desligado, fica só o ponto.")
+    with ajustar_tela:
+        ajustar = st.checkbox("Ajustar a escala ao dado", value=False, key="ajustar_chuva_interativa",
+                              help="Desligada, as classes são as do boletim: 20 mm têm a mesma cor em "
+                                   "qualquer mapa.")
+    medidas = valores.dropna()
+    if len(medidas) < config.MIN_ESTACOES_INTERPOLACAO:
+        st.warning(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram a chuva em {quando}.")
+        return
+    niveis = niveis_da_escala(produto, horas, ajustar)
+    imagem = camada_superficie(valores, produto.nome, quando, uf, tuple(niveis) if niveis is not None else None,
+                               valores_apoio)
+    pontos = interativo.pontos_de_valores(_com_coordenadas(valores, produto.nome, uf), produto.nome, legenda,
+                                          produto.unidade, produto.decimais)
+    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos), on_select="rerun",
+                             selection_mode="single-object", key="mapa_chuva_interativa", height=ALTURA_MAPA)
+    if niveis is not None:
+        st.image(barra_de_escala(produto.paleta, tuple(niveis), produto.unidade), width="content")
+    if medidas.max() == 0:
+        st.info(f"Não choveu em nenhuma estação em {quando}.")
+    st.caption(f"{legenda}, {quando}: de {medidas.min():.1f} a {medidas.max():.1f} mm em {len(medidas)} estações. "
+               "A superfície é a do mapa do boletim (o IDW das estações, com as vizinhas na borda), e abaixo "
+               "da primeira classe não se pinta. **Clique numa estação** para ver a chuva dela.")
+
+    clicadas = evento.selection.get("objects", {}).get("estacoes", []) if evento is not None else []
+    if clicadas:
+        st.session_state["estacao_chuva_interativa"] = clicadas[0]["titulo"]
+    escolhida = st.session_state.get("estacao_chuva_interativa")
+    if escolhida in set(estacoes["Estação"]):
+        # Hora a hora até 4 dias; mais que isso, por dia, para as barras caberem
+        por_dia = (serie_ate - serie_de) > timedelta(days=4)
+        serie = interativo.serie_da_chuva(leituras, escolhida, serie_de, serie_ate, por_dia)
+        total = serie["chuva"].sum(min_count=1)
+        st.subheader(f"{escolhida} — " + (f"{total:.1f} mm".replace(".", ",") if pd.notna(total) else "sem dado")
+                     + f" de {serie_de:%d/%m %H:%M} a {serie_ate:%d/%m %H:%M}")
+        if serie.empty or pd.isna(total):
+            st.info("A estação não registrou chuva nessa janela.")
+        else:
+            st.altair_chart(grafico_da_chuva_na_estacao(serie, por_dia), width="stretch")
+            st.caption("As barras são a chuva de cada " + ("dia" if por_dia else "hora")
+                       + "; a linha tracejada, o acumulado ao longo da janela.")
 
 
 def risco_interativo(uf: str, recorte: config.Recorte, intervalo: tuple, estacoes: pd.DataFrame,
@@ -1586,7 +1712,8 @@ def risco_interativo(uf: str, recorte: config.Recorte, intervalo: tuple, estacoe
 
     escritos = st.checkbox("Mostrar o nível de cada estação", value=True, key="niveis_risco_interativo",
                            help="O número sobre cada estação. Desligado, fica só a cor do ponto.")
-    evento = st.pydeck_chart(mapa_de_risco_interativo(grade, pontos, uf, escritos), on_select="rerun",
+    imagem = interativo.imagem_de_classes(grade, malha_fina(uf).dentro)
+    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos), on_select="rerun",
                              selection_mode="single-object", key="mapa_risco_interativo", height=ALTURA_MAPA)
     st.markdown(legenda_do_risco(), unsafe_allow_html=True)
     st.caption("Role para aproximar, arraste para deslocar, passe o mouse para ver o nível e as medidas, e "
@@ -1624,7 +1751,9 @@ def pagina_mapas_interativos() -> None:
     inicio, fim = janela_do_periodo(intervalo, recorte)
     st.caption("Os mapas do boletim continuam no Painel. Aqui eles se aproximam, se arrastam e respondem "
                "ao clique, desenhados só com os limites do estado e dos municípios: nada vem da internet.")
-    (aba_risco_interativo,) = st.tabs(["Risco de Fogo"])
+    aba_chuva_interativa, aba_risco_interativo = st.tabs(["Chuva", "Risco de Fogo"])
+    with aba_chuva_interativa:
+        chuva_interativa(uf, recorte, estacoes, inicio, fim)
     with aba_risco_interativo:
         risco_interativo(uf, recorte, intervalo, estacoes, inicio, fim)
 

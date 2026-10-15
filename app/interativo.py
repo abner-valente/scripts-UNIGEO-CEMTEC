@@ -17,6 +17,9 @@ from modulos import config
 from modulos.produtos import risco_fogo
 
 OPACIDADE = 0.78
+COR_DA_ESTACAO = [25, 25, 25, 215]   # nas variáveis contínuas o ponto é escuro: a cor é da superfície
+# O que toda camada de estações leva: posição, cor, o texto sobre o ponto e o balão
+COLUNAS_DOS_PONTOS = ["Estação", "Longitude", "Latitude", "cor", "rotulo", "titulo", "detalhe"]
 # Um estilo de mapa sem fonte nenhuma, só a cor de fundo, num endereço "data:" que o navegador lê sem
 # ir à rede. Sem estilo, o Streamlit põe o mapa de fundo da Carto, buscado na internet; e ele só aceita
 # o estilo como endereço, e não como dicionário (visto em 15/10/2026)
@@ -76,23 +79,51 @@ def pontos_de_risco(estacoes: pd.DataFrame, coluna: str, legenda: str) -> pd.Dat
     # hora) o balão traz as três medidas; por dia e no período, só o nível, que junta horas diferentes
     tabela = estacoes.dropna(subset=[coluna]).copy()
     if tabela.empty:
-        return pd.DataFrame(columns=["Estação", "Longitude", "Latitude", "cor", "nivel", "titulo", "detalhe"])
+        return pd.DataFrame(columns=COLUNAS_DOS_PONTOS)
     niveis = tabela[coluna].astype(int)
     tabela["cor"] = [rgba(config.CORES_RISCO[nivel]) for nivel in niveis]
-    tabela["nivel"] = niveis.astype(str)
+    tabela["rotulo"] = niveis.astype(str)
     tabela["titulo"] = tabela["Estação"]
     com_condicoes = set(risco_fogo.COLUNAS_CONDICOES) <= set(tabela.columns)
     tabela["detalhe"] = [
         f"{legenda}: {config.ROTULOS_RISCO[nivel]}"
         + (f" ({nivel} de 3)<br/>{_detalhe_da_hora(linha)}" if com_condicoes else "")
         for nivel, (_, linha) in zip(niveis, tabela.iterrows())]
-    return tabela[["Estação", "Longitude", "Latitude", "cor", "nivel", "titulo", "detalhe"]].reset_index(drop=True)
+    return tabela[COLUNAS_DOS_PONTOS].reset_index(drop=True)
+
+
+def pontos_de_valores(pontos: pd.DataFrame, coluna: str, legenda: str, unidade: str, casas: int) -> pd.DataFrame:
+    # As variáveis contínuas (a chuva): o ponto escuro, o valor escrito sobre ele e no balão
+    tabela = pontos.dropna(subset=[coluna]).copy()
+    if tabela.empty:
+        return pd.DataFrame(columns=COLUNAS_DOS_PONTOS)
+    texto = tabela[coluna].map(lambda valor: _numero(valor, casas))
+    tabela["cor"] = [COR_DA_ESTACAO] * len(tabela)
+    tabela["rotulo"] = texto
+    tabela["titulo"] = tabela["Estação"]
+    tabela["detalhe"] = f"{legenda}: " + texto + f" {unidade}"
+    return tabela[COLUNAS_DOS_PONTOS].reset_index(drop=True)
 
 
 def municipios(base) -> dict:
     # Os limites, com o nome no balão (os mesmos campos do balão das estações)
     tabela = base.municipios[[COLUNA_DO_MUNICIPIO, "geometry"]].rename(columns={COLUNA_DO_MUNICIPIO: "titulo"})
     return tabela.assign(detalhe="Município").__geo_interface__
+
+
+def serie_da_chuva(leituras: pd.DataFrame, nome: str, de, ate, por_dia: bool) -> pd.DataFrame:
+    # A chuva de uma estação em (de, ate], por hora ou por dia (a leitura da 00h fecha o dia
+    # anterior, como no resto do projeto), com o acumulado ao longo da janela
+    dela = leituras[(leituras["Estação"] == nome) & (leituras["dt_local"] > de) & (leituras["dt_local"] <= ate)]
+    if dela.empty or "CHUVA" not in dela:
+        return pd.DataFrame(columns=["quando", "chuva", "acumulado"])
+    if por_dia:
+        quando = (dela["dt_local"] - pd.Timedelta(hours=1)).dt.date.map(pd.Timestamp)
+    else:
+        quando = dela["dt_local"].dt.tz_localize(None)
+    somas = dela.groupby(quando.to_numpy(), sort=True)["CHUVA"].sum(min_count=1)
+    return pd.DataFrame({"quando": somas.index, "chuva": somas.to_numpy(),
+                         "acumulado": somas.fillna(0).cumsum().to_numpy()})
 
 
 def serie_da_estacao(completas: list, nome: str, fuso) -> pd.DataFrame:

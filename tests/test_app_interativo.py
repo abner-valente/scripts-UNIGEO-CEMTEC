@@ -53,7 +53,7 @@ def test_na_hora_o_balao_traz_o_nivel_e_as_tres_medidas():
 
     assert pontos["Estação"].tolist() == ["Campo Grande", "Dourados"]      # a sem nível fica de fora
     assert pontos["cor"].tolist()[0] == interativo.rgba(config.CORES_RISCO[3])
-    assert pontos["nivel"].tolist() == ["3", "0"]
+    assert pontos["rotulo"].tolist() == ["3", "0"]
     campo_grande = pontos["detalhe"].iloc[0]
     assert campo_grande.startswith("Na hora: Risco alto (3 de 3)")
     assert "✔ Temperatura máxima: 32,4 °C" in campo_grande and "✔ Umidade mínima: 24 %" in campo_grande
@@ -93,3 +93,39 @@ def test_o_estilo_do_mapa_nao_pede_nada_a_internet():
     assert interativo.ESTILO_SEM_FUNDO.startswith("data:application/json,")
     estilo = json.loads(unquote(interativo.ESTILO_SEM_FUNDO.split(",", 1)[1]))
     assert estilo["sources"] == {} and [camada["type"] for camada in estilo["layers"]] == ["background"]
+
+
+def test_na_chuva_o_ponto_e_escuro_e_leva_o_valor():
+    acumulado = pd.DataFrame({"Estação": ["Campo Grande", "Dourados", "Sem dado"], "Latitude": [-20.4, -22.2, -21.0],
+                              "Longitude": [-54.7, -54.9, -55.0], "Chuva acumulada": [12.44, 0.0, np.nan]})
+
+    pontos = interativo.pontos_de_valores(acumulado, "Chuva acumulada", "Chuva 24 h", "mm", 1)
+
+    assert pontos["Estação"].tolist() == ["Campo Grande", "Dourados"]
+    assert pontos["rotulo"].tolist() == ["12,4", "0,0"]
+    assert pontos["detalhe"].tolist() == ["Chuva 24 h: 12,4 mm", "Chuva 24 h: 0,0 mm"]
+    assert pontos["cor"].iloc[0] == interativo.COR_DA_ESTACAO
+
+
+def leituras_de_chuva() -> pd.DataFrame:
+    horas = pd.date_range("2026-10-13 22:00", periods=4, freq="h", tz=config.FUSO_MS)   # 22h, 23h, 00h, 01h
+    return pd.DataFrame({"Estação": "Campo Grande", "dt_local": horas, "CHUVA": [1.0, 2.5, np.nan, 4.0]})
+
+
+def test_a_chuva_da_estacao_hora_a_hora_com_o_acumulado():
+    leituras = leituras_de_chuva()
+    serie = interativo.serie_da_chuva(leituras, "Campo Grande", leituras["dt_local"].min() - pd.Timedelta(hours=1),
+                                      leituras["dt_local"].max(), por_dia=False)
+    assert serie["chuva"].tolist()[:2] == [1.0, 2.5] and np.isnan(serie["chuva"].iloc[2])
+    assert serie["acumulado"].tolist() == [1.0, 3.5, 3.5, 7.5]
+    assert serie["quando"].iloc[0] == pd.Timestamp("2026-10-13 22:00")
+
+
+def test_a_chuva_da_estacao_por_dia_com_a_00h_fechando_o_dia_anterior():
+    leituras = leituras_de_chuva()
+    serie = interativo.serie_da_chuva(leituras, "Campo Grande", leituras["dt_local"].min() - pd.Timedelta(hours=1),
+                                      leituras["dt_local"].max(), por_dia=True)
+    assert serie["quando"].tolist() == [pd.Timestamp("2026-10-13"), pd.Timestamp("2026-10-14")]
+    assert serie["chuva"].tolist() == [3.5, 4.0]   # 22h, 23h e a 00h (vazia) no dia 13; a 01h no 14
+    assert interativo.serie_da_chuva(leituras, "Outra", leituras["dt_local"].min(), leituras["dt_local"].max(),
+                                     por_dia=False).empty
