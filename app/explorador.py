@@ -30,6 +30,7 @@ from app import animacao
 from app import boletim
 from app import chuva as chuva_calc
 from app import dados as coleta
+from app import interativo
 from app import previsao
 from app import qualidade
 from app import risco
@@ -1434,6 +1435,200 @@ def pagina_semanas() -> None:
 # =====================================================
 # PÁGINAS
 # =====================================================
+# =====================================================
+# FILTROS EM COMUM DAS PÁGINAS DO OBSERVADO
+# =====================================================
+def filtros_de_estado_e_periodo() -> tuple[str, config.Recorte, tuple]:
+    # O estado vem primeiro porque tudo abaixo depende dele: as estações, o fuso que define o
+    # dia, os shapefiles do mapa. Só aparecem as UFs que têm shapefile na pasta shp/.
+    ufs = config.ufs_disponiveis()
+    st.session_state.setdefault("uf", config.UF if config.UF in ufs else ufs[0])
+    uf = st.selectbox("Estado", ufs, key="uf",
+                      format_func=lambda sigla: f"{sigla} — {config.ESTADOS[sigla][0]}",
+                      help="Para acrescentar um estado, rode "
+                           "ferramentas/simplificar_municipios.py --uf SIGLA, que busca a "
+                           "malha dele no IBGE.")
+    recorte = config.recorte_de(uf)
+    hoje = date.today()
+    intervalo = st.date_input("Período", max_value=hoje, format="DD/MM/YYYY",
+                              value=st.session_state.get("periodo_guardado",
+                                                         (hoje - timedelta(days=7), hoje - timedelta(days=1))))
+    if len(intervalo) != 2:
+        st.info("Escolha a data inicial e a final.")
+        st.stop()
+    st.session_state["periodo_guardado"] = intervalo
+    return uf, recorte, intervalo
+
+
+def janela_do_periodo(intervalo: tuple, recorte: config.Recorte) -> tuple[datetime, datetime]:
+    # O dia é o do estado escolhido: em MS ele começa às 04 h UTC, no Paraná às 03 h
+    inicio = datetime.combine(intervalo[0], datetime.min.time(), tzinfo=recorte.fuso).astimezone(config.FUSO_UTC)
+    fim = (datetime.combine(intervalo[1], datetime.min.time(), tzinfo=recorte.fuso)
+           + timedelta(days=1)).astimezone(config.FUSO_UTC)
+    return inicio, fim
+
+
+# =====================================================
+# MAPAS INTERATIVOS (pydeck, sem mapa de fundo da internet)
+# =====================================================
+@st.cache_resource(show_spinner=False, max_entries=ESTADOS_NA_MEMORIA)
+def contornos_interativos(uf: str) -> tuple[dict, dict]:
+    base = base_cartografica(uf)
+    return base.uf.__geo_interface__, interativo.municipios(base)
+
+
+def mapa_de_risco_interativo(grade, pontos: pd.DataFrame, uf: str, niveis_escritos: bool) -> pdk.Deck:
+    recorte = config.recorte_de(uf)
+    estado, municipios = contornos_interativos(uf)
+    # A imagem entra depois de criada a camada: passada no construtor, o pydeck a trataria como
+    # expressão a ser avaliada no navegador ("@@=data:image/png;...")
+    campo = pdk.Layer("BitmapLayer", data=None, bounds=superficie.limites(recorte))
+    campo.image = interativo.imagem_de_classes(grade, malha_fina(uf).dentro)
+    camadas = [
+        campo,
+        # Preenchidos quase transparentes: é o preenchimento que responde ao mouse com o nome
+        pdk.Layer("GeoJsonLayer", data=municipios, id="municipios", stroked=True, filled=True,
+                  get_fill_color=[255, 255, 255, 1], get_line_color=[70, 70, 70, 150],
+                  line_width_min_pixels=0.6, pickable=True),
+        pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[25, 25, 25],
+                  line_width_min_pixels=1.6),
+        pdk.Layer("ScatterplotLayer", data=pontos, id="estacoes", get_position=["Longitude", "Latitude"],
+                  get_fill_color="cor", get_line_color=[25, 25, 25], stroked=True, line_width_min_pixels=1,
+                  get_radius=3000, radius_min_pixels=6, radius_max_pixels=14, pickable=True),
+    ]
+    if niveis_escritos:
+        camadas.append(pdk.Layer("TextLayer", data=pontos, get_position=["Longitude", "Latitude"],
+                                 get_text="nivel", get_size=12, get_color=[20, 20, 20],
+                                 get_pixel_offset=[0, -17], background=True,
+                                 get_background_color=[255, 255, 255, 215]))
+    return pdk.Deck(layers=camadas, map_provider=None, map_style=interativo.ESTILO_SEM_FUNDO,
+                    initial_view_state=pdk.ViewState(**visao_inicial(recorte)),
+                    tooltip={"html": "<b>{titulo}</b><br/>{detalhe}"})
+
+
+def legenda_do_risco() -> str:
+    itens = "".join(f'<span style="display:inline-flex;align-items:center;margin-right:1.1rem">'
+                    f'<span style="width:0.9rem;height:0.9rem;border-radius:2px;margin-right:0.35rem;'
+                    f'background:{cor}"></span>{rotulo}</span>'
+                    for cor, rotulo in zip(reversed(config.CORES_RISCO), reversed(config.ROTULOS_RISCO)))
+    return f'<div style="font-size:0.85rem">{itens}</div>'
+
+
+def grafico_do_risco_na_estacao(serie: pd.DataFrame, hora_local=None) -> alt.VConcatChart:
+    cores = alt.Scale(domain=["atendida", "não"], range=[config.CORES_RISCO[-1], "#9e9e9e"])
+    graficos = []
+    for medida, dela in serie.groupby("Medida", sort=False):
+        base = alt.Chart(dela)
+        camadas = [
+            base.mark_line(color="#607d8b", strokeWidth=1.4).encode(
+                x=alt.X("dt_local:T", title=None, axis=alt.Axis(format="%d/%m %Hh", labelAngle=0)),
+                y=alt.Y("valor:Q", title=medida, scale=alt.Scale(zero=False))),
+            base.mark_circle(size=26).encode(
+                x="dt_local:T", y="valor:Q",
+                color=alt.Color("Condição:N", scale=cores, legend=alt.Legend(orient="bottom", title=None)),
+                tooltip=[alt.Tooltip("dt_local:T", title="Hora", format="%d/%m %H:%M"),
+                         alt.Tooltip("valor:Q", title=medida, format=".1f"), "Condição:N"]),
+            base.mark_rule(color=config.CORES_RISCO[-1], strokeDash=[5, 4]).encode(y="limiar:Q"),
+        ]
+        if hora_local is not None:
+            camadas.append(alt.Chart(pd.DataFrame({"agora": [hora_local]})).mark_rule(color="#29b6f6", strokeWidth=2)
+                           .encode(x="agora:T"))
+        graficos.append(alt.layer(*camadas).properties(height=120))
+    return alt.vconcat(*graficos).resolve_scale(x="shared")
+
+
+def risco_interativo(uf: str, recorte: config.Recorte, intervalo: tuple, estacoes: pd.DataFrame,
+                     inicio: datetime, fim: datetime) -> None:
+    if not st.session_state.get("mapa_liberado"):
+        st.info(f"O mapa usa as {len(estacoes)} estações do estado, mais as vizinhas para a borda. Na "
+                "primeira vez a consulta demora; depois vem do cache.")
+        if st.button(f"Carregar todas as estações de {uf}", type="primary", key="liberar_interativo"):
+            st.session_state["mapa_liberado"] = True
+            st.rerun()
+        return
+    leituras, _ = carregar_leituras(tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]), inicio, fim, uf)
+    vizinhas = estacoes_vizinhas(uf)
+    apoio, _ = carregar_leituras(tuple(vizinhas["CD_ESTACAO"]), tuple(vizinhas["Estação"]), inicio, fim, uf,
+                                 "Consultando as estações vizinhas")
+    completas, avaliadas = risco_avaliado(pd.concat([leituras, apoio], ignore_index=True),
+                                          pd.concat([estacoes, vizinhas], ignore_index=True), uf)
+    do_produto = risco.da_uf(completas, uf)
+    nomes_do_estado = {estacao["Estação"] for estacao, _ in do_produto}
+    if not completas:
+        st.warning("Nenhuma estação tem temperatura, umidade e rajada no período: sem as três "
+                   "não dá para dizer quantas condições valeram.")
+        return
+    if not avaliadas:
+        st.warning(f"Nenhuma hora teve {config.MIN_ESTACOES_INTERPOLACAO} estações com as três "
+                   "medidas: com tão poucos pontos a superfície inventaria mais do que mostra.")
+        return
+
+    modo = MODOS_MAPA[st.radio("Agregação", list(MODOS_MAPA), horizontal=True, key="modo_risco_interativo")]
+    hora_local = None
+    if modo == variaveis.HORA:
+        hora = linha_do_tempo("Quando", list(avaliadas), "quando_risco_interativo",
+                              lambda marca: f"{marca.tz_convert(recorte.fuso):%d/%m %H:%M}",
+                              dia_de=lambda marca: marca.tz_convert(recorte.fuso).date())
+        grade, pontos = avaliadas[hora].grade, avaliadas[hora].estacoes
+        coluna, legenda = risco_fogo.COLUNA_NIVEL_HORA, "Na hora"
+        hora_local = hora.tz_convert(recorte.fuso).tz_localize(None)
+    elif modo == variaveis.DIA:
+        dias = risco.por_dia(avaliadas)
+        dia = linha_do_tempo("Dia", list(dias), "dia_risco_interativo", lambda data: f"{data:%d/%m/%Y}")
+        grade, pontos = dias[dia], risco.estacoes_do_dia(avaliadas, dia)
+        coluna, legenda = risco_fogo.COLUNA_NIVEL_HORA, "Pior nível do dia"
+    else:
+        grade = risco.pior_nivel(avaliadas)
+        pontos = risco.resumo(do_produto, config.Periodo.de_datas(*intervalo, fuso=recorte.fuso), uf)
+        coluna, legenda = risco_fogo.COLUNA_NIVEL, "Pior nível do período"
+    # As vizinhas já entraram na superfície; nos pontos, só as do estado
+    pontos = interativo.pontos_de_risco(pontos[pontos["Estação"].isin(nomes_do_estado)], coluna, legenda)
+
+    escritos = st.checkbox("Mostrar o nível de cada estação", value=True, key="niveis_risco_interativo",
+                           help="O número sobre cada estação. Desligado, fica só a cor do ponto.")
+    evento = st.pydeck_chart(mapa_de_risco_interativo(grade, pontos, uf, escritos), on_select="rerun",
+                             selection_mode="single-object", key="mapa_risco_interativo", height=ALTURA_MAPA)
+    st.markdown(legenda_do_risco(), unsafe_allow_html=True)
+    st.caption("Role para aproximar, arraste para deslocar, passe o mouse para ver o nível e as medidas, e "
+               "**clique numa estação** para ver as três medidas dela no período. A superfície é a mesma "
+               "do mapa do boletim: as três variáveis interpoladas separadas e a regra aplicada célula a célula.")
+
+    # A estação clicada fica escolhida enquanto o deslizante anda, até outro clique
+    clicadas = evento.selection.get("objects", {}).get("estacoes", []) if evento is not None else []
+    if clicadas:
+        st.session_state["estacao_risco_interativo"] = clicadas[0]["titulo"]
+    escolhida = st.session_state.get("estacao_risco_interativo")
+    if escolhida in nomes_do_estado:
+        st.subheader(escolhida)
+        serie = interativo.serie_da_estacao(completas, escolhida, recorte.fuso)
+        st.altair_chart(grafico_do_risco_na_estacao(serie, hora_local), width="stretch")
+        st.caption(f"A linha tracejada é o limiar de cada condição ({config.LIMIAR_TEMP_MAX:g} °C, "
+                   f"{config.LIMIAR_UMIDADE_MIN:g} % e {config.LIMIAR_RAJADA:g} km/h); os pontos vermelhos, "
+                   "as horas em que ela valeu." + (" A linha azul é a hora do mapa." if hora_local is not None
+                                                   else ""))
+
+
+def pagina_mapas_interativos() -> None:
+    st.title("Mapas interativos")
+    aviso = st.container()
+    if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
+        st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
+        st.stop()
+    with st.sidebar:
+        st.header("Filtros")
+        uf, recorte, intervalo = filtros_de_estado_e_periodo()
+        try:
+            estacoes = carregar_estacoes(uf).sort_values("Estação")
+        except fonte.ErroFonte:
+            sem_lista_de_estacoes(aviso, uf)
+    inicio, fim = janela_do_periodo(intervalo, recorte)
+    st.caption("Os mapas do boletim continuam no Painel. Aqui eles se aproximam, se arrastam e respondem "
+               "ao clique, desenhados só com os limites do estado e dos municípios: nada vem da internet.")
+    (aba_risco_interativo,) = st.tabs(["Risco de Fogo"])
+    with aba_risco_interativo:
+        risco_interativo(uf, recorte, intervalo, estacoes, inicio, fim)
+
+
 def _observado() -> None:
     pass
 
@@ -1441,10 +1636,14 @@ def _observado() -> None:
 # A previsão não usa nenhum filtro do observado (estado, período, estações), e numa aba ela ficaria
 # atrás deles; como página, ela só consulta o Open-Meteo quando alguém a abre. Os gráficos e os
 # mapas são páginas separadas pelo mesmo motivo: os mapas pedem a grade, os gráficos não.
-observado = st.Page(_observado, title="Observado (INMET)", icon=":material/history:", default=True)
+observado = st.Page(_observado, title="Painel", icon=":material/history:", default=True)
 lembrar_filtros()
 pagina = st.navigation({
-    "": [observado],
+    "Observado (INMET)": [
+        observado,
+        st.Page(pagina_mapas_interativos, title="Mapas interativos", icon=":material/travel_explore:",
+                url_path="mapas-interativos"),
+    ],
     "Previsão (MS)": [
         st.Page(pagina_previsao, title="Estações", icon=":material/show_chart:", url_path="previsao"),
         st.Page(pagina_mapas_previstos, title="Mapas", icon=":material/map:", url_path="previsao-mapas"),
@@ -1469,24 +1668,7 @@ if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
 
 with st.sidebar:
     st.header("Filtros")
-    # O estado vem primeiro porque tudo abaixo depende dele: as estações, o fuso que define o
-    # dia, os shapefiles do mapa. Só aparecem as UFs que têm shapefile na pasta shp/.
-    ufs = config.ufs_disponiveis()
-    st.session_state.setdefault("uf", config.UF if config.UF in ufs else ufs[0])
-    uf = st.selectbox("Estado", ufs, key="uf",
-                      format_func=lambda sigla: f"{sigla} — {config.ESTADOS[sigla][0]}",
-                      help="Para acrescentar um estado, rode "
-                           "ferramentas/simplificar_municipios.py --uf SIGLA, que busca a "
-                           "malha dele no IBGE.")
-    recorte = config.recorte_de(uf)
-    hoje = date.today()
-    intervalo = st.date_input("Período", max_value=hoje, format="DD/MM/YYYY",
-                              value=st.session_state.get("periodo_guardado",
-                                                         (hoje - timedelta(days=7), hoje - timedelta(days=1))))
-    if len(intervalo) != 2:
-        st.info("Escolha a data inicial e a final.")
-        st.stop()
-    st.session_state["periodo_guardado"] = intervalo
+    uf, recorte, intervalo = filtros_de_estado_e_periodo()
 
     try:
         estacoes = carregar_estacoes(uf).sort_values("Estação")
@@ -1526,10 +1708,7 @@ if not nomes:
 # =====================================================
 # DADOS
 # =====================================================
-# O dia é o do estado escolhido: em MS ele começa às 04 h UTC, no Paraná às 03 h
-inicio = datetime.combine(intervalo[0], datetime.min.time(), tzinfo=recorte.fuso).astimezone(config.FUSO_UTC)
-fim = (datetime.combine(intervalo[1], datetime.min.time(), tzinfo=recorte.fuso)
-       + timedelta(days=1)).astimezone(config.FUSO_UTC)
+inicio, fim = janela_do_periodo(intervalo, recorte)
 codigos = tuple(estacoes.set_index("Estação").loc[nomes, "CD_ESTACAO"])
 
 tabela, falharam = carregar_leituras(codigos, tuple(nomes), inicio, fim, uf)
