@@ -11,7 +11,7 @@ import pandas as pd
 import shapely
 from PIL import Image
 
-from app import interativo
+from app import interativo, variaveis
 from modulos import config
 from modulos.produtos import risco_fogo
 
@@ -129,3 +129,33 @@ def test_a_chuva_da_estacao_por_dia_com_a_00h_fechando_o_dia_anterior():
     assert serie["chuva"].tolist() == [3.5, 4.0]   # 22h, 23h e a 00h (vazia) no dia 13; a 01h no 14
     assert interativo.serie_da_chuva(leituras, "Outra", leituras["dt_local"].min(), leituras["dt_local"].max(),
                                      por_dia=False).empty
+
+
+def test_o_rumo_do_vento_em_oito_direcoes():
+    assert [interativo.rumo(graus) for graus in (0, 22, 23, 90, 135, 180, 270, 337, 338, 360)] ==         ["N", "N", "NE", "L", "SE", "S", "O", "NO", "N", "N"]
+
+
+def test_o_vento_leva_a_seta_para_onde_vai_e_o_balao_de_onde_vem():
+    pontos = interativo.pontos_de_valores(
+        pd.DataFrame({"Estação": ["Campo Grande", "Dourados"], "Latitude": [-20.4, -22.2],
+                      "Longitude": [-54.7, -54.9], "Rajada na hora": [41.0, 12.0]}),
+        "Rajada na hora", "Rajada na hora", "km/h", 1)
+
+    com_vento = interativo.com_direcao(pontos, pd.Series({"Campo Grande": 90.0}))
+
+    # Do leste (90°) o vento vai para oeste: a seta "↑" gira 270° no sentido anti-horário
+    assert com_vento["angulo"].iloc[0] == -270.0 and np.isnan(com_vento["angulo"].iloc[1])
+    assert com_vento["detalhe"].iloc[0] == "Rajada na hora: 41,0 km/h<br/>de 90° (L)"
+    assert com_vento["detalhe"].iloc[1] == "Rajada na hora: 12,0 km/h"
+
+
+def test_a_serie_da_variavel_na_estacao_segue_a_regra_do_produto():
+    horas = pd.date_range("2026-10-13 01:00", periods=48, freq="h", tz=config.FUSO_MS)
+    leituras = pd.DataFrame({"Estação": "Campo Grande", "dt_local": horas, "TEM_MAX": np.arange(48.0)})
+    maxima = variaveis.por_nome("Temperatura máxima")
+
+    serie = interativo.serie_da_variavel(maxima, leituras, "Campo Grande", variaveis.DIA)
+
+    assert serie["valor"].tolist() == [23.0, 47.0]   # a maior das máximas de cada dia (a 00h fecha o anterior)
+    assert serie["quando"].dt.tz is None
+    assert interativo.serie_da_variavel(maxima, leituras, "Outra", variaveis.DIA).empty

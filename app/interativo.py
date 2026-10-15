@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
-from app import superficie
+from app import superficie, variaveis
 from modulos import config
 from modulos.produtos import risco_fogo
 
@@ -109,6 +109,36 @@ def municipios(base) -> dict:
     # Os limites, com o nome no balão (os mesmos campos do balão das estações)
     tabela = base.municipios[[COLUNA_DO_MUNICIPIO, "geometry"]].rename(columns={COLUNA_DO_MUNICIPIO: "titulo"})
     return tabela.assign(detalhe="Município").__geo_interface__
+
+
+RUMOS = ["N", "NE", "L", "SE", "S", "SO", "O", "NO"]
+
+
+def rumo(graus: float) -> str:
+    return RUMOS[int((graus % 360 + 22.5) // 45) % 8]
+
+
+def com_direcao(pontos: pd.DataFrame, direcoes: pd.Series) -> pd.DataFrame:
+    # O vento leva a direção: no balão, de onde ele sopra; na seta, para onde vai. A seta é o
+    # caractere "↑" (o norte), e o TextLayer gira no sentido anti-horário
+    tabela = pontos.copy()
+    graus = tabela["Estação"].map(direcoes)
+    tabela["angulo"] = -((graus + 180) % 360)
+    tabela["detalhe"] = [detalhe + (f"<br/>de {direcao:.0f}° ({rumo(direcao)})" if pd.notna(direcao) else "")
+                         for detalhe, direcao in zip(tabela["detalhe"], graus)]
+    return tabela
+
+
+def serie_da_variavel(produto, leituras: pd.DataFrame, nome: str, modo: str) -> pd.DataFrame:
+    # A variável do mapa numa estação, hora a hora ou dia a dia, pela regra do produto
+    largo = variaveis.no_tempo(produto, leituras, modo)
+    if largo.empty or nome not in largo:
+        return pd.DataFrame(columns=["quando", "valor"])
+    serie = largo[nome].dropna()
+    quando = pd.to_datetime(serie.index)
+    if quando.tz is not None:
+        quando = quando.tz_localize(None)
+    return pd.DataFrame({"quando": quando, "valor": serie.to_numpy(dtype=float)})
 
 
 def serie_da_chuva(leituras: pd.DataFrame, nome: str, de, ate, por_dia: bool) -> pd.DataFrame:
