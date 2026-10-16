@@ -287,12 +287,15 @@ def barras_do_acumulado(valores: pd.Series, unidade: str, quantas: int | None) -
     return (barras + numeros).properties(height=34 * len(tabela) + 60)
 
 
-def cascata_da_chuva(barras: pd.DataFrame, por_dia: bool, facetar: bool = True) -> alt.Chart:
+def cascata_da_chuva(barras: pd.DataFrame, por_dia: bool, titulo: str = "", teto: float | None = None,
+                     altura: int = 300) -> alt.Chart:
     ordem = list(barras.sort_values("ordem")["Passo"].unique())
     base = alt.Chart(barras).encode(
         x=alt.X("Passo:N", title=None, sort=ordem, axis=alt.Axis(labelAngle=-45, labelFontSize=9)))
     desenho = base.mark_bar(size=14 if por_dia else 8).encode(
-        y=alt.Y("base:Q", title="Chuva (mm)", axis=alt.Axis(grid=True, gridOpacity=0.25, format=".1f")),
+        y=alt.Y("base:Q", title="Chuva (mm)", axis=alt.Axis(grid=True, gridOpacity=0.25, format=".1f"),
+                # Uma folga acima do teto, para o número da barra mais alta caber
+                scale=alt.Scale(domain=[0, teto * 1.12]) if teto else alt.Undefined),
         y2="topo:Q",
         color=alt.Color("tipo:N", title=None,
                         scale=alt.Scale(domain=["passo", "total"], range=["#6baed6", "#08306b"]),
@@ -305,10 +308,7 @@ def cascata_da_chuva(barras: pd.DataFrame, por_dia: bool, facetar: bool = True) 
     numeros = (base.transform_filter(alt.datum.valor > 0)
                .mark_text(baseline="bottom", dy=-4, fontSize=CORPO_ROTULO, color="#d0d0d0")
                .encode(y=alt.Y("topo:Q"), text=alt.Text("valor:Q", format=".1f")))
-    empilhado = (desenho + numeros).properties(height=220 if facetar else 300)
-    if not facetar:
-        return empilhado
-    return empilhado.facet(facet=alt.Facet("Estação:N", title=None), columns=2)
+    return (desenho + numeros).properties(height=altura, title=titulo)
 
 
 def rosa_dos_ventos(tabela: pd.DataFrame, nome_estacao: str):
@@ -2162,7 +2162,18 @@ with aba_chuva:
         st.info("Não choveu em nenhuma das estações escolhidas " +
                 ("no período." if por_dia_cascata else "nas últimas 24 horas do período."))
     else:
-        st.altair_chart(cascata_da_chuva(barras, por_dia_cascata), width="stretch")
+        # Um gráfico por estação, e não um só com um painel para cada: assim cada um amplia sozinho
+        # na tela cheia. O teto do eixo é o mesmo em todos, para lado a lado se compararem.
+        nomes_cascata = sorted(barras["Estação"].unique())
+        teto_cascata = float(barras["topo"].max())
+        por_linha_cascata = min(len(nomes_cascata), 2)
+        for primeiro in range(0, len(nomes_cascata), por_linha_cascata):
+            linha = nomes_cascata[primeiro:primeiro + por_linha_cascata]
+            for coluna_tela, nome in zip(st.columns(por_linha_cascata), linha):
+                with coluna_tela:
+                    st.altair_chart(cascata_da_chuva(barras[barras["Estação"] == nome], por_dia_cascata,
+                                                     titulo=nome, teto=teto_cascata, altura=240),
+                                    width="stretch")
         st.caption("Cada barra é a chuva daquele passo, empilhada no que já tinha caído; a barra "
                    "escura no fim é o total. O rótulo só vai onde choveu — num período seco seriam "
                    "dezenas de zeros cobrindo o desenho. " +
@@ -2212,7 +2223,7 @@ with aba_chuva:
             if barras_estado["valor"].sum() == 0:
                 st.info(f"Nenhuma estação do estado registrou chuva até {ate:%d/%m %H:%M}.")
             else:
-                st.altair_chart(cascata_da_chuva(barras_estado, por_dia_estado, facetar=False),
+                st.altair_chart(cascata_da_chuva(barras_estado, por_dia_estado),
                                 width="stretch")
                 st.caption(f"**Soma das {len(estacoes)} estações** em cada passo, empilhada no que já "
                            "tinha caído. É o ritmo da chuva no período, e **não** quanto choveu num "
