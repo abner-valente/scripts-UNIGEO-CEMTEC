@@ -19,6 +19,15 @@ Ainda não está na `main`. É o começo do banco da UNIGEO e dos coletores (fas
 - **O `.env.example` ganhou as conexões do banco** (`BANCO_GRAVACAO`, `BANCO_LEITURA` e `BANCO_TESTE`). Por enquanto, só quem programa usa a de teste.
 - **O coletor do INMET** (`python coletar.py inmet`), que grava no banco as leituras horárias de todas as estações automáticas do Brasil. De hora em hora, ele rebusca os últimos 3 dias, com uma consulta por hora que traz todas as estações, e o banco só reescreve o que o INMET mudou. Uma vez por dia (`--extras`), busca por estação a sensação térmica, a bateria e a temperatura do processador, que a consulta por hora não traz. A carga do histórico (`--historico 2018-01-01`) roda uma vez só: pode ser interrompida com Ctrl+C e retomada com o mesmo comando, e se a conexão com o banco cair no meio, reconecta e retoma sozinha. No servidor, o Agendador de Tarefas o chama pelo `servidor\coletar.bat`.
 
+## [0.3.4] — 16/10/2026
+
+Ajustes de leitura nos gráficos do painel, pedidos pela equipe.
+
+### Mudou
+
+- **Painel: os números dos gráficos têm um tamanho só.** Em todos os gráficos, do observado e da previsão, os números dos eixos passam a 15 px e os escritos sobre as barras e as linhas a 12 px. Antes cada gráfico tinha o seu tamanho, de 9 a 14 px, e na previsão eles saíam pequenos demais. Vale para as séries temporais, a cascata e as barras da chuva, os gráficos do risco de fogo e da qualidade, e os da previsão por estação e por semana.
+- **Painel, Previsão por estação: o valor da chuva vai escrito em cima de cada barra** (no modo "Por dia"), só onde choveu, como na cascata do observado.
+
 ## [0.3.3] — 16/10/2026
 
 Duas mudanças na chuva: a correção de um número errado e um ajuste pedido pela equipe no painel.
