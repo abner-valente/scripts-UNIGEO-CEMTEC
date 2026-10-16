@@ -9,6 +9,15 @@ Cada versão separa as mudanças em até quatro grupos:
 
 Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
+## [0.3.4] — 16/10/2026
+
+Ajustes de leitura nos gráficos do painel, pedidos pela equipe.
+
+### Mudou
+
+- **Painel: os números dos gráficos têm um tamanho só.** Em todos os gráficos, do observado e da previsão, os números dos eixos passam a 15 px e os escritos sobre as barras e as linhas a 12 px. Antes cada gráfico tinha o seu tamanho, de 9 a 14 px, e na previsão eles saíam pequenos demais. Vale para as séries temporais, a cascata e as barras da chuva, os gráficos do risco de fogo e da qualidade, e os da previsão por estação e por semana.
+- **Painel, Previsão por estação: o valor da chuva vai escrito em cima de cada barra** (no modo "Por dia"), só onde choveu, como na cascata do observado.
+
 ## [0.3.3] — 16/10/2026
 
 Duas mudanças na chuva: a correção de um número errado e um ajuste pedido pela equipe no painel.
