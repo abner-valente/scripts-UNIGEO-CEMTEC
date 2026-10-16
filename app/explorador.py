@@ -74,6 +74,9 @@ ESTADOS_NA_MEMORIA = 3
 # Altura dos gráficos de série. Em 320 px, quatro estações com duas séries cada davam oito
 # linhas quase coladas: não dava para dizer qual era qual.
 ALTURA_GRAFICO = 420
+# Os números dos eixos nos gráficos da previsão por estação: o dobro do padrão do Vega (10),
+# a pedido da equipe (16/10/2026)
+FONTE_DOS_EIXOS_DA_PREVISAO = 20
 # Corpo do número escrito sobre a barra. Vale para a barra deitada e para a cascata: são a mesma
 # leitura em dois desenhos, e tamanhos diferentes fariam um parecer menos importante que o outro.
 CORPO_ROTULO = 13
@@ -212,7 +215,7 @@ def _escala_das_cores(cores: dict[str, str] | None, presentes: pd.Series):
 
 
 def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, casas: int = 1,
-             cores: dict[str, str] | None = None) -> alt.Chart:
+             cores: dict[str, str] | None = None, fonte_dos_eixos: int = 10) -> alt.Chart:
     # Arrastar move e Shift+roda aproxima. Sem o Shift, a roda do mouse em cima do gráfico
     # aproximaria em vez de rolar a página, e quem passa por vários gráficos fica preso no
     # primeiro (é o que o .interactive() faz por padrão).
@@ -235,11 +238,11 @@ def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, 
 
     eixo_x = alt.X("dt_local:T", title=None,
                    axis=alt.Axis(grid=True, gridOpacity=0.25, labelAngle=0, labelExpr=formato,
-                                 labelFontSize=10, tickCount="day" if por_dia else alt.Undefined))
+                                 labelFontSize=fonte_dos_eixos, tickCount="day" if por_dia else alt.Undefined))
     base = alt.Chart(dados).encode(
         x=eixo_x,
         y=alt.Y("valor:Q", title=rotulo_y, scale=alt.Scale(zero=zero_na_base),
-                axis=alt.Axis(grid=True, gridOpacity=0.25)),
+                axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=fonte_dos_eixos)),
         color=alt.Color("Estação:N", title=None, legend=alt.Legend(orient="bottom"),
                         scale=_escala_das_cores(cores, longo["Estação"])),
         opacity=alt.condition(isolar, alt.value(1), alt.value(0.12)))
@@ -865,18 +868,25 @@ def _obter_previsao(conjunto: str, modelo: str, rodada: datetime | None, falha: 
 
 
 def barras_da_chuva_prevista(longo: pd.DataFrame) -> alt.Chart:
-    return (alt.Chart(longo)
-            .mark_bar()
-            .encode(x=alt.X("yearmonthdate(dt_local):O", title=None,
-                            axis=alt.Axis(format="%d/%m", formatType="time", labelAngle=0)),
-                    xOffset=alt.XOffset("Modelo:N", sort=list(previsao.CORES)),
-                    y=alt.Y("valor:Q", title="Chuva (mm)", axis=alt.Axis(grid=True, gridOpacity=0.25)),
-                    color=alt.Color("Modelo:N", title=None, legend=alt.Legend(orient="bottom"),
-                                    scale=_escala_das_cores(previsao.CORES, longo["Modelo"])),
-                    tooltip=[alt.Tooltip("yearmonthdate(dt_local):T", title="Dia", format="%d/%m"),
-                             alt.Tooltip("Modelo:N"),
-                             alt.Tooltip("valor:Q", title="Chuva (mm)", format=".1f")])
-            .properties(height=ALTURA_GRAFICO))
+    base = alt.Chart(longo).encode(
+        x=alt.X("yearmonthdate(dt_local):O", title=None,
+                axis=alt.Axis(format="%d/%m", formatType="time", labelAngle=0,
+                              labelFontSize=FONTE_DOS_EIXOS_DA_PREVISAO)),
+        xOffset=alt.XOffset("Modelo:N", sort=list(previsao.CORES)),
+        y=alt.Y("valor:Q", title="Chuva (mm)",
+                axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS_DA_PREVISAO)))
+    barras = base.mark_bar().encode(
+        color=alt.Color("Modelo:N", title=None, legend=alt.Legend(orient="bottom"),
+                        scale=_escala_das_cores(previsao.CORES, longo["Modelo"])),
+        tooltip=[alt.Tooltip("yearmonthdate(dt_local):T", title="Dia", format="%d/%m"),
+                 alt.Tooltip("Modelo:N"),
+                 alt.Tooltip("valor:Q", title="Chuva (mm)", format=".1f")])
+    # O número em cima de cada barra, e só onde choveu: os dias secos são a maioria, e um "0.0"
+    # em cada um cobriria as barras que interessam
+    numeros = (base.transform_filter(alt.datum.valor > 0)
+               .mark_text(baseline="bottom", dy=-4, fontSize=CORPO_ROTULO, color="#d0d0d0")
+               .encode(text=alt.Text("valor:Q", format=".1f")))
+    return (barras + numeros).properties(height=ALTURA_GRAFICO)
 
 
 # O Streamlit apaga o que se escolheu num widget quando ele não aparece numa execução. Cada
@@ -965,7 +975,8 @@ def pagina_previsao() -> None:
         else:
             grafico = desenhar(longo.rename(columns={"Modelo": "Estação"}),
                                f"{grandeza} ({dados_grandeza.unidade})", dados_grandeza.zero_na_base,
-                               modo, dados_grandeza.decimais, cores=previsao.CORES)
+                               modo, dados_grandeza.decimais, cores=previsao.CORES,
+                               fonte_dos_eixos=FONTE_DOS_EIXOS_DA_PREVISAO)
         st.altair_chart(grafico, width="stretch")
         regras = " · ".join(f"**{serie.nome}**: {serie.regra}" for serie in dados_grandeza.series[modo])
         if dados_grandeza.circular:
@@ -1144,8 +1155,8 @@ def calendario_do_risco_previsto(dias: pd.DataFrame) -> alt.Chart:
     ordem_dos_dias = list(dict.fromkeys(dados.sort_values("dia_previsto")["dia"]))
     return (alt.Chart(dados)
             .mark_rect(stroke="#111111", strokeWidth=1)
-            .encode(x=alt.X("dia:O", sort=ordem_dos_dias, title=None, axis=alt.Axis(labelAngle=0, labelFontSize=11)),
-                    y=alt.Y("Modelo:N", sort=list(previsao.CORES), title=None, axis=alt.Axis(labelFontSize=12)),
+            .encode(x=alt.X("dia:O", sort=ordem_dos_dias, title=None, axis=alt.Axis(labelAngle=0, labelFontSize=22)),
+                    y=alt.Y("Modelo:N", sort=list(previsao.CORES), title=None, axis=alt.Axis(labelFontSize=24)),
                     color=alt.Color("risco_max:O", title="Pior nível do dia",
                                     scale=alt.Scale(domain=[0, 1, risco.NIVEL_MEDIO, risco.NIVEL_ALTO],
                                                     range=config.CORES_RISCO),
