@@ -19,6 +19,23 @@ Ainda não está na `main`. É o começo do banco da UNIGEO e dos coletores (fas
 - **O `.env.example` ganhou as conexões do banco** (`BANCO_GRAVACAO`, `BANCO_LEITURA` e `BANCO_TESTE`). Por enquanto, só quem programa usa a de teste.
 - **O coletor do INMET** (`python coletar.py inmet`), que grava no banco as leituras horárias de todas as estações automáticas do Brasil. De hora em hora, ele rebusca os últimos 3 dias, com uma consulta por hora que traz todas as estações, e o banco só reescreve o que o INMET mudou. Uma vez por dia (`--extras`), busca por estação a sensação térmica, a bateria e a temperatura do processador, que a consulta por hora não traz. A carga do histórico (`--historico 2018-01-01`) roda uma vez só: pode ser interrompida com Ctrl+C e retomada com o mesmo comando, e se a conexão com o banco cair no meio, reconecta e retoma sozinha. No servidor, o Agendador de Tarefas o chama pelo `servidor\coletar.bat`.
 
+## [0.3.3] — 16/10/2026
+
+Duas mudanças na chuva: a correção de um número errado e um ajuste pedido pela equipe no painel.
+
+### Atenção ao atualizar
+
+- **Quem roda o painel na própria máquina precisa reiniciá-lo** (Ctrl+C e `streamlit run app/explorador.py` de novo) depois de atualizar: mudaram arquivos que o Streamlit não relê sozinho. As dependências não mudaram. No Streamlit Cloud, é o Reboot.
+- **A aba Chuva do produto `relatorio_inmet` e os mapas de chuva podem mudar para um período já gerado:** a estação que não mediu chuva nenhuma na janela deixa de aparecer com 0,0 mm.
+
+### Mudou
+
+- **Painel, aba Chuva: a cascata das estações escolhidas virou um gráfico por estação.** Era um gráfico só, com um painel para cada estação, e o botão de tela cheia ampliava todas juntas. Agora cada estação tem o seu, com o nome no título e o próprio botão de tela cheia. Continuam dois por linha, com a mesma escala vertical, para comparar lado a lado como antes.
+
+### Corrigido
+
+- **A estação sem nenhuma leitura de chuva não sai mais com 0,0 mm.** A soma tratava a hora sem leitura como zero, e a estação que só mandou bateria e processador, ou que ficou sem transmitir, entrava com 0,0 mm na aba Chuva do `relatorio_inmet`, nos mapas de chuva (pontual e interpolado) e nos acumulados e na cascata do painel. Agora ela fica de fora, como nas outras variáveis. A estação que mediu só algumas horas continua somando as que mediu, e a que mediu 0 mm continua com 0,0. Em 12/10/2026, por exemplo, Juti e Itaquiraí saíam com 0,0 mm.
+
 ## [0.3.2] — 13/10/2026
 
 Levada à `main` em 13/10/2026. Ajustes pedidos pela unidade depois da apresentação do projeto, e uma correção que veio da 0.4.
