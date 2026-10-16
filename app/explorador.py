@@ -74,9 +74,10 @@ ESTADOS_NA_MEMORIA = 3
 # Altura dos gráficos de série. Em 320 px, quatro estações com duas séries cada davam oito
 # linhas quase coladas: não dava para dizer qual era qual.
 ALTURA_GRAFICO = 420
-# Os números dos eixos nos gráficos da previsão por estação: o dobro do padrão do Vega (10),
-# a pedido da equipe (16/10/2026)
-FONTE_DOS_EIXOS_DA_PREVISAO = 20
+# Nos gráficos da previsão (por estação e a semana contra a normal), a pedido da equipe em
+# 16/10/2026: os números dos eixos e os rótulos sobre as barras e as linhas, em pixels
+FONTE_DOS_EIXOS_DA_PREVISAO = 15
+FONTE_DOS_ROTULOS_DA_PREVISAO = 12
 # Corpo do número escrito sobre a barra. Vale para a barra deitada e para a cascata: são a mesma
 # leitura em dois desenhos, e tamanhos diferentes fariam um parecer menos importante que o outro.
 CORPO_ROTULO = 13
@@ -884,7 +885,7 @@ def barras_da_chuva_prevista(longo: pd.DataFrame) -> alt.Chart:
     # O número em cima de cada barra, e só onde choveu: os dias secos são a maioria, e um "0.0"
     # em cada um cobriria as barras que interessam
     numeros = (base.transform_filter(alt.datum.valor > 0)
-               .mark_text(baseline="bottom", dy=-4, fontSize=CORPO_ROTULO, color="#d0d0d0")
+               .mark_text(baseline="bottom", dy=-4, fontSize=FONTE_DOS_ROTULOS_DA_PREVISAO, color="#d0d0d0")
                .encode(text=alt.Text("valor:Q", format=".1f")))
     return (barras + numeros).properties(height=ALTURA_GRAFICO)
 
@@ -1155,8 +1156,9 @@ def calendario_do_risco_previsto(dias: pd.DataFrame) -> alt.Chart:
     ordem_dos_dias = list(dict.fromkeys(dados.sort_values("dia_previsto")["dia"]))
     return (alt.Chart(dados)
             .mark_rect(stroke="#111111", strokeWidth=1)
-            .encode(x=alt.X("dia:O", sort=ordem_dos_dias, title=None, axis=alt.Axis(labelAngle=0, labelFontSize=22)),
-                    y=alt.Y("Modelo:N", sort=list(previsao.CORES), title=None, axis=alt.Axis(labelFontSize=24)),
+            .encode(x=alt.X("dia:O", sort=ordem_dos_dias, title=None, axis=alt.Axis(labelAngle=0, labelFontSize=FONTE_DOS_EIXOS_DA_PREVISAO)),
+                    y=alt.Y("Modelo:N", sort=list(previsao.CORES), title=None,
+                            axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS_DA_PREVISAO)),
                     color=alt.Color("risco_max:O", title="Pior nível do dia",
                                     scale=alt.Scale(domain=[0, 1, risco.NIVEL_MEDIO, risco.NIVEL_ALTO],
                                                     range=config.CORES_RISCO),
@@ -1296,7 +1298,7 @@ def semana_contra_o_normal(tabela: pd.DataFrame, grandeza: str) -> alt.Chart:
     ordem = list(tabela["rotulo"])
     # "12/10 a 18/10" em duas linhas: numa linha só, metade das semanas sumia do eixo por falta de lugar
     eixo_x = alt.X("rotulo:O", sort=ordem, title=None,
-                   axis=alt.Axis(labelAngle=0, labelFontSize=11, labelOverlap=False,
+                   axis=alt.Axis(labelAngle=0, labelFontSize=FONTE_DOS_EIXOS_DA_PREVISAO, labelOverlap=False,
                                  labelExpr="[split(datum.label, ' a ')[0], 'a ' + split(datum.label, ' a ')[1]]"))
     series = [previsao.PREVISTA, previsao.NORMAL]
     longo = (tabela.melt(id_vars=["rotulo"], value_vars=["prevista", "normal"], var_name="qual", value_name="valor")
@@ -1305,7 +1307,7 @@ def semana_contra_o_normal(tabela: pd.DataFrame, grandeza: str) -> alt.Chart:
     linhas = (alt.Chart(longo).mark_line(point=alt.OverlayMarkDef(filled=True, size=60), strokeWidth=2.5)
               .encode(x=eixo_x,
                       y=alt.Y("valor:Q", title=f"{grandeza} ({unidade})", scale=alt.Scale(zero=chuva),
-                              axis=alt.Axis(grid=True, gridOpacity=0.25)),
+                              axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS_DA_PREVISAO)),
                       color=alt.Color("Série:N", title=None, legend=alt.Legend(orient="bottom"),
                                       scale=alt.Scale(domain=series, range=["#1f77b4", "#9e9e9e"])),
                       strokeDash=alt.StrokeDash("Série:N", legend=None,
@@ -1322,7 +1324,8 @@ def semana_contra_o_normal(tabela: pd.DataFrame, grandeza: str) -> alt.Chart:
                                alt.Tooltip("prevista:Q", title=previsao.PREVISTA, format=".1f"),
                                alt.Tooltip("normal:Q", title=previsao.NORMAL, format=".1f"),
                                alt.Tooltip("anomalia:Q", title="Anomalia", format="+.1f")]))
-    numeros = (alt.Chart(com_sinal).mark_text(align="left", dx=8, fontSize=13, fontWeight="bold")
+    numeros = (alt.Chart(com_sinal).mark_text(align="left", dx=8, fontSize=FONTE_DOS_ROTULOS_DA_PREVISAO,
+                                              fontWeight="bold")
                .encode(x=eixo_x, y="meio:Q", text="texto:N", color=cor_do_lado))
     return alt.layer(barras, linhas, numeros).resolve_scale(color="independent").properties(height=320)
 
