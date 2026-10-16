@@ -74,13 +74,11 @@ ESTADOS_NA_MEMORIA = 3
 # Altura dos gráficos de série. Em 320 px, quatro estações com duas séries cada davam oito
 # linhas quase coladas: não dava para dizer qual era qual.
 ALTURA_GRAFICO = 420
-# Nos gráficos da previsão (por estação e a semana contra a normal), a pedido da equipe em
-# 16/10/2026: os números dos eixos e os rótulos sobre as barras e as linhas, em pixels
-FONTE_DOS_EIXOS_DA_PREVISAO = 15
-FONTE_DOS_ROTULOS_DA_PREVISAO = 12
-# Corpo do número escrito sobre a barra. Vale para a barra deitada e para a cascata: são a mesma
-# leitura em dois desenhos, e tamanhos diferentes fariam um parecer menos importante que o outro.
-CORPO_ROTULO = 13
+# O tamanho dos números em todos os gráficos, do observado e da previsão, a pedido da equipe em
+# 16/10/2026, em pixels: os dos eixos, e os escritos sobre as barras e as linhas. Um só para todos:
+# tamanhos diferentes fariam um gráfico parecer menos importante que o outro.
+FONTE_DOS_EIXOS = 15
+FONTE_DOS_ROTULOS = 12
 # Mapas interativos: o enquadramento inicial sai do recorte — o centro do estado e um zoom que
 # cabe o maior lado dele na tela.
 ZOOM_POR_GRAU = 5.9 + 3.0  # calibrado em MS, que tem 8° de largura e abre bem no zoom 5,9
@@ -216,7 +214,7 @@ def _escala_das_cores(cores: dict[str, str] | None, presentes: pd.Series):
 
 
 def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, casas: int = 1,
-             cores: dict[str, str] | None = None, fonte_dos_eixos: int = 10) -> alt.Chart:
+             cores: dict[str, str] | None = None) -> alt.Chart:
     # Arrastar move e Shift+roda aproxima. Sem o Shift, a roda do mouse em cima do gráfico
     # aproximaria em vez de rolar a página, e quem passa por vários gráficos fica preso no
     # primeiro (é o que o .interactive() faz por padrão).
@@ -239,11 +237,11 @@ def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, 
 
     eixo_x = alt.X("dt_local:T", title=None,
                    axis=alt.Axis(grid=True, gridOpacity=0.25, labelAngle=0, labelExpr=formato,
-                                 labelFontSize=fonte_dos_eixos, tickCount="day" if por_dia else alt.Undefined))
+                                 labelFontSize=FONTE_DOS_EIXOS, tickCount="day" if por_dia else alt.Undefined))
     base = alt.Chart(dados).encode(
         x=eixo_x,
         y=alt.Y("valor:Q", title=rotulo_y, scale=alt.Scale(zero=zero_na_base),
-                axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=fonte_dos_eixos)),
+                axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS)),
         color=alt.Color("Estação:N", title=None, legend=alt.Legend(orient="bottom"),
                         scale=_escala_das_cores(cores, longo["Estação"])),
         opacity=alt.condition(isolar, alt.value(1), alt.value(0.12)))
@@ -275,16 +273,16 @@ def barras_do_acumulado(valores: pd.Series, unidade: str, quantas: int | None) -
     # labelOverlap=False obriga o eixo a escrever todos os nomes. Com pouca altura ele descarta
     # um sim, um não — e aí uma lista de 15 estações parece uma de 8.
     eixo_estacao = alt.Y("Estação:N", sort="-x", title=None,
-                         axis=alt.Axis(labelFontSize=14, labelOverlap=False, labelLimit=230))
+                         axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS, labelOverlap=False, labelLimit=230))
     # size, e não height: em barra deitada é ele que define a espessura. Com height a barra
     # engorda até preencher a faixa, e os nomes das estações ficam espremidos entre elas.
     barras = base.mark_bar(color="#2171b5", size=20).encode(
         x=alt.X("valor:Q", title=unidade,
-                axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=12, titleFontSize=13,
+                axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS, titleFontSize=13,
                               tickCount=8)),
         y=eixo_estacao,
         tooltip=[alt.Tooltip("Estação:N"), alt.Tooltip("valor:Q", title=unidade, format=".1f")])
-    numeros = base.mark_text(align="left", dx=6, color="#d0d0d0", fontSize=CORPO_ROTULO).encode(
+    numeros = base.mark_text(align="left", dx=6, color="#d0d0d0", fontSize=FONTE_DOS_ROTULOS).encode(
         x=alt.X("valor:Q"), y=eixo_estacao, text=alt.Text("valor:Q", format=".1f"))
     # Altura por estação, mais uma folga para o eixo de baixo: é o que garante espaço para cada
     # nome. Com altura fixa, três estações ficavam espremidas e quinze viravam oito.
@@ -295,9 +293,10 @@ def cascata_da_chuva(barras: pd.DataFrame, por_dia: bool, titulo: str = "", teto
                      altura: int = 300) -> alt.Chart:
     ordem = list(barras.sort_values("ordem")["Passo"].unique())
     base = alt.Chart(barras).encode(
-        x=alt.X("Passo:N", title=None, sort=ordem, axis=alt.Axis(labelAngle=-45, labelFontSize=9)))
+        x=alt.X("Passo:N", title=None, sort=ordem, axis=alt.Axis(labelAngle=-45, labelFontSize=FONTE_DOS_EIXOS)))
     desenho = base.mark_bar(size=14 if por_dia else 8).encode(
-        y=alt.Y("base:Q", title="Chuva (mm)", axis=alt.Axis(grid=True, gridOpacity=0.25, format=".1f"),
+        y=alt.Y("base:Q", title="Chuva (mm)",
+                axis=alt.Axis(grid=True, gridOpacity=0.25, format=".1f", labelFontSize=FONTE_DOS_EIXOS),
                 # Uma folga acima do teto, para o número da barra mais alta caber
                 scale=alt.Scale(domain=[0, teto * 1.12]) if teto else alt.Undefined),
         y2="topo:Q",
@@ -310,7 +309,7 @@ def cascata_da_chuva(barras: pd.DataFrame, por_dia: bool, titulo: str = "", teto
     # O número vai em cima da barra, e só onde choveu: a hora seca é a maioria das horas, e um
     # "0.0" em cada uma cobriria justamente as barras que interessam.
     numeros = (base.transform_filter(alt.datum.valor > 0)
-               .mark_text(baseline="bottom", dy=-4, fontSize=CORPO_ROTULO, color="#d0d0d0")
+               .mark_text(baseline="bottom", dy=-4, fontSize=FONTE_DOS_ROTULOS, color="#d0d0d0")
                .encode(y=alt.Y("topo:Q"), text=alt.Text("valor:Q", format=".1f")))
     return (desenho + numeros).properties(height=altura, title=titulo)
 
@@ -735,9 +734,9 @@ def barras_de_niveis(horaria: pd.DataFrame, ordem: list[str]) -> alt.Chart:
     return (alt.Chart(contagem)
             .mark_bar()
             .encode(x=alt.X("Horas:Q", title="Horas",
-                            axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=12)),
+                            axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS)),
                     y=alt.Y("Estação:N", sort=ordem, title=None,
-                            axis=alt.Axis(labelFontSize=13, labelOverlap=False, labelLimit=230)),
+                            axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS, labelOverlap=False, labelLimit=230)),
                     color=alt.Color(f"{risco_fogo.COLUNA_NIVEL_HORA}:O", title="Nível",
                                     scale=alt.Scale(domain=NIVEIS_DO_PIOR,
                                                     range=[config.CORES_RISCO[nivel] for nivel in NIVEIS_DO_PIOR]),
@@ -754,9 +753,9 @@ def calendario_de_risco(horaria: pd.DataFrame, ordem: list[str]) -> alt.Chart:
                .reset_index().assign(dia=lambda tabela: tabela["dia"].astype(str)))
     return (alt.Chart(por_dia)
             .mark_rect(stroke="#111111", strokeWidth=1)
-            .encode(x=alt.X("dia:O", title=None, axis=alt.Axis(labelAngle=-45, labelFontSize=11)),
+            .encode(x=alt.X("dia:O", title=None, axis=alt.Axis(labelAngle=-45, labelFontSize=FONTE_DOS_EIXOS)),
                     y=alt.Y("Estação:N", sort=ordem, title=None,
-                            axis=alt.Axis(labelFontSize=12, labelOverlap=False, labelLimit=230)),
+                            axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS, labelOverlap=False, labelLimit=230)),
                     color=alt.Color(f"{risco_fogo.COLUNA_NIVEL_HORA}:O", title="Pior nível do dia",
                                     scale=alt.Scale(domain=[*NIVEIS_DO_PIOR, 0],
                                                     range=[config.CORES_RISCO[nivel] for nivel in [*NIVEIS_DO_PIOR, 0]]),
@@ -776,9 +775,9 @@ def condicoes_do_dia(horaria: pd.DataFrame, dia, ordem: list[str]) -> alt.Chart:
     return (alt.Chart(somas)
             .mark_bar()
             .encode(x=alt.X("Horas:Q", title="Horas",
-                            axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=12)),
+                            axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS)),
                     y=alt.Y("Estação:N", sort=ordem, title=None,
-                            axis=alt.Axis(labelFontSize=13, labelOverlap=False, labelLimit=230)),
+                            axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS, labelOverlap=False, labelLimit=230)),
                     yOffset=alt.YOffset("Condição:N"),
                     color=alt.Color("Condição:N", title=None,
                                     scale=alt.Scale(domain=list(rotulos.values()),
@@ -872,10 +871,10 @@ def barras_da_chuva_prevista(longo: pd.DataFrame) -> alt.Chart:
     base = alt.Chart(longo).encode(
         x=alt.X("yearmonthdate(dt_local):O", title=None,
                 axis=alt.Axis(format="%d/%m", formatType="time", labelAngle=0,
-                              labelFontSize=FONTE_DOS_EIXOS_DA_PREVISAO)),
+                              labelFontSize=FONTE_DOS_EIXOS)),
         xOffset=alt.XOffset("Modelo:N", sort=list(previsao.CORES)),
         y=alt.Y("valor:Q", title="Chuva (mm)",
-                axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS_DA_PREVISAO)))
+                axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS)))
     barras = base.mark_bar().encode(
         color=alt.Color("Modelo:N", title=None, legend=alt.Legend(orient="bottom"),
                         scale=_escala_das_cores(previsao.CORES, longo["Modelo"])),
@@ -885,7 +884,7 @@ def barras_da_chuva_prevista(longo: pd.DataFrame) -> alt.Chart:
     # O número em cima de cada barra, e só onde choveu: os dias secos são a maioria, e um "0.0"
     # em cada um cobriria as barras que interessam
     numeros = (base.transform_filter(alt.datum.valor > 0)
-               .mark_text(baseline="bottom", dy=-4, fontSize=FONTE_DOS_ROTULOS_DA_PREVISAO, color="#d0d0d0")
+               .mark_text(baseline="bottom", dy=-4, fontSize=FONTE_DOS_ROTULOS, color="#d0d0d0")
                .encode(text=alt.Text("valor:Q", format=".1f")))
     return (barras + numeros).properties(height=ALTURA_GRAFICO)
 
@@ -976,8 +975,7 @@ def pagina_previsao() -> None:
         else:
             grafico = desenhar(longo.rename(columns={"Modelo": "Estação"}),
                                f"{grandeza} ({dados_grandeza.unidade})", dados_grandeza.zero_na_base,
-                               modo, dados_grandeza.decimais, cores=previsao.CORES,
-                               fonte_dos_eixos=FONTE_DOS_EIXOS_DA_PREVISAO)
+                               modo, dados_grandeza.decimais, cores=previsao.CORES)
         st.altair_chart(grafico, width="stretch")
         regras = " · ".join(f"**{serie.nome}**: {serie.regra}" for serie in dados_grandeza.series[modo])
         if dados_grandeza.circular:
@@ -1156,9 +1154,9 @@ def calendario_do_risco_previsto(dias: pd.DataFrame) -> alt.Chart:
     ordem_dos_dias = list(dict.fromkeys(dados.sort_values("dia_previsto")["dia"]))
     return (alt.Chart(dados)
             .mark_rect(stroke="#111111", strokeWidth=1)
-            .encode(x=alt.X("dia:O", sort=ordem_dos_dias, title=None, axis=alt.Axis(labelAngle=0, labelFontSize=FONTE_DOS_EIXOS_DA_PREVISAO)),
+            .encode(x=alt.X("dia:O", sort=ordem_dos_dias, title=None, axis=alt.Axis(labelAngle=0, labelFontSize=FONTE_DOS_EIXOS)),
                     y=alt.Y("Modelo:N", sort=list(previsao.CORES), title=None,
-                            axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS_DA_PREVISAO)),
+                            axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)),
                     color=alt.Color("risco_max:O", title="Pior nível do dia",
                                     scale=alt.Scale(domain=[0, 1, risco.NIVEL_MEDIO, risco.NIVEL_ALTO],
                                                     range=config.CORES_RISCO),
@@ -1298,7 +1296,7 @@ def semana_contra_o_normal(tabela: pd.DataFrame, grandeza: str) -> alt.Chart:
     ordem = list(tabela["rotulo"])
     # "12/10 a 18/10" em duas linhas: numa linha só, metade das semanas sumia do eixo por falta de lugar
     eixo_x = alt.X("rotulo:O", sort=ordem, title=None,
-                   axis=alt.Axis(labelAngle=0, labelFontSize=FONTE_DOS_EIXOS_DA_PREVISAO, labelOverlap=False,
+                   axis=alt.Axis(labelAngle=0, labelFontSize=FONTE_DOS_EIXOS, labelOverlap=False,
                                  labelExpr="[split(datum.label, ' a ')[0], 'a ' + split(datum.label, ' a ')[1]]"))
     series = [previsao.PREVISTA, previsao.NORMAL]
     longo = (tabela.melt(id_vars=["rotulo"], value_vars=["prevista", "normal"], var_name="qual", value_name="valor")
@@ -1307,7 +1305,7 @@ def semana_contra_o_normal(tabela: pd.DataFrame, grandeza: str) -> alt.Chart:
     linhas = (alt.Chart(longo).mark_line(point=alt.OverlayMarkDef(filled=True, size=60), strokeWidth=2.5)
               .encode(x=eixo_x,
                       y=alt.Y("valor:Q", title=f"{grandeza} ({unidade})", scale=alt.Scale(zero=chuva),
-                              axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS_DA_PREVISAO)),
+                              axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS)),
                       color=alt.Color("Série:N", title=None, legend=alt.Legend(orient="bottom"),
                                       scale=alt.Scale(domain=series, range=["#1f77b4", "#9e9e9e"])),
                       strokeDash=alt.StrokeDash("Série:N", legend=None,
@@ -1324,7 +1322,7 @@ def semana_contra_o_normal(tabela: pd.DataFrame, grandeza: str) -> alt.Chart:
                                alt.Tooltip("prevista:Q", title=previsao.PREVISTA, format=".1f"),
                                alt.Tooltip("normal:Q", title=previsao.NORMAL, format=".1f"),
                                alt.Tooltip("anomalia:Q", title="Anomalia", format="+.1f")]))
-    numeros = (alt.Chart(com_sinal).mark_text(align="left", dx=8, fontSize=FONTE_DOS_ROTULOS_DA_PREVISAO,
+    numeros = (alt.Chart(com_sinal).mark_text(align="left", dx=8, fontSize=FONTE_DOS_ROTULOS,
                                               fontWeight="bold")
                .encode(x=eixo_x, y="meio:Q", text="texto:N", color=cor_do_lado))
     return alt.layer(barras, linhas, numeros).resolve_scale(color="independent").properties(height=320)
@@ -1531,8 +1529,10 @@ def grafico_do_risco_na_estacao(serie: pd.DataFrame, hora_local=None) -> alt.VCo
         base = alt.Chart(dela)
         camadas = [
             base.mark_line(color="#607d8b", strokeWidth=1.4).encode(
-                x=alt.X("dt_local:T", title=None, axis=alt.Axis(format="%d/%m %Hh", labelAngle=0)),
-                y=alt.Y("valor:Q", title=medida, scale=alt.Scale(zero=False))),
+                x=alt.X("dt_local:T", title=None,
+                        axis=alt.Axis(format="%d/%m %Hh", labelAngle=0, labelFontSize=FONTE_DOS_EIXOS)),
+                y=alt.Y("valor:Q", title=medida, scale=alt.Scale(zero=False),
+                        axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS))),
             base.mark_circle(size=26).encode(
                 x="dt_local:T", y="valor:Q",
                 color=alt.Color("Condição:N", scale=cores, legend=alt.Legend(orient="bottom", title=None)),
@@ -1548,16 +1548,16 @@ def grafico_do_risco_na_estacao(serie: pd.DataFrame, hora_local=None) -> alt.VCo
 
 
 def grafico_da_chuva_na_estacao(serie: pd.DataFrame, por_dia: bool) -> alt.LayerChart:
-    eixo = alt.Axis(format="%d/%m" if por_dia else "%d/%m %Hh", labelAngle=0)
+    eixo = alt.Axis(format="%d/%m" if por_dia else "%d/%m %Hh", labelAngle=0, labelFontSize=FONTE_DOS_EIXOS)
     base = alt.Chart(serie).encode(x=alt.X("quando:T", title=None, axis=eixo))
     barras = base.mark_bar(color="#1e88e5", opacity=0.85).encode(
-        y=alt.Y("chuva:Q", title="Chuva (mm)"),
+        y=alt.Y("chuva:Q", title="Chuva (mm)", axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)),
         tooltip=[alt.Tooltip("quando:T", title="Dia" if por_dia else "Hora",
                              format="%d/%m/%Y" if por_dia else "%d/%m %H:%M"),
                  alt.Tooltip("chuva:Q", title="Chuva (mm)", format=".1f"),
                  alt.Tooltip("acumulado:Q", title="Acumulado (mm)", format=".1f")])
     linha = base.mark_line(color="#90a4ae", strokeDash=[5, 3]).encode(
-        y=alt.Y("acumulado:Q", title="Acumulado (mm)"))
+        y=alt.Y("acumulado:Q", title="Acumulado (mm)", axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)))
     return alt.layer(barras, linha).resolve_scale(y="independent").properties(height=240)
 
 
@@ -1565,10 +1565,12 @@ def grafico_da_variavel_na_estacao(serie: pd.DataFrame, produto: variaveis.Produ
                                     momento=None) -> alt.LayerChart:
     titulo = f"{produto.nome} ({produto.unidade})"
     base = alt.Chart(serie).encode(x=alt.X("quando:T", title=None,
-                                           axis=alt.Axis(format="%d/%m" if por_dia else "%d/%m %Hh", labelAngle=0)))
+                                           axis=alt.Axis(format="%d/%m" if por_dia else "%d/%m %Hh", labelAngle=0,
+                                                         labelFontSize=FONTE_DOS_EIXOS)))
     camadas = [
         base.mark_line(color="#607d8b", strokeWidth=1.5).encode(
-            y=alt.Y("valor:Q", title=titulo, scale=alt.Scale(zero=produto.zero_na_base))),
+            y=alt.Y("valor:Q", title=titulo, scale=alt.Scale(zero=produto.zero_na_base),
+                    axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS))),
         base.mark_circle(size=24, color="#455a64").encode(
             y="valor:Q",
             tooltip=[alt.Tooltip("quando:T", title="Dia" if por_dia else "Hora",
@@ -2597,8 +2599,9 @@ with aba_qualidade:
                  .assign(Dia=lambda tabela: tabela["Dia"].astype(str)))
         st.altair_chart(
             alt.Chart(longo).mark_rect().encode(
-                x=alt.X("Dia:O", title=None),
-                y=alt.Y("Estação:N", title=None, sort=list(resumo["Estação"])),
+                x=alt.X("Dia:O", title=None, axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)),
+                y=alt.Y("Estação:N", title=None, sort=list(resumo["Estação"]),
+                        axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)),
                 color=alt.Color("Completude:Q", title="% das horas",
                                 scale=alt.Scale(scheme="blues", domain=[0, 100])),
                 tooltip=["Estação", "Dia", alt.Tooltip("Completude:Q", format=".0f")],
@@ -2613,8 +2616,9 @@ with aba_qualidade:
                           .melt("Estação", var_name="Variável", value_name="Completude"))
         st.altair_chart(
             alt.Chart(longo_variavel).mark_rect().encode(
-                x=alt.X("Variável:N", title=None, axis=alt.Axis(labelAngle=-45)),
-                y=alt.Y("Estação:N", title=None, sort=list(resumo["Estação"])),
+                x=alt.X("Variável:N", title=None, axis=alt.Axis(labelAngle=-45, labelFontSize=FONTE_DOS_EIXOS)),
+                y=alt.Y("Estação:N", title=None, sort=list(resumo["Estação"]),
+                        axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)),
                 color=alt.Color("Completude:Q", title="% das horas",
                                 scale=alt.Scale(scheme="blues", domain=[0, 100])),
                 tooltip=["Estação", "Variável", alt.Tooltip("Completude:Q", format=".0f")],
