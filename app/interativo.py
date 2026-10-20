@@ -2,18 +2,21 @@
 
 A conta é a dos mapas do boletim (o IDW e a regra 30-30-30 de modulos/); daqui sai só a forma de
 mostrar: a superfície como imagem sobre o mapa, as estações como pontos com balão, os limites dos
-municípios. Tudo local: nenhuma camada pede mapa de fundo à internet.
+municípios, e uma grade invisível que dá o valor interpolado em qualquer ponto do estado. Tudo
+local: nenhuma camada pede mapa de fundo à internet.
 """
 import io
 import json
+from dataclasses import dataclass
 from urllib.parse import quote
 
 import numpy as np
 import pandas as pd
+import shapely
 from PIL import Image
 
 from app import superficie, variaveis
-from modulos import config
+from modulos import calculos, config
 from modulos.produtos import risco_fogo
 
 OPACIDADE = 0.78
@@ -27,6 +30,10 @@ ESTILO_SEM_FUNDO = "data:application/json," + quote(json.dumps(
     {"version": 8, "sources": {},
      "layers": [{"id": "fundo", "type": "background", "paint": {"background-color": "#eef0f2"}}]}))
 COLUNA_DO_MUNICIPIO = "Municipio"   # a dos shapefiles simplificados de shp/
+# O Streamlit escapa o HTML dos campos do balão (visto na 1.64): um "<br/>" vindo do dado aparece
+# escrito. A quebra vai como "\n", e o modelo do balão, que não é escapado, a respeita com pre-line
+QUEBRA = "\n"
+BALAO = {"html": "<b>{titulo}</b><div style='white-space: pre-line'>{detalhe}</div>"}
 # As três medidas da regra, na ordem de risco_fogo.condicoes_atendidas, com o limiar de cada uma
 MEDIDAS_DO_RISCO = {
     "TEM_MAX": ("Temperatura máxima", "°C", config.LIMIAR_TEMP_MAX),
@@ -71,7 +78,7 @@ def _detalhe_da_hora(linha: pd.Series) -> str:
         nome, unidade, _ = MEDIDAS_DO_RISCO[coluna]
         marca = "✔" if linha[atendida] else "✘"
         partes.append(f"{marca} {nome}: {_numero(linha[coluna], 0 if coluna == 'UMD_MIN' else 1)} {unidade}")
-    return "<br/>".join(partes)
+    return QUEBRA.join(partes)
 
 
 def pontos_de_risco(estacoes: pd.DataFrame, coluna: str, legenda: str) -> pd.DataFrame:
@@ -87,7 +94,7 @@ def pontos_de_risco(estacoes: pd.DataFrame, coluna: str, legenda: str) -> pd.Dat
     com_condicoes = set(risco_fogo.COLUNAS_CONDICOES) <= set(tabela.columns)
     tabela["detalhe"] = [
         f"{legenda}: {config.ROTULOS_RISCO[nivel]}"
-        + (f" ({nivel} de 3)<br/>{_detalhe_da_hora(linha)}" if com_condicoes else "")
+        + (f" ({nivel} de 3){QUEBRA}{_detalhe_da_hora(linha)}" if com_condicoes else "")
         for nivel, (_, linha) in zip(niveis, tabela.iterrows())]
     return tabela[COLUNAS_DOS_PONTOS].reset_index(drop=True)
 
@@ -124,9 +131,120 @@ def com_direcao(pontos: pd.DataFrame, direcoes: pd.Series) -> pd.DataFrame:
     tabela = pontos.copy()
     graus = tabela["Estação"].map(direcoes)
     tabela["angulo"] = -((graus + 180) % 360)
-    tabela["detalhe"] = [detalhe + (f"<br/>de {direcao:.0f}° ({rumo(direcao)})" if pd.notna(direcao) else "")
+    tabela["detalhe"] = [detalhe + (f"{QUEBRA}de {direcao:.0f}° ({rumo(direcao)})" if pd.notna(direcao) else "")
                          for detalhe, direcao in zip(tabela["detalhe"], graus)]
     return tabela
+
+
+# =====================================================
+# O VALOR EM QUALQUER PONTO DO ESTADO
+# =====================================================
+# A grade que responde ao mouse é a dos produtos (cerca de 8 km em MS). A superfície desenhada é
+# mais fina, mas uma célula por pixel pesaria demais no navegador: o ponto lido é o centro da
+# célula, e o número é o IDW das estações ali, o mesmo que pinta o mapa
+COLUNAS_DA_CAMADA = ["celula", "Longitude", "Latitude", "titulo", "detalhe"]
+
+
+@dataclass(frozen=True)
+class GradeDoPonto:
+    lon: np.ndarray
+    lat: np.ndarray
+    dentro: np.ndarray
+    municipio: np.ndarray
+    meio_passo: tuple[float, float]   # meia célula, em graus de longitude e de latitude
+
+    @property
+    def centro(self) -> tuple[float, float]:
+        # O mesmo da superfície (as duas grades cobrem o mesmo recorte): é ele que fixa a projeção
+        # do IDW, e com ele o número do ponto bate com a cor do mapa
+        return float(np.mean(self.lon)), float(np.mean(self.lat))
+
+
+def grade_do_ponto(base, resolucao: int = config.RESOLUCAO_GRADE) -> GradeDoPonto:
+    recorte = base.recorte
+    lon, lat = calculos.criar_grade(recorte.limites, resolucao)
+    municipio = np.full(lon.shape, "", dtype=object)
+    for nome, forma in zip(base.municipios[COLUNA_DO_MUNICIPIO], base.municipios.geometry):
+        municipio[shapely.contains_xy(forma, lon, lat)] = nome
+    oeste, leste, sul, norte = recorte.limites
+    meio_passo = ((leste - oeste) / (resolucao - 1) / 2, (norte - sul) / (resolucao - 1) / 2)
+    return GradeDoPonto(lon, lat, shapely.contains_xy(base.uf.geometry.union_all(), lon, lat),
+                        municipio, meio_passo)
+
+
+def direcao_interpolada(entrada: pd.DataFrame, coluna: str, direcoes: pd.Series, lon_grade, lat_grade) -> np.ndarray:
+    # O rumo não se interpola como número: entre 350° e 10° a média daria 180°, o rumo oposto. Vão
+    # para o IDW as componentes leste e norte do vento de cada estação, e o rumo sai delas
+    com_rumo = entrada.assign(_graus=entrada["Estação"].map(direcoes)).dropna(subset=["_graus", coluna])
+    if com_rumo.empty:
+        return np.full(np.shape(lon_grade), np.nan)
+    radianos = np.deg2rad(com_rumo["_graus"].to_numpy(dtype=float))
+    leste, norte = (calculos.interpolar_idw(com_rumo["Longitude"], com_rumo["Latitude"],
+                                            com_rumo[coluna].to_numpy(dtype=float) * componente(radianos),
+                                            lon_grade, lat_grade, config.IDW_VIZINHOS, config.IDW_POTENCIA)
+                    for componente in (np.sin, np.cos))
+    graus = np.degrees(np.arctan2(leste, norte)) % 360
+    return np.where(np.hypot(leste, norte) < 1e-9, np.nan, graus)
+
+
+def texto_do_ponto(nome: str, valor: float, unidade: str, casas: int, graus: float,
+                   mais_proxima: str, km: float) -> str:
+    texto = f"{nome}: {_numero(valor, casas)} {unidade} (interpolado)"
+    if pd.notna(graus):
+        texto += f"{QUEBRA}de {graus:.0f}° ({rumo(graus)})"
+    return texto + f"{QUEBRA}Estação mais próxima: {mais_proxima}, a {km:.0f} km"
+
+
+def celulas_do_ponto(grade: GradeDoPonto, entrada: pd.DataFrame, coluna: str, unidade: str, casas: int,
+                     direcoes: pd.Series | None = None) -> pd.DataFrame:
+    # Uma linha por célula dentro do estado, com o valor e o texto do balão. Ficam também os números
+    # soltos, para o painel do clique: a camada leva ao navegador só COLUNAS_DA_CAMADA
+    entrada = entrada.dropna(subset=[coluna])
+    if entrada.empty:
+        return pd.DataFrame(columns=COLUNAS_DA_CAMADA + ["valor", "graus", "mais_proxima", "km"])
+    lons, lats = entrada["Longitude"].to_numpy(dtype=float), entrada["Latitude"].to_numpy(dtype=float)
+    dentro = np.flatnonzero(grade.dentro)
+
+    def no_estado(matriz):
+        return np.ravel(matriz)[dentro]
+
+    valores = no_estado(calculos.interpolar_idw(lons, lats, entrada[coluna].to_numpy(dtype=float),
+                                                grade.lon, grade.lat, config.IDW_VIZINHOS, config.IDW_POTENCIA))
+    indices, distancias = (no_estado(matriz) for matriz in calculos.mais_proxima(lons, lats, grade.lon, grade.lat))
+    graus = (no_estado(direcao_interpolada(entrada, coluna, direcoes, grade.lon, grade.lat))
+             if direcoes is not None and not direcoes.empty else np.full(len(dentro), np.nan))
+    nomes = entrada["Estação"].to_numpy()[indices]
+    return pd.DataFrame({
+        "celula": dentro,
+        "Longitude": np.round(no_estado(grade.lon), 4),
+        "Latitude": np.round(no_estado(grade.lat), 4),
+        "titulo": [municipio or "Ponto no mapa" for municipio in no_estado(grade.municipio)],
+        "detalhe": [texto_do_ponto(coluna, valor, unidade, casas, grau, nome, km)
+                    for valor, grau, nome, km in zip(valores, graus, nomes, distancias)],
+        "valor": valores, "graus": graus, "mais_proxima": nomes, "km": distancias,
+    })
+
+
+def serie_do_ponto(produto, leituras: pd.DataFrame, coordenadas: pd.DataFrame, lon: float, lat: float,
+                   modo: str, centro: tuple[float, float]) -> pd.DataFrame:
+    # A variável do mapa no ponto, hora a hora ou dia a dia: a cada instante, o IDW das estações que
+    # mediram. Com menos de MIN_ESTACOES_INTERPOLACAO, o instante fica sem valor, como no mapa
+    vazia = pd.DataFrame(columns=["quando", "valor"])
+    largo = variaveis.no_tempo(produto, leituras, modo)
+    posicoes = coordenadas.drop_duplicates("Estação").set_index("Estação")[["Longitude", "Latitude"]]
+    if largo.empty:
+        return vazia
+    largo = largo[[estacao for estacao in largo.columns if estacao in posicoes.index]]
+    if largo.shape[1] == 0:
+        return vazia
+    valores = calculos.idw_no_tempo(posicoes.loc[largo.columns, "Longitude"], posicoes.loc[largo.columns, "Latitude"],
+                                    largo.to_numpy(dtype=float), lon, lat, centro,
+                                    config.IDW_VIZINHOS, config.IDW_POTENCIA)
+    valores[largo.notna().sum(axis=1).to_numpy() < config.MIN_ESTACOES_INTERPOLACAO] = np.nan
+    quando = pd.to_datetime(largo.index)
+    if quando.tz is not None:
+        quando = quando.tz_localize(None)
+    return pd.DataFrame({"quando": quando, "valor": valores}).dropna().reset_index(drop=True)
 
 
 def serie_da_variavel(produto, leituras: pd.DataFrame, nome: str, modo: str) -> pd.DataFrame:

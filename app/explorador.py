@@ -1477,7 +1477,30 @@ def contornos_interativos(uf: str) -> tuple[dict, dict]:
     return base.uf.__geo_interface__, interativo.municipios(base)
 
 
-def mapa_interativo(imagem: str, pontos: pd.DataFrame, uf: str, escritos: bool) -> pdk.Deck:
+@st.cache_resource(show_spinner=False, max_entries=ESTADOS_NA_MEMORIA)
+def grade_do_ponto(uf: str) -> interativo.GradeDoPonto:
+    return interativo.grade_do_ponto(base_cartografica(uf))
+
+
+def coordenadas_das_estacoes(uf: str) -> pd.DataFrame:
+    cadastro = pd.concat([carregar_estacoes(uf), estacoes_vizinhas(uf, avisar=False)], ignore_index=True)
+    return (cadastro.rename(columns={"VL_LATITUDE": "Latitude", "VL_LONGITUDE": "Longitude"})
+            [["Estação", "Longitude", "Latitude"]])
+
+
+@st.cache_data(show_spinner=False, max_entries=30)
+def celulas_do_ponto(valores: pd.Series, apoio: pd.Series, nome_produto: str, quando: str, uf: str,
+                     direcoes: pd.Series | None = None) -> pd.DataFrame:
+    # As mesmas estações da superfície (as do estado e as vizinhas), para o balão bater com a cor
+    produto = variaveis.por_nome(nome_produto)
+    entrada = pd.concat([_com_coordenadas(valores, nome_produto, uf), _com_coordenadas(apoio, nome_produto, uf)],
+                        ignore_index=True)
+    return interativo.celulas_do_ponto(grade_do_ponto(uf), entrada, nome_produto, produto.unidade,
+                                       produto.decimais, direcoes)
+
+
+def mapa_interativo(imagem: str, pontos: pd.DataFrame, uf: str, escritos: bool,
+                    celulas: pd.DataFrame | None = None) -> pdk.Deck:
     recorte = config.recorte_de(uf)
     estado, municipios = contornos_interativos(uf)
     # A imagem entra depois de criada a camada: passada no construtor, o pydeck a trataria como
@@ -1492,6 +1515,18 @@ def mapa_interativo(imagem: str, pontos: pd.DataFrame, uf: str, escritos: bool) 
                   line_width_min_pixels=0.6, pickable=True),
         pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[25, 25, 25],
                   line_width_min_pixels=1.6),
+    ]
+    if celulas is not None and not celulas.empty:
+        # A grade invisível do valor em qualquer ponto, por cima dos municípios (o balão dela já traz
+        # o nome do município) e por baixo das estações, que continuam respondendo ao clique. O
+        # quadrado de cada célula sai do centro no navegador, para não mandar quatro cantos por célula
+        dx, dy = grade_do_ponto(uf).meio_passo
+        camadas.append(pdk.Layer(
+            "PolygonLayer", data=celulas[interativo.COLUNAS_DA_CAMADA], id="pontos", filled=True,
+            stroked=False, get_fill_color=[255, 255, 255, 1], pickable=True,
+            get_polygon=(f"[[Longitude - {dx:.6f}, Latitude - {dy:.6f}], [Longitude + {dx:.6f}, Latitude - {dy:.6f}], "
+                         f"[Longitude + {dx:.6f}, Latitude + {dy:.6f}], [Longitude - {dx:.6f}, Latitude + {dy:.6f}]]")))
+    camadas += [
         pdk.Layer("ScatterplotLayer", data=pontos, id="estacoes", get_position=["Longitude", "Latitude"],
                   get_fill_color="cor", get_line_color=[25, 25, 25], stroked=True, line_width_min_pixels=1,
                   get_radius=3000, radius_min_pixels=6, radius_max_pixels=14, pickable=True),
@@ -1511,7 +1546,7 @@ def mapa_interativo(imagem: str, pontos: pd.DataFrame, uf: str, escritos: bool) 
         camadas.append(setas)
     return pdk.Deck(layers=camadas, map_provider=None, map_style=interativo.ESTILO_SEM_FUNDO,
                     initial_view_state=pdk.ViewState(**visao_inicial(recorte)),
-                    tooltip={"html": "<b>{titulo}</b><br/>{detalhe}"})
+                    tooltip=interativo.BALAO)
 
 
 def legenda_do_risco() -> str:
@@ -1640,14 +1675,17 @@ def variaveis_interativas(uf: str, recorte: config.Recorte, intervalo: tuple, es
         return
     horas_janela = {variaveis.HORA: 1.0, variaveis.DIA: 24.0}.get(modo, (fim - inicio).total_seconds() / 3600)
     niveis = niveis_da_escala(produto, horas_janela, ajustar)
+    valores_apoio = variaveis.por_estacao(produto, fatia_apoio)
     imagem = camada_superficie(valores, produto.nome, rotulo, uf, tuple(niveis) if niveis is not None else None,
-                               variaveis.por_estacao(produto, fatia_apoio))
+                               valores_apoio)
     pontos = interativo.pontos_de_valores(_com_coordenadas(valores, produto.nome, uf), produto.nome, produto.nome,
                                           produto.unidade, produto.decimais)
     setas = variaveis.direcoes(produto, fatia)
     if not setas.empty:
         pontos = interativo.com_direcao(pontos, setas)
-    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos), on_select="rerun",
+    rumos = pd.concat([setas, variaveis.direcoes(produto, fatia_apoio)]) if not setas.empty else None
+    celulas = celulas_do_ponto(valores, valores_apoio, produto.nome, rotulo, uf, rumos)
+    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos, celulas), on_select="rerun",
                              selection_mode="single-object", key="mapa_variavel_interativo", height=ALTURA_MAPA)
     if niveis is not None:
         st.image(barra_de_escala(produto.paleta, tuple(niveis), produto.unidade), width="content")
@@ -1656,15 +1694,22 @@ def variaveis_interativas(uf: str, recorte: config.Recorte, intervalo: tuple, es
                f"{produto.unidade} em {len(medidas)} estações · {produto.regra}. A superfície é a do mapa do "
                "boletim (o IDW das estações, com as vizinhas na borda)"
                + ("; a seta aponta para onde o vento vai" if not setas.empty else "")
-               + ". **Clique numa estação** para ver a série dela.")
+               + ". **Passe o mouse** em qualquer ponto para ler o valor interpolado, e **clique** para ver a "
+                 "série do ponto, ou a de uma estação.")
 
-    clicadas = evento.selection.get("objects", {}).get("estacoes", []) if evento is not None else []
-    if clicadas:
-        st.session_state["estacao_mapa_interativo"] = clicadas[0]["titulo"]
-    escolhida = st.session_state.get("estacao_mapa_interativo")
-    if escolhida in set(estacoes["Estação"]):
-        # No período inteiro, a série é a do dia: o produto do período é o diário somado no tempo
-        modo_serie = variaveis.DIA if modo == variaveis.PERIODO else modo
+    # No período inteiro, a série é a do dia: o produto do período é o diário somado no tempo
+    modo_serie = variaveis.DIA if modo == variaveis.PERIODO else modo
+    marca = None if momento is None else pd.Timestamp(momento).tz_localize(None)
+    objetos = evento.selection.get("objects", {}) if evento is not None else {}
+    if objetos.get("estacoes"):
+        st.session_state["escolha_mapa_interativo"] = ("estacao", objetos["estacoes"][0]["titulo"])
+    elif objetos.get("pontos"):
+        st.session_state["escolha_mapa_interativo"] = ("ponto", int(objetos["pontos"][0]["celula"]))
+    tipo, escolhida = st.session_state.get("escolha_mapa_interativo", (None, None))
+    if tipo == "ponto":
+        painel_do_ponto(produto, celulas, escolhida, pd.concat([leituras, apoio], ignore_index=True), uf,
+                        modo_serie, marca)
+    elif tipo == "estacao" and escolhida in set(estacoes["Estação"]):
         serie = (interativo.serie_da_variavel(produto, leituras, escolhida, modo_serie)
                  if modo_serie in produto.modos else pd.DataFrame())
         st.subheader(escolhida)
@@ -1673,11 +1718,41 @@ def variaveis_interativas(uf: str, recorte: config.Recorte, intervalo: tuple, es
         elif serie.empty:
             st.info(f"A estação não mediu {produto.nome.lower()} no período.")
         else:
-            marca = None if momento is None else pd.Timestamp(momento).tz_localize(None)
             st.altair_chart(grafico_da_variavel_na_estacao(serie, produto, modo_serie == variaveis.DIA, marca),
                             width="stretch")
             st.caption(f"{produto.nome} na estação, " + ("dia a dia" if modo_serie == variaveis.DIA else "hora a hora")
                        + " no período." + (" A linha azul é o instante do mapa." if marca is not None else ""))
+
+
+def painel_do_ponto(produto: variaveis.Produto, celulas: pd.DataFrame, celula: int, leituras: pd.DataFrame,
+                    uf: str, modo_serie: str, marca) -> None:
+    # O ponto clicado: o valor interpolado do instante do mapa (o do balão), a estação mais próxima ao
+    # lado, e a série do próprio ponto, com o IDW refeito a cada instante
+    escolhida = celulas[celulas["celula"] == celula]
+    if escolhida.empty:
+        return
+    ponto = escolhida.iloc[0]
+    grade = grade_do_ponto(uf)
+    lon, lat = float(np.ravel(grade.lon)[celula]), float(np.ravel(grade.lat)[celula])
+    st.subheader(f"{ponto['titulo']} · {abs(lat):.2f}° S, {abs(lon):.2f}° O".replace(".", ","))
+    valor = f"{ponto['valor']:.{produto.decimais}f}".replace(".", ",")
+    rumo = (f", de {ponto['graus']:.0f}° ({interativo.rumo(ponto['graus'])})" if pd.notna(ponto["graus"]) else "")
+    st.markdown(f"**{produto.nome} interpolado:** {valor} {produto.unidade}{rumo}")
+    st.caption(f"Estação mais próxima: **{ponto['mais_proxima']}**, a {ponto['km']:.0f} km. O valor é o IDW das "
+               f"{config.IDW_VIZINHOS} estações mais próximas que mediram, com peso pelo inverso do quadrado "
+               "da distância: o mesmo que pinta o mapa. Quanto mais longe das estações, menos ele representa o lugar.")
+    if modo_serie not in produto.modos:
+        st.info(f"{produto.nome} só existe para o período inteiro: não há série dia a dia.")
+        return
+    serie = interativo.serie_do_ponto(produto, leituras, coordenadas_das_estacoes(uf), lon, lat, modo_serie,
+                                      grade.centro)
+    if serie.empty:
+        st.info(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram {produto.nome.lower()} no período.")
+        return
+    st.altair_chart(grafico_da_variavel_na_estacao(serie, produto, modo_serie == variaveis.DIA, marca),
+                    width="stretch")
+    st.caption(f"{produto.nome} interpolado no ponto, " + ("dia a dia" if modo_serie == variaveis.DIA else "hora a hora")
+               + " no período." + (" A linha azul é o instante do mapa." if marca is not None else ""))
 
 
 def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, inicio: datetime,

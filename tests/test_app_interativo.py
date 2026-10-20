@@ -8,11 +8,12 @@ from urllib.parse import unquote
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import pytest
 import shapely
 from PIL import Image
 
 from app import interativo, variaveis
-from modulos import config
+from modulos import calculos, config
 from modulos.produtos import risco_fogo
 
 
@@ -145,7 +146,7 @@ def test_o_vento_leva_a_seta_para_onde_vai_e_o_balao_de_onde_vem():
 
     # Do leste (90°) o vento vai para oeste: a seta "↑" gira 270° no sentido anti-horário
     assert com_vento["angulo"].iloc[0] == -270.0 and np.isnan(com_vento["angulo"].iloc[1])
-    assert com_vento["detalhe"].iloc[0] == "Rajada na hora: 41,0 km/h<br/>de 90° (L)"
+    assert com_vento["detalhe"].iloc[0] == "Rajada na hora: 41,0 km/h\nde 90° (L)"
     assert com_vento["detalhe"].iloc[1] == "Rajada na hora: 12,0 km/h"
 
 
@@ -159,3 +160,91 @@ def test_a_serie_da_variavel_na_estacao_segue_a_regra_do_produto():
     assert serie["valor"].tolist() == [23.0, 47.0]   # a maior das máximas de cada dia (a 00h fecha o anterior)
     assert serie["quando"].dt.tz is None
     assert interativo.serie_da_variavel(maxima, leituras, "Outra", variaveis.DIA).empty
+
+
+# =====================================================
+# O VALOR EM QUALQUER PONTO DO ESTADO
+# =====================================================
+def base_de_teste():
+    # Um "estado" de 2° × 2° com dois municípios, num recorte de 3° × 3°: a grade de 31 pontos
+    # por eixo fica com uma célula a cada 0,1°
+    municipios = gpd.GeoDataFrame({interativo.COLUNA_DO_MUNICIPIO: ["Oeste", "Leste"]},
+                                  geometry=[shapely.box(-55.45, -21.45, -54.45, -19.55),
+                                            shapely.box(-54.45, -21.45, -53.55, -19.55)], crs="EPSG:4326")
+    estado = gpd.GeoDataFrame(geometry=[shapely.box(-55.45, -21.45, -53.55, -19.55)], crs="EPSG:4326")
+    return SimpleNamespace(recorte=SimpleNamespace(limites=(-56.0, -53.0, -22.0, -19.0)),
+                           uf=estado, municipios=municipios)
+
+
+ESTACOES_DO_TESTE = pd.DataFrame({"Estação": ["A", "B", "C", "D"],
+                                  "Longitude": [-55.2, -53.8, -54.6, -54.0],
+                                  "Latitude": [-20.0, -20.2, -21.2, -21.0]})
+
+
+def test_a_grade_do_ponto_cobre_o_estado_e_sabe_o_municipio():
+    grade = interativo.grade_do_ponto(base_de_teste(), resolucao=31)
+
+    assert grade.meio_passo == pytest.approx((0.05, 0.05))
+    assert grade.centro == pytest.approx((-54.5, -20.5))
+    assert grade.dentro.sum() == 19 * 19                      # as células de centro dentro do quadrado
+    municipios = set(grade.municipio[grade.dentro])
+    assert municipios == {"Oeste", "Leste"}
+
+
+def test_o_balao_da_celula_traz_o_valor_interpolado_e_a_estacao_mais_proxima():
+    grade = interativo.grade_do_ponto(base_de_teste(), resolucao=31)
+    entrada = ESTACOES_DO_TESTE.assign(**{"Temperatura máxima": [30.0, 34.0, 28.0, 32.0]})
+
+    celulas = interativo.celulas_do_ponto(grade, entrada, "Temperatura máxima", "°C", 1)
+
+    superficie = calculos.interpolar_idw(entrada["Longitude"], entrada["Latitude"], entrada["Temperatura máxima"],
+                                         grade.lon, grade.lat, config.IDW_VIZINHOS, config.IDW_POTENCIA)
+    assert len(celulas) == grade.dentro.sum()
+    np.testing.assert_allclose(celulas["valor"], np.ravel(superficie)[celulas["celula"]])   # a cor do mapa
+    perto_de_a = celulas.iloc[(celulas["Longitude"] + 55.2).abs().add((celulas["Latitude"] + 20.0).abs()).argmin()]
+    assert perto_de_a["titulo"] == "Oeste" and perto_de_a["mais_proxima"] == "A"
+    assert perto_de_a["detalhe"].startswith("Temperatura máxima: 30,0 °C (interpolado)\nEstação mais próxima: A, a ")
+    assert list(celulas[interativo.COLUNAS_DA_CAMADA].columns) == interativo.COLUNAS_DA_CAMADA
+
+
+def test_o_rumo_no_ponto_sai_das_componentes_e_nao_da_media_dos_graus():
+    grade = interativo.grade_do_ponto(base_de_teste(), resolucao=31)
+    # Duas estações à mesma distância do centro, uma com vento de 350° e outra de 10°
+    entrada = pd.DataFrame({"Estação": ["A", "B"], "Longitude": [-55.0, -54.0], "Latitude": [-20.5, -20.5],
+                            "Vento médio": [10.0, 10.0]})
+
+    graus = interativo.direcao_interpolada(entrada, "Vento médio", pd.Series({"A": 350.0, "B": 10.0}),
+                                           np.array([[-54.5]]), np.array([[-20.5]]))
+
+    assert min(graus[0, 0], 360 - graus[0, 0]) == pytest.approx(0.0, abs=1e-6)   # do norte, e não 180°
+
+
+def test_a_serie_do_ponto_no_instante_do_mapa_e_o_valor_do_balao():
+    grade = interativo.grade_do_ponto(base_de_teste(), resolucao=31)
+    horas = pd.date_range("2026-10-13 01:00", periods=48, freq="h", tz=config.FUSO_MS)
+    rng = np.random.default_rng(2)
+    leituras = pd.concat([pd.DataFrame({"Estação": nome, "dt_local": horas, "TEM_MAX": rng.uniform(20, 35, 48)})
+                          for nome in ESTACOES_DO_TESTE["Estação"]], ignore_index=True)
+    maxima = variaveis.por_nome("Temperatura máxima")
+    primeiro_dia = variaveis.recorte(leituras, variaveis.DIA, variaveis.momentos(leituras, variaveis.DIA)[0])
+    entrada = ESTACOES_DO_TESTE.join(variaveis.por_estacao(maxima, primeiro_dia), on="Estação")
+    celulas = interativo.celulas_do_ponto(grade, entrada, maxima.nome, maxima.unidade, maxima.decimais)
+    celula = celulas.iloc[len(celulas) // 3]
+
+    serie = interativo.serie_do_ponto(maxima, leituras, ESTACOES_DO_TESTE,
+                                      float(np.ravel(grade.lon)[celula["celula"]]),
+                                      float(np.ravel(grade.lat)[celula["celula"]]), variaveis.DIA, grade.centro)
+
+    assert len(serie) == 2 and serie["quando"].dt.tz is None
+    assert serie["valor"].iloc[0] == pytest.approx(celula["valor"])   # o clique e o balão dizem o mesmo
+
+
+def test_a_serie_do_ponto_com_poucas_estacoes_fica_vazia():
+    horas = pd.date_range("2026-10-13 01:00", periods=24, freq="h", tz=config.FUSO_MS)
+    leituras = pd.concat([pd.DataFrame({"Estação": nome, "dt_local": horas, "TEM_MAX": 30.0}) for nome in ("A", "B")],
+                         ignore_index=True)
+
+    serie = interativo.serie_do_ponto(variaveis.por_nome("Temperatura máxima"), leituras, ESTACOES_DO_TESTE,
+                                      -54.5, -20.5, variaveis.DIA, (-54.5, -20.5))
+
+    assert serie.empty   # duas estações não bastam (config.MIN_ESTACOES_INTERPOLACAO)

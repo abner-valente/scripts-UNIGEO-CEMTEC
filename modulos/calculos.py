@@ -50,6 +50,31 @@ def interpolar_idw(lons, lats, valores, lon_grade, lat_grade, vizinhos: int = 8,
     return interpolados.reshape(np.shape(lon_grade))
 
 
+def mais_proxima(lons, lats, lon_grade, lat_grade,
+                 centro: tuple[float, float] | None = None) -> tuple[np.ndarray, np.ndarray]:
+    # A estação mais perto de cada ponto da grade e a distância até ela, em km, na projeção do IDW
+    centro = centro or (float(np.mean(lon_grade)), float(np.mean(lat_grade)))
+    distancias, indices = cKDTree(_em_km(lons, lats, *centro)).query(_em_km(lon_grade, lat_grade, *centro))
+    return indices.reshape(np.shape(lon_grade)), distancias.reshape(np.shape(lon_grade))
+
+
+def idw_no_tempo(lons, lats, valores, lon: float, lat: float, centro: tuple[float, float],
+                 vizinhos: int = 8, potencia: float = 2) -> np.ndarray:
+    # O IDW de um ponto só em cada linha de `valores` (tempos × estações, NaN onde a estação não
+    # mediu): a cada tempo entram as `vizinhos` mais próximas entre as que mediram, como no
+    # interpolar_idw. Com o `centro` da grade do mapa, o número é o mesmo da superfície
+    pontos = _em_km(lons, lats, *centro)
+    distancias = np.hypot(*(pontos - _em_km([lon], [lat], *centro)[0]).T)
+    ordem = np.argsort(distancias, kind="stable")
+    medidas = np.atleast_2d(np.asarray(valores, dtype=float))[:, ordem]
+    mediram = ~np.isnan(medidas)
+    entram = mediram & (np.cumsum(mediram, axis=1) <= vizinhos)
+    pesos = np.where(entram, 1.0 / np.maximum(distancias[ordem], 1e-10) ** potencia, 0.0)
+    soma = pesos.sum(axis=1)
+    ponderada = np.sum(np.where(entram, medidas, 0.0) * pesos, axis=1)
+    return np.divide(ponderada, soma, out=np.full(len(soma), np.nan), where=soma > 0)
+
+
 def apoio_que_entra(lons_apoio, lats_apoio, lons_proprias, lats_proprias,
                     lon_grade, lat_grade, vizinhos: int) -> np.ndarray:
     apoio = np.column_stack([np.ravel(lons_apoio), np.ravel(lats_apoio)])

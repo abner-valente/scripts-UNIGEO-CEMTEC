@@ -87,6 +87,46 @@ def test_idw_de_campo_constante_e_constante():
 
 
 # =====================================================
+# O VALOR DE UM PONTO SÓ, AO LONGO DO TEMPO
+# =====================================================
+def test_o_idw_do_ponto_no_tempo_e_o_idw_de_cada_instante():
+    rng = np.random.default_rng(1)
+    lons, lats = rng.uniform(-58, -51, 15), rng.uniform(-24, -17.5, 15)
+    valores = rng.uniform(0, 40, (5, 15))
+    valores[1, [0, 3, 7]] = np.nan   # estações que não mediram naquele instante
+    centro, lon, lat = (-54.5, -20.75), -54.6, -20.4
+    # Grade de dois pontos, o do teste e o espelhado, para o centro dela ser o mesmo `centro`
+    lon_grade = np.array([[lon, 2 * centro[0] - lon]])
+    lat_grade = np.array([[lat, 2 * centro[1] - lat]])
+
+    serie = calculos.idw_no_tempo(lons, lats, valores, lon, lat, centro, vizinhos=8)
+
+    for linha, no_ponto in zip(valores, serie):
+        mediram = ~np.isnan(linha)
+        esperado = calculos.interpolar_idw(lons[mediram], lats[mediram], linha[mediram], lon_grade, lat_grade, vizinhos=8)
+        assert no_ponto == pytest.approx(esperado[0, 0])
+
+
+def test_o_idw_do_ponto_sobre_a_estacao_e_o_valor_dela():
+    serie = calculos.idw_no_tempo([-55.0, -53.0, -57.0], [-20.0, -22.0, -19.0], [[10.0, 30.0, 20.0]],
+                                  -55.0, -20.0, (-54.5, -20.75))
+    assert serie[0] == pytest.approx(10.0)
+
+
+def test_o_instante_sem_ninguem_medindo_fica_sem_valor():
+    serie = calculos.idw_no_tempo([-55.0, -53.0], [-20.0, -22.0], [[10.0, 30.0], [np.nan, np.nan]],
+                                  -54.0, -21.0, (-54.5, -20.75))
+    assert not np.isnan(serie[0]) and np.isnan(serie[1])
+
+
+def test_a_estacao_mais_proxima_e_a_distancia_em_km():
+    # De (-55, -21): (-54, -21) fica a 103,9 km e (-55, -20) a 110,6 km
+    indices, distancias = calculos.mais_proxima([-55.0, -54.0], [-20.0, -21.0], np.array([[-55.0]]), np.array([[-21.0]]))
+    assert indices[0, 0] == 1
+    assert distancias[0, 0] == pytest.approx(103.9, abs=0.5)
+
+
+# =====================================================
 # PODA DAS ESTAÇÕES DE APOIO
 # =====================================================
 def estado_denso():
