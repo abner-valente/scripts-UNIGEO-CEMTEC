@@ -284,3 +284,67 @@ def test_a_chuva_no_ponto_com_poucas_estacoes_fica_vazia():
                                                leituras["dt_local"].max(), False, (-54.5, -20.5))
 
     assert serie.empty and list(serie.columns) == ["quando", "chuva", "acumulado"]
+
+
+def risco_das_quatro(rajada_de_b: float = 20.0) -> pd.DataFrame:
+    # A com as três condições, B com nenhuma, C e D com duas
+    return ESTACOES_DO_TESTE.assign(TEM_MAX=[33.0, 28.0, 31.0, 29.0], UMD_MIN=[25.0, 40.0, 35.0, 28.0],
+                                    rajada_kmh=[35.0, rajada_de_b, 32.0, 31.0])
+
+
+def test_o_balao_do_risco_na_hora_traz_as_medidas_que_dao_o_nivel_do_mapa():
+    grade = interativo.grade_do_ponto(base_de_teste(), resolucao=31)
+    estacoes = risco_das_quatro()
+    niveis = risco_fogo.grade_da_hora(estacoes, SimpleNamespace(lon_grade=grade.lon, lat_grade=grade.lat))
+
+    celulas = interativo.celulas_do_risco(grade, niveis, "Na hora", estacoes, com_medidas=True)
+
+    assert len(celulas) == grade.dentro.sum()
+    np.testing.assert_array_equal(celulas["nivel"], np.ravel(niveis)[celulas["celula"]])   # a cor do mapa
+    assert (celulas["detalhe"].str.count("✔") == celulas["nivel"]).all()   # os ✔ somam o nível
+    perto_de_a = celulas.iloc[(celulas["Longitude"] + 55.2).abs().add((celulas["Latitude"] + 20.0).abs()).argmin()]
+    assert perto_de_a["detalhe"].startswith("Na hora: Risco alto (3 de 3, interpolado)\n✔ Temperatura máxima: ")
+    assert perto_de_a["detalhe"].endswith(f"Estação mais próxima: A, a {perto_de_a['km']:.0f} km")
+
+
+@pytest.mark.parametrize("valor, casas, esperado", [
+    (29.96, 1, "29,96"),   # arredondado daria 30,0, que valeria
+    (30.4, 0, "30,4"),     # na umidade, 30 valeria
+    (30.04, 1, "30,04"),
+    (31.26, 1, "31,3"),    # longe do limiar, como sempre
+    (30.0, 1, "30,0"),     # em cima do limiar de verdade
+])
+def test_perto_do_limiar_o_balao_mostra_de_que_lado_o_valor_esta(valor, casas, esperado):
+    assert interativo._numero_perto_do_limiar(valor, casas, 30.0) == esperado
+
+
+def test_por_dia_o_balao_do_risco_traz_as_horas_em_risco_alto():
+    grade = interativo.grade_do_ponto(base_de_teste(), resolucao=31)
+    niveis = np.full(grade.lon.shape, 3, dtype=np.int8)
+
+    celulas = interativo.celulas_do_risco(grade, niveis, "Pior nível do dia", risco_das_quatro(), com_medidas=False,
+                                          horas_alto=np.full(grade.lon.shape, 4))
+
+    assert celulas["detalhe"].str.contains("\nHoras em risco alto: 4\n").all()
+    assert not celulas["detalhe"].str.contains("✔|✘").any()
+
+
+def test_a_serie_do_risco_no_ponto_na_hora_do_mapa_e_o_balao():
+    grade = interativo.grade_do_ponto(base_de_teste(), resolucao=31)
+    base = SimpleNamespace(lon_grade=grade.lon, lat_grade=grade.lat)
+    horas = pd.date_range("2026-10-13 15:00", periods=2, freq="h", tz="UTC")
+    # Na segunda hora a rajada de B sobe e entra uma estação a menos (D não mandou)
+    medidas = {horas[0]: risco_das_quatro(), horas[1]: risco_das_quatro(rajada_de_b=45.0).iloc[:3]}
+    avaliadas = {hora: risco_fogo.HoraAvaliada(risco_fogo.grade_da_hora(estacoes, base), estacoes)
+                 for hora, estacoes in medidas.items()}
+    for hora in horas:
+        celulas = interativo.celulas_do_risco(grade, avaliadas[hora].grade, "Na hora", medidas[hora], com_medidas=True)
+        celula = celulas.iloc[len(celulas) // 2]
+
+        serie = interativo.serie_do_risco_no_ponto(avaliadas, float(np.ravel(grade.lon)[celula["celula"]]),
+                                                   float(np.ravel(grade.lat)[celula["celula"]]), grade.centro,
+                                                   config.FUSO_MS)
+
+        na_hora = serie[serie["dt_local"] == hora.tz_convert(config.FUSO_MS).tz_localize(None)]
+        assert len(na_hora) == 3 and set(serie["Medida"]) == set(na_hora["Medida"])
+        assert (na_hora["Condição"] == "atendida").sum() == celula["nivel"]   # o clique e o balão dizem o mesmo

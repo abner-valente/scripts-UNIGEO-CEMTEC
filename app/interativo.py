@@ -72,6 +72,14 @@ def _numero(valor: float, casas: int = 1) -> str:
     return f"{valor:.{casas}f}".replace(".", ",")
 
 
+def _numero_perto_do_limiar(valor: float, casas: int, limiar: float) -> str:
+    # O valor interpolado arredondado em cima do limiar não diria de que lado ele está: 29,96 °C
+    # sairia "30,0" ao lado de um ✘. Nesse caso vão mais casas, até ficar claro
+    while casas < 3 and round(valor, casas) == limiar != valor:
+        casas += 1
+    return _numero(valor, casas)
+
+
 def _detalhe_da_hora(linha: pd.Series) -> str:
     partes = []
     for coluna, atendida in zip(MEDIDAS_DO_RISCO, risco_fogo.COLUNAS_CONDICOES):
@@ -225,6 +233,49 @@ def celulas_do_ponto(grade: GradeDoPonto, entrada: pd.DataFrame, coluna: str, un
     })
 
 
+def celulas_do_risco(grade: GradeDoPonto, niveis: np.ndarray, legenda: str, estacoes: pd.DataFrame,
+                     com_medidas: bool, horas_alto: np.ndarray | None = None) -> pd.DataFrame:
+    # O nível de cada célula é o que pinta o mapa. Hora a hora, o balão traz as três medidas
+    # interpoladas que o deram: as mesmas estações e o mesmo IDW de risco_fogo.grade_da_hora, então
+    # os ✔ somam o nível. Por dia e no período o nível junta horas diferentes, e no lugar das medidas
+    # vão as horas em risco alto
+    dentro = np.flatnonzero(grade.dentro)
+    if estacoes.empty or len(dentro) == 0:
+        return pd.DataFrame(columns=COLUNAS_DA_CAMADA + ["nivel", "mais_proxima", "km"])
+    lons, lats = estacoes["Longitude"].to_numpy(dtype=float), estacoes["Latitude"].to_numpy(dtype=float)
+
+    def no_estado(matriz):
+        return np.ravel(matriz)[dentro]
+
+    nivel = no_estado(niveis).astype(int)
+    linhas = [[f"{legenda}: {config.ROTULOS_RISCO[valor]} ({valor} de 3, interpolado)"] for valor in nivel]
+    if com_medidas:
+        campos = [no_estado(calculos.interpolar_idw(lons, lats, estacoes[coluna].to_numpy(dtype=float), grade.lon,
+                                                    grade.lat, config.IDW_VIZINHOS, config.IDW_POTENCIA))
+                  for coluna in MEDIDAS_DO_RISCO]
+        for (coluna, (nome, unidade, limiar)), campo, atendida in zip(MEDIDAS_DO_RISCO.items(), campos,
+                                                                      risco_fogo.condicoes_atendidas(*campos)):
+            casas = 0 if coluna == "UMD_MIN" else 1
+            for linha, valor, valeu in zip(linhas, campo, atendida):
+                linha.append(f"{'✔' if valeu else '✘'} {nome}: {_numero_perto_do_limiar(valor, casas, limiar)} "
+                             f"{unidade}")
+    if horas_alto is not None:
+        for linha, horas in zip(linhas, no_estado(horas_alto)):
+            linha.append(f"Horas em risco alto: {int(horas)}")
+    indices, distancias = (no_estado(matriz) for matriz in calculos.mais_proxima(lons, lats, grade.lon, grade.lat))
+    nomes = estacoes["Estação"].to_numpy()[indices]
+    for linha, nome, km in zip(linhas, nomes, distancias):
+        linha.append(f"Estação mais próxima: {nome}, a {km:.0f} km")
+    return pd.DataFrame({
+        "celula": dentro,
+        "Longitude": np.round(no_estado(grade.lon), 4),
+        "Latitude": np.round(no_estado(grade.lat), 4),
+        "titulo": [municipio or "Ponto no mapa" for municipio in no_estado(grade.municipio)],
+        "detalhe": [QUEBRA.join(linha) for linha in linhas],
+        "nivel": nivel, "mais_proxima": nomes, "km": distancias,
+    })
+
+
 def serie_do_ponto(produto, leituras: pd.DataFrame, coordenadas: pd.DataFrame, lon: float, lat: float,
                    modo: str, centro: tuple[float, float]) -> pd.DataFrame:
     # A variável do mapa no ponto, hora a hora ou dia a dia: a cada instante, o IDW das estações que
@@ -245,6 +296,31 @@ def serie_do_ponto(produto, leituras: pd.DataFrame, coordenadas: pd.DataFrame, l
     if quando.tz is not None:
         quando = quando.tz_localize(None)
     return pd.DataFrame({"quando": quando, "valor": valores}).dropna().reset_index(drop=True)
+
+
+def serie_do_risco_no_ponto(avaliadas: dict, lon: float, lat: float, centro: tuple[float, float],
+                            fuso) -> pd.DataFrame:
+    # As três medidas da regra no ponto, hora a hora: a cada hora avaliada, o IDW das estações que
+    # mediram as três, como na superfície. O formato é o da série da estação, para o mesmo gráfico
+    vazia = pd.DataFrame(columns=["dt_local", "Medida", "valor", "limiar", "Condição"])
+    if not avaliadas:
+        return vazia
+    horas = sorted(avaliadas)
+    longo = pd.concat([avaliada.estacoes.assign(_hora=hora) for hora, avaliada in avaliadas.items()],
+                      ignore_index=True)
+    posicoes = longo.drop_duplicates("Estação").set_index("Estação")[["Longitude", "Latitude"]]
+    campos = []
+    for coluna in MEDIDAS_DO_RISCO:
+        largo = longo.groupby(["_hora", "Estação"])[coluna].first().unstack("Estação").reindex(horas)
+        campos.append(calculos.idw_no_tempo(posicoes.loc[largo.columns, "Longitude"],
+                                            posicoes.loc[largo.columns, "Latitude"], largo.to_numpy(dtype=float),
+                                            lon, lat, centro, config.IDW_VIZINHOS, config.IDW_POTENCIA))
+    dt_local = pd.DatetimeIndex(horas).tz_convert(fuso).tz_localize(None)
+    return pd.concat([pd.DataFrame({"dt_local": dt_local, "Medida": f"{rotulo} ({unidade})", "valor": campo,
+                                    "limiar": limiar, "Condição": np.where(atendida, "atendida", "não")})
+                      for (rotulo, unidade, limiar), campo, atendida
+                      in zip(MEDIDAS_DO_RISCO.values(), campos, risco_fogo.condicoes_atendidas(*campos))],
+                     ignore_index=True)
 
 
 def serie_da_variavel(produto, leituras: pd.DataFrame, nome: str, modo: str) -> pd.DataFrame:

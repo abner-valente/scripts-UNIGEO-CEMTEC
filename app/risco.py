@@ -87,9 +87,13 @@ def por_dia(avaliadas: dict) -> dict:
     return {dia: np.maximum.reduce(grades) for dia, grades in sorted(dias.items())}
 
 
+def do_dia(avaliadas: dict, dia) -> dict:
+    return {hora: avaliada for hora, avaliada in avaliadas.items()
+            if risco_fogo.dia_da_leitura(pd.DatetimeIndex([hora]))[0] == dia}
+
+
 def estacoes_do_dia(avaliadas: dict, dia) -> pd.DataFrame:
-    das_horas = [avaliada.estacoes for hora, avaliada in avaliadas.items()
-                 if risco_fogo.dia_da_leitura(pd.DatetimeIndex([hora]))[0] == dia]
+    das_horas = [avaliada.estacoes for avaliada in do_dia(avaliadas, dia).values()]
     if not das_horas:
         return pd.DataFrame()
     return (pd.concat(das_horas, ignore_index=True)

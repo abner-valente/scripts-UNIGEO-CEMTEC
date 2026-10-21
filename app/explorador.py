@@ -1732,10 +1732,11 @@ def ponto_clicado(celulas: pd.DataFrame, celula: int, uf: str) -> tuple[pd.Serie
     return escolhida.iloc[0], float(np.ravel(grade.lon)[celula]), float(np.ravel(grade.lat)[celula])
 
 
-def cabecalho_do_ponto(ponto: pd.Series, lon: float, lat: float, linha_do_valor: str) -> None:
+def cabecalho_do_ponto(ponto: pd.Series, lon: float, lat: float, linha_do_valor: str,
+                       conta: str = "O valor é o IDW") -> None:
     st.subheader(f"{ponto['titulo']} · {abs(lat):.2f}° S, {abs(lon):.2f}° O".replace(".", ","))
     st.markdown(linha_do_valor)
-    st.caption(f"Estação mais próxima: **{ponto['mais_proxima']}**, a {ponto['km']:.0f} km. O valor é o IDW das "
+    st.caption(f"Estação mais próxima: **{ponto['mais_proxima']}**, a {ponto['km']:.0f} km. {conta} das "
                f"{config.IDW_VIZINHOS} estações mais próximas que mediram, com peso pelo inverso do quadrado "
                "da distância: o mesmo que pinta o mapa. Quanto mais longe das estações, menos ele representa o lugar.")
 
@@ -1763,6 +1764,34 @@ def painel_do_ponto(produto: variaveis.Produto, celulas: pd.DataFrame, celula: i
                     width="stretch")
     st.caption(f"{produto.nome} interpolado no ponto, " + ("dia a dia" if modo_serie == variaveis.DIA else "hora a hora")
                + " no período." + (" A linha azul é o instante do mapa." if marca is not None else ""))
+
+
+def painel_do_risco_no_ponto(celulas: pd.DataFrame, celula: int, avaliadas: dict, uf: str, legenda: str,
+                             fuso, hora_local) -> None:
+    # O ponto clicado no risco: o nível do balão e as três medidas do próprio ponto, hora a hora no
+    # período, no mesmo gráfico da estação
+    clicado = ponto_clicado(celulas, celula, uf)
+    if clicado is None:
+        return
+    ponto, lon, lat = clicado
+    nivel = int(ponto["nivel"])
+    cabecalho_do_ponto(ponto, lon, lat, f"**{legenda}:** {config.ROTULOS_RISCO[nivel]} ({nivel} de 3)",
+                       conta="A regra 30-30-30 é aplicada no ponto, hora a hora, a cada uma das três medidas "
+                             "interpoladas pelo IDW")
+    serie = interativo.serie_do_risco_no_ponto(avaliadas, lon, lat, grade_do_ponto(uf).centro, fuso)
+    if serie.empty:
+        return
+    st.altair_chart(grafico_do_risco_na_estacao(serie, hora_local), width="stretch")
+    st.caption(f"As três medidas interpoladas no ponto, hora a hora. A linha tracejada é o limiar de cada condição "
+               f"({config.LIMIAR_TEMP_MAX:g} °C, {config.LIMIAR_UMIDADE_MIN:g} % e {config.LIMIAR_RAJADA:g} km/h); "
+               "os pontos vermelhos, as horas em que ela valeu." + (" A linha azul é a hora do mapa."
+                                                                     if hora_local is not None else ""))
+
+
+@st.cache_data(show_spinner=False, max_entries=30)
+def celulas_do_risco(niveis: np.ndarray, estacoes: pd.DataFrame, legenda: str, uf: str, com_medidas: bool,
+                     horas_alto: np.ndarray | None = None) -> pd.DataFrame:
+    return interativo.celulas_do_risco(grade_do_ponto(uf), niveis, legenda, estacoes, com_medidas, horas_alto)
 
 
 def painel_da_chuva_no_ponto(celulas: pd.DataFrame, celula: int, leituras: pd.DataFrame, uf: str, legenda: str,
@@ -1942,34 +1971,49 @@ def risco_interativo(uf: str, recorte: config.Recorte, intervalo: tuple, estacoe
         grade, pontos = avaliadas[hora].grade, avaliadas[hora].estacoes
         coluna, legenda = risco_fogo.COLUNA_NIVEL_HORA, "Na hora"
         hora_local = hora.tz_convert(recorte.fuso).tz_localize(None)
+        das_celulas, horas_alto = avaliadas[hora].estacoes, None
     elif modo == variaveis.DIA:
         dias = risco.por_dia(avaliadas)
         dia = linha_do_tempo("Dia", list(dias), "dia_risco_interativo", lambda data: f"{data:%d/%m/%Y}")
         grade, pontos = dias[dia], risco.estacoes_do_dia(avaliadas, dia)
         coluna, legenda = risco_fogo.COLUNA_NIVEL_HORA, "Pior nível do dia"
+        horas_alto = risco.horas_em_risco_alto(risco.do_dia(avaliadas, dia))
     else:
         grade = risco.pior_nivel(avaliadas)
         pontos = risco.resumo(do_produto, config.Periodo.de_datas(*intervalo, fuso=recorte.fuso), uf)
         coluna, legenda = risco_fogo.COLUNA_NIVEL, "Pior nível do período"
+        horas_alto = risco.horas_em_risco_alto(avaliadas)
+    if modo != variaveis.HORA:
+        das_celulas = pd.concat([avaliada.estacoes for avaliada in avaliadas.values()]).drop_duplicates("Estação")
     # As vizinhas já entraram na superfície; nos pontos, só as do estado
     pontos = interativo.pontos_de_risco(pontos[pontos["Estação"].isin(nomes_do_estado)], coluna, legenda)
 
     escritos = st.checkbox("Mostrar o nível de cada estação", value=True, key="niveis_risco_interativo",
                            help="O número sobre cada estação. Desligado, fica só a cor do ponto.")
     imagem = interativo.imagem_de_classes(grade, malha_fina(uf).dentro)
-    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos), on_select="rerun",
+    com_medidas = modo == variaveis.HORA
+    colunas = ["Estação", "Longitude", "Latitude"] + (list(interativo.MEDIDAS_DO_RISCO) if com_medidas else [])
+    celulas = celulas_do_risco(grade, das_celulas[colunas].reset_index(drop=True), legenda, uf, com_medidas,
+                               horas_alto)
+    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos, celulas), on_select="rerun",
                              selection_mode="single-object", key="mapa_risco_interativo", height=ALTURA_MAPA)
     st.markdown(legenda_do_risco(), unsafe_allow_html=True)
-    st.caption("Role para aproximar, arraste para deslocar, passe o mouse para ver o nível e as medidas, e "
-               "**clique numa estação** para ver as três medidas dela no período. A superfície é a mesma "
-               "do mapa do boletim: as três variáveis interpoladas separadas e a regra aplicada célula a célula.")
+    st.caption("Role para aproximar, arraste para deslocar, passe o mouse em qualquer ponto para ver o nível"
+               + (" e as três medidas interpoladas" if com_medidas else " e as horas em risco alto")
+               + ", e **clique** para ver as três medidas do ponto, ou as de uma estação, no período. A superfície "
+               "é a mesma do mapa do boletim: as três variáveis interpoladas separadas e a regra aplicada célula a "
+               "célula.")
 
-    # A estação clicada fica escolhida enquanto o deslizante anda, até outro clique
-    clicadas = evento.selection.get("objects", {}).get("estacoes", []) if evento is not None else []
-    if clicadas:
-        st.session_state["estacao_risco_interativo"] = clicadas[0]["titulo"]
-    escolhida = st.session_state.get("estacao_risco_interativo")
-    if escolhida in nomes_do_estado:
+    # O ponto ou a estação clicada fica escolhida enquanto o deslizante anda, até outro clique
+    objetos = evento.selection.get("objects", {}) if evento is not None else {}
+    if objetos.get("estacoes"):
+        st.session_state["escolha_risco_interativo"] = ("estacao", objetos["estacoes"][0]["titulo"])
+    elif objetos.get("pontos"):
+        st.session_state["escolha_risco_interativo"] = ("ponto", int(objetos["pontos"][0]["celula"]))
+    tipo, escolhida = st.session_state.get("escolha_risco_interativo", (None, None))
+    if tipo == "ponto":
+        painel_do_risco_no_ponto(celulas, escolhida, avaliadas, uf, legenda, recorte.fuso, hora_local)
+    elif tipo == "estacao" and escolhida in nomes_do_estado:
         st.subheader(escolhida)
         serie = interativo.serie_da_estacao(completas, escolhida, recorte.fuso)
         st.altair_chart(grafico_do_risco_na_estacao(serie, hora_local), width="stretch")
