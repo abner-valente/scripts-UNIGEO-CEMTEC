@@ -6,6 +6,7 @@ pelo main.py, e nada aqui altera o que eles produzem.
 
 Para abrir:  streamlit run app/explorador.py
 """
+import base64
 import io
 import math
 import sys
@@ -85,7 +86,7 @@ FONTE_DOS_ROTULOS = 12
 # Mapas interativos: o enquadramento inicial sai do recorte — o centro do estado e um zoom que
 # cabe o maior lado dele na tela.
 ZOOM_POR_GRAU = 5.9 + 3.0  # calibrado em MS, que tem 8° de largura e abre bem no zoom 5,9
-ALTURA_MAPA = 780
+ALTURA_MAPA = 900
 # Dois ajustes no balão dos gráficos. Ele é um elemento só, pendurado no corpo da página fora
 # do gráfico, então as regras valem para todos eles; os seletores repetem o caminho inteiro do
 # estilo do Streamlit porque um mais curto perde na especificidade e não pega.
@@ -374,21 +375,23 @@ def niveis_da_escala(produto: variaveis.Produto, horas_janela=None, ajustar: boo
 
 
 @st.cache_data(show_spinner=False, max_entries=20)
-def barra_de_escala(paleta: str, niveis: tuple, unidade: str) -> bytes:
+def barra_de_escala(paleta: str, niveis: tuple, unidade: str, vertical: bool = False) -> bytes:
     so_acima = float(min(niveis)) > 0
     continua = len(niveis) > mapas.MAX_CLASSES  # faixa fixa vira 21 níveis; classes são poucas
     norma = (Normalize(vmin=min(niveis), vmax=max(niveis)) if continua
              else BoundaryNorm(niveis, ncolors=256, extend="max" if so_acima else "both"))
 
-    fig = Figure(figsize=(4.0, 0.62))
-    eixo = fig.add_axes([0.02, 0.55, 0.96, 0.38])
+    # A vertical vai por cima do mapa interativo, num fundo escuro: letras mais claras
+    fig = Figure(figsize=(0.9, 3.4) if vertical else (4.0, 0.62))
+    eixo = fig.add_axes([0.05, 0.03, 0.3, 0.94] if vertical else [0.02, 0.55, 0.96, 0.38])
+    cor = "#d6d6d6" if vertical else "#9a9a9a"
     barra = fig.colorbar(ScalarMappable(norm=norma, cmap=colormaps[paleta]), cax=eixo,
-                         orientation="horizontal",
+                         orientation="vertical" if vertical else "horizontal",
                          extend="max" if so_acima else "both",
                          ticks=None if continua else list(niveis))
-    barra.set_label(unidade, color="#9a9a9a", size=8, labelpad=2)
-    barra.ax.tick_params(colors="#9a9a9a", labelsize=7, length=2, pad=1)
-    barra.outline.set_edgecolor("#9a9a9a")
+    barra.set_label(unidade, color=cor, size=8, labelpad=2)
+    barra.ax.tick_params(colors=cor, labelsize=7, length=2, pad=1)
+    barra.outline.set_edgecolor(cor)
     barra.outline.set_alpha(0.4)
     fig.patch.set_alpha(0)
 
@@ -1565,12 +1568,34 @@ def mapa_interativo(imagem: str, pontos: pd.DataFrame, uf: str, escritos: bool,
                     initial_view_state=visao, tooltip=interativo.BALAO)
 
 
-def legenda_do_risco() -> str:
-    itens = "".join(f'<span style="display:inline-flex;align-items:center;margin-right:1.1rem">'
+def legenda_do_risco(vertical: bool = False) -> str:
+    # Do mais alto para o mais baixo; na vertical, uma classe por linha, como numa escala
+    item = "display:flex;align-items:center;margin-bottom:0.3rem" if vertical else \
+        "display:inline-flex;align-items:center;margin-right:1.1rem"
+    itens = "".join(f'<span style="{item}">'
                     f'<span style="width:0.9rem;height:0.9rem;border-radius:2px;margin-right:0.35rem;'
                     f'background:{cor}"></span>{rotulo}</span>'
                     for cor, rotulo in zip(reversed(config.CORES_RISCO), reversed(config.ROTULOS_RISCO)))
-    return f'<div style="font-size:0.85rem">{itens}</div>'
+    return f'<div style="font-size:{"0.8rem;color:#e0e0e0" if vertical else "0.85rem"}">{itens}</div>'
+
+
+def escala_no_mapa(chave: str, conteudo: str) -> None:
+    # A escala no canto de baixo à direita do mapa interativo, por cima dele e acima dos créditos do
+    # mapa de fundo. É um bloco de altura zero logo depois do mapa, com o conteúdo puxado para cima
+    # (medido no Streamlit 1.64: o pé da escala fica uns 48 px acima do pé do mapa); não recebe o
+    # mouse, para o mapa continuar respondendo embaixo. Na tela cheia do mapa ela não aparece
+    with st.container(key=chave):
+        st.markdown(
+            f"<style>.st-key-{chave} {{position: relative; height: 0; margin-bottom: -1rem; z-index: 3}}"
+            f".st-key-{chave} [data-testid='stElementContainer'] {{position: absolute; right: 10px; "
+            f"bottom: calc(1rem + 64px); width: auto !important; pointer-events: none}}</style>"
+            f"<div style='background: rgba(14, 17, 23, 0.72); border-radius: 6px; padding: 6px 8px'>"
+            f"{conteudo}</div>", unsafe_allow_html=True)
+
+
+def barra_no_mapa(chave: str, paleta: str, niveis: tuple, unidade: str) -> None:
+    imagem = base64.b64encode(barra_de_escala(paleta, niveis, unidade, vertical=True)).decode()
+    escala_no_mapa(chave, f"<img src='data:image/png;base64,{imagem}' style='height: 300px; display: block'>")
 
 
 # Os gráficos que abrem no clique dos mapas interativos (a estação ou o ponto) navegam como os das
@@ -1746,7 +1771,7 @@ def variaveis_interativas(uf: str, recorte: config.Recorte, intervalo: tuple, es
     evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos, celulas), on_select="rerun",
                              selection_mode="single-object", key="mapa_variavel_interativo", height=ALTURA_MAPA)
     if niveis is not None:
-        st.image(barra_de_escala(produto.paleta, tuple(niveis), produto.unidade), width="content")
+        barra_no_mapa("escala_mapa_variavel_interativo", produto.paleta, tuple(niveis), produto.unidade)
     casas = produto.decimais
     st.caption(f"{produto.nome}, {rotulo}: de {medidas.min():.{casas}f} a {medidas.max():.{casas}f} "
                f"{produto.unidade} em {len(medidas)} estações · {produto.regra}. A superfície é a do mapa do "
@@ -1966,7 +1991,7 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
     evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos, celulas), on_select="rerun",
                              selection_mode="single-object", key="mapa_chuva_interativa", height=ALTURA_MAPA)
     if niveis is not None:
-        st.image(barra_de_escala(produto.paleta, tuple(niveis), produto.unidade), width="content")
+        barra_no_mapa("escala_mapa_chuva_interativa", produto.paleta, tuple(niveis), produto.unidade)
     if medidas.max() == 0:
         st.info(f"Não choveu em nenhuma estação em {quando}.")
     st.caption(f"{legenda}, {quando}: de {medidas.min():.1f} a {medidas.max():.1f} mm em {len(medidas)} estações. "
@@ -2060,7 +2085,7 @@ def risco_interativo(uf: str, recorte: config.Recorte, intervalo: tuple, estacoe
     mapa = mapa_interativo(imagem, pontos, uf, escritos, celulas, interativo.COR_DO_PONTO_ESCOLHIDO_NO_RISCO)
     evento = st.pydeck_chart(mapa, on_select="rerun", selection_mode="single-object", key="mapa_risco_interativo",
                              height=ALTURA_MAPA)
-    st.markdown(legenda_do_risco(), unsafe_allow_html=True)
+    escala_no_mapa("escala_mapa_risco_interativo", legenda_do_risco(vertical=True))
     st.caption("Role para aproximar, arraste para deslocar, passe o mouse em qualquer ponto para ver o nível"
                + (" e as três medidas interpoladas" if com_medidas else " e as horas em risco alto")
                + ", e **clique** para ver as três medidas do ponto, ou as de uma estação, no período. A superfície "
