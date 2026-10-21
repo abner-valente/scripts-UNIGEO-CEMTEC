@@ -74,6 +74,9 @@ ESTADOS_NA_MEMORIA = 3
 # Altura dos gráficos de série. Em 320 px, quatro estações com duas séries cada davam oito
 # linhas quase coladas: não dava para dizer qual era qual.
 ALTURA_GRAFICO = 420
+ALTURA_GRAFICO_DO_RISCO = 260   # cada uma das três medidas do risco, uma embaixo da outra
+NAVEGAR_NO_GRAFICO = (" Arraste o gráfico para deslocar e use **Shift + roda do mouse** para aproximar; o cursor "
+                      "mostra o valor de cada hora.")
 # O tamanho dos números em todos os gráficos, do observado e da previsão, a pedido da equipe em
 # 16/10/2026, em pixels: os dos eixos, e os escritos sobre as barras e as linhas. Um só para todos:
 # tamanhos diferentes fariam um gráfico parecer menos importante que o outro.
@@ -1500,7 +1503,8 @@ def celulas_do_ponto(valores: pd.Series, apoio: pd.Series, nome_produto: str, qu
 
 
 def mapa_interativo(imagem: str, pontos: pd.DataFrame, uf: str, escritos: bool,
-                    celulas: pd.DataFrame | None = None) -> pdk.Deck:
+                    celulas: pd.DataFrame | None = None,
+                    escolhido: list[int] = interativo.COR_DO_PONTO_ESCOLHIDO) -> pdk.Deck:
     recorte = config.recorte_de(uf)
     estado, municipios = contornos_interativos(uf)
     # A imagem entra depois de criada a camada: passada no construtor, o pydeck a trataria como
@@ -1528,7 +1532,7 @@ def mapa_interativo(imagem: str, pontos: pd.DataFrame, uf: str, escritos: bool,
         dx, dy = grade_do_ponto(uf).meio_passo
         camadas.append(pdk.Layer(
             "PolygonLayer", data=celulas[interativo.COLUNAS_DA_CAMADA], id="pontos", filled=True,
-            stroked=False, get_fill_color=[*interativo.COR_DO_PONTO_ESCOLHIDO, 2], opacity=0.5, pickable=True,
+            stroked=False, get_fill_color=[*escolhido, 2], opacity=0.5, pickable=True,
             get_polygon=(f"[[Longitude - {dx:.6f}, Latitude - {dy:.6f}], [Longitude + {dx:.6f}, Latitude - {dy:.6f}], "
                          f"[Longitude + {dx:.6f}, Latitude + {dy:.6f}], [Longitude - {dx:.6f}, Latitude + {dy:.6f}]]")))
     camadas += [
@@ -1562,29 +1566,39 @@ def legenda_do_risco() -> str:
     return f'<div style="font-size:0.85rem">{itens}</div>'
 
 
-def grafico_do_risco_na_estacao(serie: pd.DataFrame, hora_local=None) -> alt.VConcatChart:
+def graficos_do_risco(serie: pd.DataFrame, hora_local=None) -> list[alt.LayerChart]:
+    # Um gráfico por medida, cada um com a sua tela cheia, e o jeito dos gráficos das séries: arrastar
+    # move, Shift+roda aproxima, e o cursor marca a hora mais próxima, com o valor no balão
     cores = alt.Scale(domain=["atendida", "não"], range=[config.CORES_RISCO[-1], "#9e9e9e"])
+    formato = "[timeFormat(datum.value, '%H:%M'), timeFormat(datum.value, '%d/%m')]"
     graficos = []
     for medida, dela in serie.groupby("Medida", sort=False):
-        base = alt.Chart(dela)
+        navegar = alt.selection_interval(bind="scales", encodings=["x"], zoom="wheel![event.shiftKey]")
+        apontar = alt.selection_point(fields=["dt_local"], nearest=True, on="pointerover", empty=False)
+        base = alt.Chart(dela).encode(x=alt.X("dt_local:T", title=None, axis=alt.Axis(
+            grid=True, gridOpacity=0.25, labelAngle=0, labelExpr=formato, labelFontSize=FONTE_DOS_EIXOS)))
+        cor = alt.Color("Condição:N", scale=cores, legend=alt.Legend(orient="bottom", title=None))
         camadas = [
             base.mark_line(color="#607d8b", strokeWidth=1.4).encode(
-                x=alt.X("dt_local:T", title=None,
-                        axis=alt.Axis(format="%d/%m %Hh", labelAngle=0, labelFontSize=FONTE_DOS_EIXOS)),
                 y=alt.Y("valor:Q", title=medida, scale=alt.Scale(zero=False),
-                        axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS))),
-            base.mark_circle(size=26).encode(
-                x="dt_local:T", y="valor:Q",
-                color=alt.Color("Condição:N", scale=cores, legend=alt.Legend(orient="bottom", title=None)),
+                        axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS)))
+            .add_params(navegar),
+            base.mark_circle(size=26).encode(y="valor:Q", color=cor),
+            # O ponto da hora apontada cresce, para o número do balão ter onde morar no gráfico
+            base.mark_circle(size=150).encode(y="valor:Q", color=cor).transform_filter(apontar),
+            alt.Chart(dela.head(1)).mark_rule(color=config.CORES_RISCO[-1], strokeDash=[5, 4]).encode(y="limiar:Q"),
+            base.mark_rule(color="#9a9a9a", strokeWidth=1).encode(
+                opacity=alt.condition(apontar, alt.value(0.5), alt.value(0)),
                 tooltip=[alt.Tooltip("dt_local:T", title="Hora", format="%d/%m %H:%M"),
-                         alt.Tooltip("valor:Q", title=medida, format=".1f"), "Condição:N"]),
-            base.mark_rule(color=config.CORES_RISCO[-1], strokeDash=[5, 4]).encode(y="limiar:Q"),
+                         alt.Tooltip("valor:Q", title=medida, format=".1f"),
+                         alt.Tooltip("limiar:Q", title="Limiar", format=".0f"), alt.Tooltip("Condição:N")])
+            .add_params(apontar),
         ]
         if hora_local is not None:
             camadas.append(alt.Chart(pd.DataFrame({"agora": [hora_local]})).mark_rule(color="#29b6f6", strokeWidth=2)
                            .encode(x="agora:T"))
-        graficos.append(alt.layer(*camadas).properties(height=120))
-    return alt.vconcat(*graficos).resolve_scale(x="shared")
+        graficos.append(alt.layer(*camadas).properties(height=ALTURA_GRAFICO_DO_RISCO))
+    return graficos
 
 
 def grafico_da_chuva_na_estacao(serie: pd.DataFrame, por_dia: bool) -> alt.LayerChart:
@@ -1786,11 +1800,13 @@ def painel_do_risco_no_ponto(celulas: pd.DataFrame, celula: int, avaliadas: dict
     serie = interativo.serie_do_risco_no_ponto(avaliadas, lon, lat, grade_do_ponto(uf).centro, fuso)
     if serie.empty:
         return
-    st.altair_chart(grafico_do_risco_na_estacao(serie, hora_local), width="stretch")
+    for grafico in graficos_do_risco(serie, hora_local):
+        st.altair_chart(grafico, width="stretch")
     st.caption(f"As três medidas interpoladas no ponto, hora a hora. A linha tracejada é o limiar de cada condição "
                f"({config.LIMIAR_TEMP_MAX:g} °C, {config.LIMIAR_UMIDADE_MIN:g} % e {config.LIMIAR_RAJADA:g} km/h); "
                "os pontos vermelhos, as horas em que ela valeu." + (" A linha azul é a hora do mapa."
-                                                                     if hora_local is not None else ""))
+                                                                     if hora_local is not None else "")
+               + NAVEGAR_NO_GRAFICO)
 
 
 @st.cache_data(show_spinner=False, max_entries=30)
@@ -2000,8 +2016,9 @@ def risco_interativo(uf: str, recorte: config.Recorte, intervalo: tuple, estacoe
     colunas = ["Estação", "Longitude", "Latitude"] + (list(interativo.MEDIDAS_DO_RISCO) if com_medidas else [])
     celulas = celulas_do_risco(grade, das_celulas[colunas].reset_index(drop=True), legenda, uf, com_medidas,
                                horas_alto)
-    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos, celulas), on_select="rerun",
-                             selection_mode="single-object", key="mapa_risco_interativo", height=ALTURA_MAPA)
+    mapa = mapa_interativo(imagem, pontos, uf, escritos, celulas, interativo.COR_DO_PONTO_ESCOLHIDO_NO_RISCO)
+    evento = st.pydeck_chart(mapa, on_select="rerun", selection_mode="single-object", key="mapa_risco_interativo",
+                             height=ALTURA_MAPA)
     st.markdown(legenda_do_risco(), unsafe_allow_html=True)
     st.caption("Role para aproximar, arraste para deslocar, passe o mouse em qualquer ponto para ver o nível"
                + (" e as três medidas interpoladas" if com_medidas else " e as horas em risco alto")
@@ -2021,11 +2038,12 @@ def risco_interativo(uf: str, recorte: config.Recorte, intervalo: tuple, estacoe
     elif tipo == "estacao" and escolhida in nomes_do_estado:
         st.subheader(escolhida)
         serie = interativo.serie_da_estacao(completas, escolhida, recorte.fuso)
-        st.altair_chart(grafico_do_risco_na_estacao(serie, hora_local), width="stretch")
+        for grafico in graficos_do_risco(serie, hora_local):
+            st.altair_chart(grafico, width="stretch")
         st.caption(f"A linha tracejada é o limiar de cada condição ({config.LIMIAR_TEMP_MAX:g} °C, "
                    f"{config.LIMIAR_UMIDADE_MIN:g} % e {config.LIMIAR_RAJADA:g} km/h); os pontos vermelhos, "
                    "as horas em que ela valeu." + (" A linha azul é a hora do mapa." if hora_local is not None
-                                                   else ""))
+                                                   else "") + NAVEGAR_NO_GRAFICO)
 
 
 def pagina_mapas_interativos() -> None:
