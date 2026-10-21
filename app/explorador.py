@@ -1490,13 +1490,13 @@ def coordenadas_das_estacoes(uf: str) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False, max_entries=30)
 def celulas_do_ponto(valores: pd.Series, apoio: pd.Series, nome_produto: str, quando: str, uf: str,
-                     direcoes: pd.Series | None = None) -> pd.DataFrame:
-    # As mesmas estações da superfície (as do estado e as vizinhas), para o balão bater com a cor
+                     direcoes: pd.Series | None = None, nome: str | None = None) -> pd.DataFrame:
+    # As mesmas estações da superfície (as do estado e as vizinhas), para o balão bater com a cor.
+    # `nome` é o que o balão diz quando não é o nome do produto (na chuva, a janela: "Chuva 24 h")
     produto = variaveis.por_nome(nome_produto)
-    entrada = pd.concat([_com_coordenadas(valores, nome_produto, uf), _com_coordenadas(apoio, nome_produto, uf)],
-                        ignore_index=True)
-    return interativo.celulas_do_ponto(grade_do_ponto(uf), entrada, nome_produto, produto.unidade,
-                                       produto.decimais, direcoes)
+    nome = nome or nome_produto
+    entrada = pd.concat([_com_coordenadas(valores, nome, uf), _com_coordenadas(apoio, nome, uf)], ignore_index=True)
+    return interativo.celulas_do_ponto(grade_do_ponto(uf), entrada, nome, produto.unidade, produto.decimais, direcoes)
 
 
 def mapa_interativo(imagem: str, pontos: pd.DataFrame, uf: str, escritos: bool,
@@ -1724,28 +1724,38 @@ def variaveis_interativas(uf: str, recorte: config.Recorte, intervalo: tuple, es
                        + " no período." + (" A linha azul é o instante do mapa." if marca is not None else ""))
 
 
+def ponto_clicado(celulas: pd.DataFrame, celula: int, uf: str) -> tuple[pd.Series, float, float] | None:
+    escolhida = celulas[celulas["celula"] == celula]
+    if escolhida.empty:
+        return None
+    grade = grade_do_ponto(uf)
+    return escolhida.iloc[0], float(np.ravel(grade.lon)[celula]), float(np.ravel(grade.lat)[celula])
+
+
+def cabecalho_do_ponto(ponto: pd.Series, lon: float, lat: float, linha_do_valor: str) -> None:
+    st.subheader(f"{ponto['titulo']} · {abs(lat):.2f}° S, {abs(lon):.2f}° O".replace(".", ","))
+    st.markdown(linha_do_valor)
+    st.caption(f"Estação mais próxima: **{ponto['mais_proxima']}**, a {ponto['km']:.0f} km. O valor é o IDW das "
+               f"{config.IDW_VIZINHOS} estações mais próximas que mediram, com peso pelo inverso do quadrado "
+               "da distância: o mesmo que pinta o mapa. Quanto mais longe das estações, menos ele representa o lugar.")
+
+
 def painel_do_ponto(produto: variaveis.Produto, celulas: pd.DataFrame, celula: int, leituras: pd.DataFrame,
                     uf: str, modo_serie: str, marca) -> None:
     # O ponto clicado: o valor interpolado do instante do mapa (o do balão), a estação mais próxima ao
     # lado, e a série do próprio ponto, com o IDW refeito a cada instante
-    escolhida = celulas[celulas["celula"] == celula]
-    if escolhida.empty:
+    clicado = ponto_clicado(celulas, celula, uf)
+    if clicado is None:
         return
-    ponto = escolhida.iloc[0]
-    grade = grade_do_ponto(uf)
-    lon, lat = float(np.ravel(grade.lon)[celula]), float(np.ravel(grade.lat)[celula])
-    st.subheader(f"{ponto['titulo']} · {abs(lat):.2f}° S, {abs(lon):.2f}° O".replace(".", ","))
+    ponto, lon, lat = clicado
     valor = f"{ponto['valor']:.{produto.decimais}f}".replace(".", ",")
     rumo = (f", de {ponto['graus']:.0f}° ({interativo.rumo(ponto['graus'])})" if pd.notna(ponto["graus"]) else "")
-    st.markdown(f"**{produto.nome} interpolado:** {valor} {produto.unidade}{rumo}")
-    st.caption(f"Estação mais próxima: **{ponto['mais_proxima']}**, a {ponto['km']:.0f} km. O valor é o IDW das "
-               f"{config.IDW_VIZINHOS} estações mais próximas que mediram, com peso pelo inverso do quadrado "
-               "da distância: o mesmo que pinta o mapa. Quanto mais longe das estações, menos ele representa o lugar.")
+    cabecalho_do_ponto(ponto, lon, lat, f"**{produto.nome} interpolado:** {valor} {produto.unidade}{rumo}")
     if modo_serie not in produto.modos:
         st.info(f"{produto.nome} só existe para o período inteiro: não há série dia a dia.")
         return
     serie = interativo.serie_do_ponto(produto, leituras, coordenadas_das_estacoes(uf), lon, lat, modo_serie,
-                                      grade.centro)
+                                      grade_do_ponto(uf).centro)
     if serie.empty:
         st.info(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram {produto.nome.lower()} no período.")
         return
@@ -1753,6 +1763,29 @@ def painel_do_ponto(produto: variaveis.Produto, celulas: pd.DataFrame, celula: i
                     width="stretch")
     st.caption(f"{produto.nome} interpolado no ponto, " + ("dia a dia" if modo_serie == variaveis.DIA else "hora a hora")
                + " no período." + (" A linha azul é o instante do mapa." if marca is not None else ""))
+
+
+def painel_da_chuva_no_ponto(celulas: pd.DataFrame, celula: int, leituras: pd.DataFrame, uf: str, legenda: str,
+                             quando: str, de, ate, por_dia: bool, acumulado: bool) -> None:
+    # O ponto clicado na chuva: o valor do balão e a chuva do próprio ponto na mesma janela da
+    # estação, com o IDW refeito a cada hora (ou dia)
+    clicado = ponto_clicado(celulas, celula, uf)
+    if clicado is None:
+        return
+    ponto, lon, lat = clicado
+    valor = f"{ponto['valor']:.1f}".replace(".", ",")
+    cabecalho_do_ponto(ponto, lon, lat, f"**{legenda} interpolada, {quando}:** {valor} mm")
+    serie = interativo.serie_da_chuva_no_ponto(leituras, coordenadas_das_estacoes(uf), lon, lat, de, ate, por_dia,
+                                               grade_do_ponto(uf).centro)
+    if serie.empty:
+        st.info(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram a chuva nessa janela.")
+        return
+    total = f"{serie['acumulado'].iloc[-1]:.1f}".replace(".", ",")
+    st.altair_chart(grafico_da_chuva_na_estacao(serie, por_dia), width="stretch")
+    st.caption(f"A chuva interpolada no ponto em cada {'dia' if por_dia else 'hora'}, de {de:%d/%m %H:%M} a "
+               f"{ate:%d/%m %H:%M}: {total} mm somados. A linha tracejada é o acumulado."
+               + (" O mapa interpola o total de cada estação; quando alguma deixou de mandar horas, a soma das "
+                  "barras sai um pouco diferente do valor dele." if acumulado else ""))
 
 
 def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, inicio: datetime,
@@ -1838,7 +1871,8 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
                                valores_apoio)
     pontos = interativo.pontos_de_valores(_com_coordenadas(valores, produto.nome, uf), produto.nome, legenda,
                                           produto.unidade, produto.decimais)
-    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos), on_select="rerun",
+    celulas = celulas_do_ponto(valores, valores_apoio, produto.nome, quando, uf, nome=legenda)
+    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos, celulas), on_select="rerun",
                              selection_mode="single-object", key="mapa_chuva_interativa", height=ALTURA_MAPA)
     if niveis is not None:
         st.image(barra_de_escala(produto.paleta, tuple(niveis), produto.unidade), width="content")
@@ -1846,15 +1880,21 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
         st.info(f"Não choveu em nenhuma estação em {quando}.")
     st.caption(f"{legenda}, {quando}: de {medidas.min():.1f} a {medidas.max():.1f} mm em {len(medidas)} estações. "
                "A superfície é a do mapa do boletim (o IDW das estações, com as vizinhas na borda), e abaixo "
-               "da primeira classe não se pinta. **Clique numa estação** para ver a chuva dela.")
+               "da primeira classe não se pinta. **Passe o mouse** em qualquer ponto para ler a chuva interpolada, "
+               "e **clique** para ver a chuva do ponto, ou a de uma estação.")
 
-    clicadas = evento.selection.get("objects", {}).get("estacoes", []) if evento is not None else []
-    if clicadas:
-        st.session_state["estacao_chuva_interativa"] = clicadas[0]["titulo"]
-    escolhida = st.session_state.get("estacao_chuva_interativa")
-    if escolhida in set(estacoes["Estação"]):
-        # Hora a hora até 4 dias; mais que isso, por dia, para as barras caberem
-        por_dia = (serie_ate - serie_de) > timedelta(days=4)
+    objetos = evento.selection.get("objects", {}) if evento is not None else {}
+    if objetos.get("estacoes"):
+        st.session_state["escolha_chuva_interativa"] = ("estacao", objetos["estacoes"][0]["titulo"])
+    elif objetos.get("pontos"):
+        st.session_state["escolha_chuva_interativa"] = ("ponto", int(objetos["pontos"][0]["celula"]))
+    tipo, escolhida = st.session_state.get("escolha_chuva_interativa", (None, None))
+    # Hora a hora até 4 dias; mais que isso, por dia, para as barras caberem
+    por_dia = (serie_ate - serie_de) > timedelta(days=4)
+    if tipo == "ponto":
+        painel_da_chuva_no_ponto(celulas, escolhida, pd.concat([leituras, apoio], ignore_index=True), uf, legenda,
+                                 quando, serie_de, serie_ate, por_dia, modo == "Acumulado")
+    elif tipo == "estacao" and escolhida in set(estacoes["Estação"]):
         serie = interativo.serie_da_chuva(leituras, escolhida, serie_de, serie_ate, por_dia)
         total = serie["chuva"].sum(min_count=1)
         st.subheader(f"{escolhida} — " + (f"{total:.1f} mm".replace(".", ",") if pd.notna(total) else "sem dado")

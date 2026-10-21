@@ -274,6 +274,19 @@ def serie_da_chuva(leituras: pd.DataFrame, nome: str, de, ate, por_dia: bool) ->
                          "acumulado": somas.fillna(0).cumsum().to_numpy()})
 
 
+def serie_da_chuva_no_ponto(leituras: pd.DataFrame, coordenadas: pd.DataFrame, lon: float, lat: float, de, ate,
+                            por_dia: bool, centro: tuple[float, float]) -> pd.DataFrame:
+    # A chuva num ponto em (de, ate], por hora ou por dia, com o acumulado: a cada hora (ou dia), o IDW
+    # das estações que mediram. O mapa interpola o total de cada estação; quando alguma deixou de
+    # mandar horas, a soma das horas interpoladas sai um pouco diferente dele
+    janela = leituras[(leituras["dt_local"] > de) & (leituras["dt_local"] <= ate)]
+    produto, modo = ((variaveis.por_nome("Chuva acumulada"), variaveis.DIA) if por_dia
+                     else (variaveis.por_nome("Chuva na hora"), variaveis.HORA))
+    serie = serie_do_ponto(produto, janela, coordenadas, lon, lat, modo, centro)
+    return pd.DataFrame({"quando": serie["quando"], "chuva": serie["valor"].astype(float),
+                         "acumulado": serie["valor"].astype(float).cumsum()})
+
+
 def serie_da_estacao(completas: list, nome: str, fuso) -> pd.DataFrame:
     # As três medidas da regra, hora a hora, no formato longo dos gráficos, com o limiar de cada uma
     for estacao, leituras in completas:

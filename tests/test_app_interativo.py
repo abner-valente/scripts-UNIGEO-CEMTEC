@@ -248,3 +248,39 @@ def test_a_serie_do_ponto_com_poucas_estacoes_fica_vazia():
                                       -54.5, -20.5, variaveis.DIA, (-54.5, -20.5))
 
     assert serie.empty   # duas estações não bastam (config.MIN_ESTACOES_INTERPOLACAO)
+
+
+def chuva_das_quatro() -> pd.DataFrame:
+    horas = pd.date_range("2026-10-13 22:00", periods=4, freq="h", tz=config.FUSO_MS)   # 22h, 23h, 00h, 01h
+    chuvas = {"A": [1.0, 2.5, 0.0, 4.0], "B": [0.0, 0.0, 3.0, 0.0], "C": [5.0, 0.0, 0.0, 0.0], "D": [0.0, 1.0, 1.0, 1.0]}
+    return pd.concat([pd.DataFrame({"Estação": nome, "dt_local": horas, "CHUVA": valores})
+                      for nome, valores in chuvas.items()], ignore_index=True)
+
+
+def test_a_chuva_no_ponto_em_cima_de_uma_estacao_e_a_dela_com_o_acumulado():
+    leituras = chuva_das_quatro()
+    de, ate = leituras["dt_local"].min() - pd.Timedelta(hours=1), leituras["dt_local"].max()
+
+    def no_ponto(por_dia, de=de):
+        return interativo.serie_da_chuva_no_ponto(leituras, ESTACOES_DO_TESTE, -55.2, -20.0, de, ate, por_dia,
+                                                  (-54.5, -20.5))
+
+    por_hora = no_ponto(False)
+    assert por_hora["chuva"].tolist() == pytest.approx([1.0, 2.5, 0.0, 4.0])
+    assert por_hora["acumulado"].tolist() == pytest.approx([1.0, 3.5, 3.5, 7.5])
+    assert por_hora["quando"].iloc[0] == pd.Timestamp("2026-10-13 22:00")
+    por_dia = no_ponto(True)
+    assert por_dia["quando"].tolist() == [pd.Timestamp("2026-10-13"), pd.Timestamp("2026-10-14")]
+    assert por_dia["chuva"].tolist() == pytest.approx([3.5, 4.0])   # a 00h fecha o dia 13
+    assert no_ponto(False, de=de + pd.Timedelta(hours=1))["quando"].iloc[0] == pd.Timestamp("2026-10-13 23:00")
+
+
+def test_a_chuva_no_ponto_com_poucas_estacoes_fica_vazia():
+    leituras = chuva_das_quatro()
+    so_duas = leituras[leituras["Estação"].isin(["A", "B"])]
+
+    serie = interativo.serie_da_chuva_no_ponto(so_duas, ESTACOES_DO_TESTE, -54.5, -20.5,
+                                               leituras["dt_local"].min() - pd.Timedelta(hours=1),
+                                               leituras["dt_local"].max(), False, (-54.5, -20.5))
+
+    assert serie.empty and list(serie.columns) == ["quando", "chuva", "acumulado"]
