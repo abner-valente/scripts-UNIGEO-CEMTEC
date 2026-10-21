@@ -76,7 +76,7 @@ ESTADOS_NA_MEMORIA = 3
 ALTURA_GRAFICO = 420
 ALTURA_GRAFICO_DO_RISCO = 260   # cada uma das três medidas do risco, uma embaixo da outra
 NAVEGAR_NO_GRAFICO = (" Arraste o gráfico para deslocar e use **Shift + roda do mouse** para aproximar; o cursor "
-                      "mostra o valor de cada hora.")
+                      "mostra os números do instante mais próximo.")
 # O tamanho dos números em todos os gráficos, do observado e da previsão, a pedido da equipe em
 # 16/10/2026, em pixels: os dos eixos, e os escritos sobre as barras e as linhas. Um só para todos:
 # tamanhos diferentes fariam um gráfico parecer menos importante que o outro.
@@ -1566,17 +1566,41 @@ def legenda_do_risco() -> str:
     return f'<div style="font-size:0.85rem">{itens}</div>'
 
 
+# Os gráficos que abrem no clique dos mapas interativos (a estação ou o ponto) navegam como os das
+# séries: arrastar move e Shift+roda aproxima, só no tempo, e o cursor aponta o instante mais
+# próximo, com a régua e o balão. Sem o Shift, a roda aproximaria em vez de rolar a página.
+def _eixo_do_tempo(campo: str, por_dia: bool = False) -> alt.X:
+    # Hora em cima e data embaixo; por dia, só a data, com uma marca por dia
+    formato = ("[timeFormat(datum.value, '%d/%m')]" if por_dia
+               else "[timeFormat(datum.value, '%H:%M'), timeFormat(datum.value, '%d/%m')]")
+    return alt.X(f"{campo}:T", title=None, axis=alt.Axis(
+        grid=True, gridOpacity=0.25, labelAngle=0, labelExpr=formato, labelFontSize=FONTE_DOS_EIXOS,
+        tickCount="day" if por_dia else alt.Undefined))
+
+
+def _navegar_e_apontar(campo: str) -> tuple[alt.Parameter, alt.Parameter]:
+    return (alt.selection_interval(bind="scales", encodings=["x"], zoom="wheel![event.shiftKey]"),
+            alt.selection_point(fields=[campo], nearest=True, on="pointerover", empty=False))
+
+
+def _regua_do_instante(base: alt.Chart, apontar: alt.Parameter, balao: list) -> alt.Chart:
+    return (base.mark_rule(color="#9a9a9a", strokeWidth=1)
+            .encode(opacity=alt.condition(apontar, alt.value(0.5), alt.value(0)), tooltip=balao)
+            .add_params(apontar))
+
+
+def _quando_no_balao(campo: str, por_dia: bool = False) -> alt.Tooltip:
+    return alt.Tooltip(f"{campo}:T", title="Dia" if por_dia else "Hora",
+                       format="%d/%m/%Y" if por_dia else "%d/%m %H:%M")
+
+
 def graficos_do_risco(serie: pd.DataFrame, hora_local=None) -> list[alt.LayerChart]:
-    # Um gráfico por medida, cada um com a sua tela cheia, e o jeito dos gráficos das séries: arrastar
-    # move, Shift+roda aproxima, e o cursor marca a hora mais próxima, com o valor no balão
+    # Um gráfico por medida, cada um com a sua tela cheia
     cores = alt.Scale(domain=["atendida", "não"], range=[config.CORES_RISCO[-1], "#9e9e9e"])
-    formato = "[timeFormat(datum.value, '%H:%M'), timeFormat(datum.value, '%d/%m')]"
     graficos = []
     for medida, dela in serie.groupby("Medida", sort=False):
-        navegar = alt.selection_interval(bind="scales", encodings=["x"], zoom="wheel![event.shiftKey]")
-        apontar = alt.selection_point(fields=["dt_local"], nearest=True, on="pointerover", empty=False)
-        base = alt.Chart(dela).encode(x=alt.X("dt_local:T", title=None, axis=alt.Axis(
-            grid=True, gridOpacity=0.25, labelAngle=0, labelExpr=formato, labelFontSize=FONTE_DOS_EIXOS)))
+        navegar, apontar = _navegar_e_apontar("dt_local")
+        base = alt.Chart(dela).encode(x=_eixo_do_tempo("dt_local"))
         cor = alt.Color("Condição:N", scale=cores, legend=alt.Legend(orient="bottom", title=None))
         camadas = [
             base.mark_line(color="#607d8b", strokeWidth=1.4).encode(
@@ -1587,12 +1611,9 @@ def graficos_do_risco(serie: pd.DataFrame, hora_local=None) -> list[alt.LayerCha
             # O ponto da hora apontada cresce, para o número do balão ter onde morar no gráfico
             base.mark_circle(size=150).encode(y="valor:Q", color=cor).transform_filter(apontar),
             alt.Chart(dela.head(1)).mark_rule(color=config.CORES_RISCO[-1], strokeDash=[5, 4]).encode(y="limiar:Q"),
-            base.mark_rule(color="#9a9a9a", strokeWidth=1).encode(
-                opacity=alt.condition(apontar, alt.value(0.5), alt.value(0)),
-                tooltip=[alt.Tooltip("dt_local:T", title="Hora", format="%d/%m %H:%M"),
-                         alt.Tooltip("valor:Q", title=medida, format=".1f"),
-                         alt.Tooltip("limiar:Q", title="Limiar", format=".0f"), alt.Tooltip("Condição:N")])
-            .add_params(apontar),
+            _regua_do_instante(base, apontar, [
+                _quando_no_balao("dt_local"), alt.Tooltip("valor:Q", title=medida, format=".1f"),
+                alt.Tooltip("limiar:Q", title="Limiar", format=".0f"), alt.Tooltip("Condição:N")]),
         ]
         if hora_local is not None:
             camadas.append(alt.Chart(pd.DataFrame({"agora": [hora_local]})).mark_rule(color="#29b6f6", strokeWidth=2)
@@ -1602,34 +1623,45 @@ def graficos_do_risco(serie: pd.DataFrame, hora_local=None) -> list[alt.LayerCha
 
 
 def grafico_da_chuva_na_estacao(serie: pd.DataFrame, por_dia: bool) -> alt.LayerChart:
-    eixo = alt.Axis(format="%d/%m" if por_dia else "%d/%m %Hh", labelAngle=0, labelFontSize=FONTE_DOS_EIXOS)
-    base = alt.Chart(serie).encode(x=alt.X("quando:T", title=None, axis=eixo))
-    barras = base.mark_bar(color="#1e88e5", opacity=0.85).encode(
-        y=alt.Y("chuva:Q", title="Chuva (mm)", axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)),
-        tooltip=[alt.Tooltip("quando:T", title="Dia" if por_dia else "Hora",
-                             format="%d/%m/%Y" if por_dia else "%d/%m %H:%M"),
-                 alt.Tooltip("chuva:Q", title="Chuva (mm)", format=".1f"),
-                 alt.Tooltip("acumulado:Q", title="Acumulado (mm)", format=".1f")])
-    linha = base.mark_line(color="#90a4ae", strokeDash=[5, 3]).encode(
-        y=alt.Y("acumulado:Q", title="Acumulado (mm)", axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)))
-    return alt.layer(barras, linha).resolve_scale(y="independent").properties(height=240)
+    navegar, apontar = _navegar_e_apontar("quando")
+    base = alt.Chart(serie).encode(x=_eixo_do_tempo("quando", por_dia))
+    # A barra do instante apontado acende e o acumulado ganha um ponto: o balão diz de que altura fala.
+    # As camadas ficam todas no mesmo nível (aninhadas, o Vega recusa o apontador repetido), e com o
+    # eixo vertical de cada uma independente: o ponto leva a mesma escala da linha do acumulado
+    acumulado = alt.Scale(domain=[0, max(float(serie["acumulado"].max()), 0.1)])
+    return alt.layer(
+        base.mark_bar(color="#1e88e5").encode(
+            y=alt.Y("chuva:Q", title="Chuva (mm)",
+                    axis=alt.Axis(orient="left", grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS)),
+            opacity=alt.condition(apontar, alt.value(1), alt.value(0.8)))
+        .add_params(navegar),
+        _regua_do_instante(base, apontar, [
+            _quando_no_balao("quando", por_dia), alt.Tooltip("chuva:Q", title="Chuva (mm)", format=".1f"),
+            alt.Tooltip("acumulado:Q", title="Acumulado (mm)", format=".1f")]),
+        base.mark_line(color="#90a4ae", strokeDash=[5, 3]).encode(
+            y=alt.Y("acumulado:Q", title="Acumulado (mm)", scale=acumulado,
+                    axis=alt.Axis(orient="right", labelFontSize=FONTE_DOS_EIXOS))),
+        base.mark_circle(size=90, color="#cfd8dc").encode(y=alt.Y("acumulado:Q", scale=acumulado, axis=None))
+        .transform_filter(apontar),
+    ).resolve_scale(y="independent").properties(height=240)
 
 
 def grafico_da_variavel_na_estacao(serie: pd.DataFrame, produto: variaveis.Produto, por_dia: bool,
                                     momento=None) -> alt.LayerChart:
     titulo = f"{produto.nome} ({produto.unidade})"
-    base = alt.Chart(serie).encode(x=alt.X("quando:T", title=None,
-                                           axis=alt.Axis(format="%d/%m" if por_dia else "%d/%m %Hh", labelAngle=0,
-                                                         labelFontSize=FONTE_DOS_EIXOS)))
+    navegar, apontar = _navegar_e_apontar("quando")
+    base = alt.Chart(serie).encode(x=_eixo_do_tempo("quando", por_dia))
     camadas = [
         base.mark_line(color="#607d8b", strokeWidth=1.5).encode(
             y=alt.Y("valor:Q", title=titulo, scale=alt.Scale(zero=produto.zero_na_base),
-                    axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS))),
-        base.mark_circle(size=24, color="#455a64").encode(
-            y="valor:Q",
-            tooltip=[alt.Tooltip("quando:T", title="Dia" if por_dia else "Hora",
-                                 format="%d/%m/%Y" if por_dia else "%d/%m %H:%M"),
-                     alt.Tooltip("valor:Q", title=titulo, format=f".{produto.decimais}f")]),
+                    axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS)))
+        .add_params(navegar),
+        base.mark_circle(size=24, color="#455a64").encode(y="valor:Q"),
+        # O ponto do instante apontado cresce, para o número do balão ter onde morar no gráfico
+        base.mark_circle(size=120, color="#cfd8dc").encode(y="valor:Q").transform_filter(apontar),
+        _regua_do_instante(base, apontar, [
+            _quando_no_balao("quando", por_dia),
+            alt.Tooltip("valor:Q", title=titulo, format=f".{produto.decimais}f")]),
     ]
     if momento is not None:
         camadas.append(alt.Chart(pd.DataFrame({"agora": [momento]})).mark_rule(color="#29b6f6", strokeWidth=2)
@@ -1740,7 +1772,8 @@ def variaveis_interativas(uf: str, recorte: config.Recorte, intervalo: tuple, es
             st.altair_chart(grafico_da_variavel_na_estacao(serie, produto, modo_serie == variaveis.DIA, marca),
                             width="stretch")
             st.caption(f"{produto.nome} na estação, " + ("dia a dia" if modo_serie == variaveis.DIA else "hora a hora")
-                       + " no período." + (" A linha azul é o instante do mapa." if marca is not None else ""))
+                       + " no período." + (" A linha azul é o instante do mapa." if marca is not None else "")
+                       + NAVEGAR_NO_GRAFICO)
 
 
 def ponto_clicado(celulas: pd.DataFrame, celula: int, uf: str) -> tuple[pd.Series, float, float] | None:
@@ -1782,7 +1815,8 @@ def painel_do_ponto(produto: variaveis.Produto, celulas: pd.DataFrame, celula: i
     st.altair_chart(grafico_da_variavel_na_estacao(serie, produto, modo_serie == variaveis.DIA, marca),
                     width="stretch")
     st.caption(f"{produto.nome} interpolado no ponto, " + ("dia a dia" if modo_serie == variaveis.DIA else "hora a hora")
-               + " no período." + (" A linha azul é o instante do mapa." if marca is not None else ""))
+               + " no período." + (" A linha azul é o instante do mapa." if marca is not None else "")
+                       + NAVEGAR_NO_GRAFICO)
 
 
 def painel_do_risco_no_ponto(celulas: pd.DataFrame, celula: int, avaliadas: dict, uf: str, legenda: str,
@@ -1835,7 +1869,7 @@ def painel_da_chuva_no_ponto(celulas: pd.DataFrame, celula: int, leituras: pd.Da
     st.caption(f"A chuva interpolada no ponto em cada {'dia' if por_dia else 'hora'}, de {de:%d/%m %H:%M} a "
                f"{ate:%d/%m %H:%M}: {total} mm somados. A linha tracejada é o acumulado."
                + (" O mapa interpola o total de cada estação; quando alguma deixou de mandar horas, a soma das "
-                  "barras sai um pouco diferente do valor dele." if acumulado else ""))
+                  "barras sai um pouco diferente do valor dele." if acumulado else "") + NAVEGAR_NO_GRAFICO)
 
 
 def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, inicio: datetime,
@@ -1954,7 +1988,7 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
         else:
             st.altair_chart(grafico_da_chuva_na_estacao(serie, por_dia), width="stretch")
             st.caption("As barras são a chuva de cada " + ("dia" if por_dia else "hora")
-                       + "; a linha tracejada, o acumulado ao longo da janela.")
+                       + "; a linha tracejada, o acumulado ao longo da janela." + NAVEGAR_NO_GRAFICO)
 
 
 def risco_interativo(uf: str, recorte: config.Recorte, intervalo: tuple, estacoes: pd.DataFrame,
