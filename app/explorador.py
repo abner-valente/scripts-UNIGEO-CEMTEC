@@ -1520,6 +1520,9 @@ def mapa_interativo(imagem: str, pontos: pd.DataFrame, uf: str, escritos: bool,
         pdk.Layer("GeoJsonLayer", data=municipios, id="municipios", stroked=True, filled=True,
                   get_fill_color=[255, 255, 255, 1], get_line_color=[70, 70, 70, 150],
                   line_width_min_pixels=0.6, pickable=not com_celulas),
+        # O contorno do estado com uma borda clara por baixo: no mapa de fundo escuro, a linha preta sumiria
+        pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[235, 235, 235, 220],
+                  line_width_min_pixels=3.5),
         pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[25, 25, 25],
                   line_width_min_pixels=1.6),
     ]
@@ -1553,9 +1556,13 @@ def mapa_interativo(imagem: str, pontos: pd.DataFrame, uf: str, escritos: bool,
         # Como a imagem acima: passado no construtor, o "↑" viraria expressão ("@@=↑") e a seta não sairia
         setas.character_set = "↑"
         camadas.append(setas)
+    visao = pdk.ViewState(**visao_inicial(recorte))
+    if st.session_state.get("fundo_interativo", True):
+        # O fundo da Carto, claro ou escuro como o tema (é o que o Streamlit põe com map_style=None):
+        # países, cidades, estradas e rios, da internet. Sem rede, só ele some
+        return pdk.Deck(layers=camadas, map_style=None, initial_view_state=visao, tooltip=interativo.BALAO)
     return pdk.Deck(layers=camadas, map_provider=None, map_style=interativo.ESTILO_SEM_FUNDO,
-                    initial_view_state=pdk.ViewState(**visao_inicial(recorte)),
-                    tooltip=interativo.BALAO)
+                    initial_view_state=visao, tooltip=interativo.BALAO)
 
 
 def legenda_do_risco() -> str:
@@ -2093,9 +2100,14 @@ def pagina_mapas_interativos() -> None:
             estacoes = carregar_estacoes(uf).sort_values("Estação")
         except fonte.ErroFonte:
             sem_lista_de_estacoes(aviso, uf)
+        st.checkbox("Mapa de fundo", value=True, key="fundo_interativo",
+                    help="Países, cidades, estradas e rios, para ver além do estado. Vem da internet: sem rede, o "
+                         "fundo some e o resto do mapa continua. Desligado, ficam só os limites do estado e dos "
+                         "municípios.")
     inicio, fim = janela_do_periodo(intervalo, recorte)
     st.caption("Os mapas do boletim continuam no Painel. Aqui eles se aproximam, se arrastam e respondem "
-               "ao clique, desenhados só com os limites do estado e dos municípios: nada vem da internet.")
+               "ao clique. O mapa de fundo vem da internet e pode ser desligado na barra lateral; o resto é "
+               "desenhado aqui, com os limites do estado e dos municípios.")
     aba_mapas_interativos, aba_chuva_interativa, aba_risco_interativo = st.tabs(["Mapas", "Chuva", "Risco de Fogo"])
     with aba_mapas_interativos:
         variaveis_interativas(uf, recorte, intervalo, estacoes, inicio, fim)
