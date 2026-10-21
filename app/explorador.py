@@ -1507,23 +1507,28 @@ def mapa_interativo(imagem: str, pontos: pd.DataFrame, uf: str, escritos: bool,
     # expressão a ser avaliada no navegador ("@@=data:image/png;...")
     campo = pdk.Layer("BitmapLayer", data=None, bounds=superficie.limites(recorte))
     campo.image = imagem
+    com_celulas = celulas is not None and not celulas.empty
     camadas = [
         campo,
-        # Preenchidos quase transparentes: é o preenchimento que responde ao mouse com o nome
+        # Preenchidos quase transparentes: é o preenchimento que responde ao mouse com o nome. Com a
+        # grade do ponto por cima, quem responde é ela, que já traz o município; clicável, o
+        # município inteiro ficaria pintado no clique (veja a camada da grade)
         pdk.Layer("GeoJsonLayer", data=municipios, id="municipios", stroked=True, filled=True,
                   get_fill_color=[255, 255, 255, 1], get_line_color=[70, 70, 70, 150],
-                  line_width_min_pixels=0.6, pickable=True),
+                  line_width_min_pixels=0.6, pickable=not com_celulas),
         pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[25, 25, 25],
                   line_width_min_pixels=1.6),
     ]
-    if celulas is not None and not celulas.empty:
+    if com_celulas:
         # A grade invisível do valor em qualquer ponto, por cima dos municípios (o balão dela já traz
         # o nome do município) e por baixo das estações, que continuam respondendo ao clique. O
-        # quadrado de cada célula sai do centro no navegador, para não mandar quatro cantos por célula
+        # quadrado de cada célula sai do centro no navegador, para não mandar quatro cantos por célula.
+        # No clique, o Streamlit pinta o objeto escolhido com a cor dele, mas opaca, e apaga os outros:
+        # a célula leva o vermelho quase transparente, e a opacidade da camada deixa o escolhido em 50%
         dx, dy = grade_do_ponto(uf).meio_passo
         camadas.append(pdk.Layer(
             "PolygonLayer", data=celulas[interativo.COLUNAS_DA_CAMADA], id="pontos", filled=True,
-            stroked=False, get_fill_color=[255, 255, 255, 1], pickable=True,
+            stroked=False, get_fill_color=[*interativo.COR_DO_PONTO_ESCOLHIDO, 2], opacity=0.5, pickable=True,
             get_polygon=(f"[[Longitude - {dx:.6f}, Latitude - {dy:.6f}], [Longitude + {dx:.6f}, Latitude - {dy:.6f}], "
                          f"[Longitude + {dx:.6f}, Latitude + {dy:.6f}], [Longitude - {dx:.6f}, Latitude + {dy:.6f}]]")))
     camadas += [

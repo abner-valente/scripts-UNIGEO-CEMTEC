@@ -21,6 +21,7 @@ from modulos.produtos import risco_fogo
 
 OPACIDADE = 0.78
 COR_DA_ESTACAO = [25, 25, 25, 215]   # nas variáveis contínuas o ponto é escuro: a cor é da superfície
+COR_DO_PONTO_ESCOLHIDO = [229, 57, 53]   # o quadrado da célula clicada, a 50% (a pedido da equipe)
 # O que toda camada de estações leva: posição, cor, o texto sobre o ponto e o balão
 COLUNAS_DOS_PONTOS = ["Estação", "Longitude", "Latitude", "cor", "rotulo", "titulo", "detalhe"]
 # Um estilo de mapa sem fonte nenhuma, só a cor de fundo, num endereço "data:" que o navegador lê sem
