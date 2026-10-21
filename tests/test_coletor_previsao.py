@@ -15,6 +15,7 @@ AGORA = datetime(2026, 10, 14, 15, tzinfo=timezone.utc)
 ECMWF, GFS, ICON = config.MODELOS_PREVISAO
 EC46 = config.MODELO_SEMANAS
 BUSCAS_DE_UMA_RODADA = 8   # os três modelos e o EC46, na grade e nas estações
+GRADE = pd.DataFrame({"ponto": ["-20.00;-54.00", "-20.50;-54.50"], "latitude": [-20.0, -20.5], "longitude": [-54.0, -54.5]})
 
 
 def horaria(pontos: pd.DataFrame, modelo: str, rodada: datetime) -> pd.DataFrame:
@@ -37,7 +38,8 @@ def semanal(pontos: pd.DataFrame, modelo: str, rodada: datetime) -> pd.DataFrame
 @pytest.fixture
 def open_meteo(monkeypatch):
     estado = SimpleNamespace(rodadas={**{modelo: RODADA for modelo in config.MODELOS_PREVISAO}, EC46: RODADA_EC46},
-                             buscas=[], esperas=[], passos=[], falhas={}, sem_metadados=set(), chega=None)
+                             buscas=[], esperas=[], passos=[], falhas={}, sem_metadados=set(), chega=None,
+                             recuperadas=[], falha_na_recuperacao=None)
 
     def rodadas(modelos, agora=None):
         for modelo in modelos:
@@ -59,13 +61,20 @@ def open_meteo(monkeypatch):
         estado.buscas.append((modelo, list(pontos["ponto"])))
         return semanal(pontos, modelo, estado.rodadas[modelo])
 
+    def buscar_rodada(pontos, modelo, rodada):
+        estado.buscas.append((modelo, list(pontos["ponto"])))
+        estado.recuperadas.append((modelo, pd.Timestamp(rodada)))
+        if estado.falha_na_recuperacao:
+            raise estado.falha_na_recuperacao
+        return horaria(pontos, modelo, rodada)
+
     def pontos_da_grade(recorte=config.RECORTE, passo=config.GRADE_PREVISAO):
         estado.passos.append(passo)
-        return pd.DataFrame({"ponto": ["-20.00;-54.00", "-20.50;-54.50"],
-                             "latitude": [-20.0, -20.5], "longitude": [-54.0, -54.5]})
+        return GRADE.copy()
 
     monkeypatch.setattr(openmeteo, "rodadas", rodadas)
     monkeypatch.setattr(openmeteo, "buscar", buscar)
+    monkeypatch.setattr(openmeteo, "buscar_rodada", buscar_rodada)
     monkeypatch.setattr(openmeteo, "buscar_semanas", buscar_semanas)
     monkeypatch.setattr(openmeteo, "pontos_da_grade", pontos_da_grade)
     monkeypatch.setattr(openmeteo, "_dormir", estado.esperas.append)
@@ -118,7 +127,7 @@ def test_so_as_rodadas_das_00z_e_das_12z(cadastro, open_meteo, capsys):
     coletar_no(cadastro)
     assert ECMWF not in modelos_buscados(open_meteo)
     assert banco.rodadas_guardadas(cadastro, "grade") == {GFS: RODADA + timedelta(hours=12), ICON: RODADA}
-    assert "guarda só as das 00Z e das 12Z" in capsys.readouterr().out
+    assert "Fora das 00Z e das 12Z, as únicas que o coletor guarda: ECMWF 14/10 06Z" in capsys.readouterr().out
 
 
 def test_as_estacoes_sao_as_de_ms_na_lista_do_inmet(cadastro, open_meteo):
@@ -201,6 +210,116 @@ def test_sem_estacoes_no_cadastro_busca_so_a_grade(limpa, open_meteo, capsys):
     coleta = coletar_no(limpa)
     assert coleta.buscas == BUSCAS_DE_UMA_RODADA // 2
     assert "não tem estações de MS" in capsys.readouterr().out
+
+
+def test_sem_nada_novo_o_log_fica_curto(cadastro, open_meteo, monkeypatch, capsys):
+    monkeypatch.setattr(coletor_previsao, "DIAS_DE_RECUPERACAO", 0)
+    coletar_no(cadastro)
+    capsys.readouterr()
+    coletar_no(cadastro)
+    saida = capsys.readouterr().out.splitlines()
+    assert len(saida) == 3
+    assert "✔️ Já no banco: ECMWF 14/10 00Z, GFS 14/10 00Z, ICON 14/10 00Z, EC46 13/10 00Z" in saida[1]
+    assert "Nada novo para buscar" in saida[2]
+
+
+# =====================================================
+# A RECUPERAÇÃO
+# =====================================================
+# Nestes testes, a mais recente dos três modelos é a de 14/10 12Z, e a recuperação olha 2 dias para
+# trás: as esperadas de cada modelo são as de 13/10 00Z, 13/10 12Z e 14/10 00Z
+NOVA = RODADA + timedelta(hours=12)
+HORA_DE_RECUPERAR = datetime(2026, 10, 15, 0, tzinfo=timezone.utc)
+ESPERADAS = [RODADA - timedelta(hours=24), RODADA - timedelta(hours=12), RODADA]
+
+
+@pytest.fixture
+def recuperacao(cadastro, open_meteo, monkeypatch):
+    monkeypatch.setattr(coletor_previsao, "DIAS_DE_RECUPERACAO", 2)
+    for modelo in config.MODELOS_PREVISAO:
+        open_meteo.rodadas[modelo] = NOVA
+    return cadastro
+
+
+def guardar(conexao, menos=()):
+    estacoes = banco.pontos_das_estacoes(conexao, "MS")
+    for modelo in config.MODELOS_PREVISAO:
+        for rodada in ESPERADAS:
+            if (modelo, rodada) not in menos:
+                banco.gravar_previsao(conexao, horaria(GRADE, modelo, rodada), "grade")
+                banco.gravar_previsao(conexao, horaria(estacoes, modelo, rodada), "estacao")
+
+
+def test_as_esperadas_sao_as_das_00z_e_12z_de_antes_da_mais_recente():
+    ultimas = {ECMWF: pd.Timestamp(NOVA), GFS: pd.Timestamp("2026-10-15 06:00", tz="UTC")}   # o ICON sem metadados
+    por_modelo = {}
+    for modelo, rodada in coletor_previsao.rodadas_esperadas(ultimas, datetime(2026, 10, 15, 9, tzinfo=timezone.utc)):
+        por_modelo.setdefault(modelo, []).append(rodada)
+
+    assert set(por_modelo) == {ECMWF, GFS}
+    assert por_modelo[ECMWF][0] == por_modelo[GFS][0] == pd.Timestamp("2026-10-08 12:00", tz="UTC")   # 7 dias
+    assert por_modelo[ECMWF][-1] == pd.Timestamp(RODADA)   # a de 14/10 12Z é da busca normal
+    assert por_modelo[GFS][-1] == pd.Timestamp("2026-10-15 00:00", tz="UTC")   # a mais recente é a das 06Z
+    assert all(rodada.hour in (0, 12) for rodadas in por_modelo.values() for rodada in rodadas)
+
+
+def test_recupera_a_rodada_que_passou_sem_entrar_no_banco(recuperacao, open_meteo, capsys):
+    guardar(recuperacao, menos={(ECMWF, ESPERADAS[1])})
+
+    coleta = coletar_no(recuperacao, HORA_DE_RECUPERAR)
+
+    assert open_meteo.recuperadas == [(ECMWF, pd.Timestamp(ESPERADAS[1]))] * 2   # a grade e as estações
+    assert modelos_buscados(open_meteo)[BUSCAS_DE_UMA_RODADA:] == [ECMWF, ECMWF]   # depois das novas
+    assert (coleta.buscas, coleta.falhas, coleta.faltam) == (BUSCAS_DE_UMA_RODADA + 2, [], [])
+    for conjunto in banco.CONJUNTOS:
+        assert banco.rodadas_ausentes(recuperacao, conjunto, [(ECMWF, ESPERADAS[1])]) == []
+    assert "ECMWF 13/10 12Z, grade (recuperação)" in capsys.readouterr().out
+
+
+def test_uma_rodada_por_vez_a_mais_nova_primeiro(recuperacao, open_meteo):
+    coleta = coletar_no(recuperacao, HORA_DE_RECUPERAR)   # nenhuma das esperadas no banco
+
+    assert open_meteo.recuperadas == [(ECMWF, pd.Timestamp(RODADA))] * 2
+    assert len(coleta.faltam) == 3 * len(ESPERADAS) - 1
+    assert coleta.faltam[0] == "ECMWF 13/10 00Z" and "ECMWF 14/10 00Z" not in coleta.faltam
+
+
+def test_fora_da_hora_de_recuperar_so_avisa_o_que_falta(recuperacao, open_meteo, capsys):
+    guardar(recuperacao, menos={(GFS, ESPERADAS[2])})
+
+    coleta = coletar_no(recuperacao, HORA_DE_RECUPERAR + timedelta(hours=1))
+
+    assert open_meteo.recuperadas == []
+    assert coleta.faltam == ["GFS 14/10 00Z"]
+    assert "Rodadas dos últimos 2 dias que faltam no banco: GFS 14/10 00Z" in capsys.readouterr().out
+
+
+def test_recupera_so_o_conjunto_que_falta(recuperacao, open_meteo):
+    guardar(recuperacao, menos={(ICON, ESPERADAS[2])})
+    banco.gravar_previsao(recuperacao, horaria(GRADE, ICON, ESPERADAS[2]), "grade")
+
+    assert coletar_no(recuperacao, HORA_DE_RECUPERAR + timedelta(hours=1)).faltam == ["ICON 14/10 00Z (estações)"]
+    assert coletar_no(recuperacao, HORA_DE_RECUPERAR).faltam == []
+    assert open_meteo.recuperadas == [(ICON, pd.Timestamp(ESPERADAS[2]))]
+
+
+def test_a_recuperacao_que_falha_segue_na_lista(recuperacao, open_meteo):
+    guardar(recuperacao, menos={(ECMWF, ESPERADAS[1])})
+    open_meteo.falha_na_recuperacao = openmeteo.ErroOpenMeteo(
+        "pedido recusado (HTTP 400): The requested model run is not available")
+
+    coleta = coletar_no(recuperacao, HORA_DE_RECUPERAR)
+
+    assert coleta.falhas == ["ECMWF 13/10 12Z, grade (recuperação)", "ECMWF 13/10 12Z, estações (recuperação)"]
+    assert coleta.faltam == ["ECMWF 13/10 12Z"]
+
+
+def test_com_a_cota_esgotada_nas_novas_nao_recupera(recuperacao, open_meteo):
+    open_meteo.falhas[GFS] = openmeteo.CotaEsgotada("cota do Open-Meteo esgotada: Daily API request limit exceeded")
+
+    coleta = coletar_no(recuperacao, HORA_DE_RECUPERAR)
+
+    assert coleta.interrompida and open_meteo.recuperadas == []
 
 
 def test_o_coletar_previsao_no_banco_de_teste(conexao, cadastro, open_meteo):

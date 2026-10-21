@@ -181,8 +181,12 @@ def rodadas(modelos: tuple[str, ...] = config.MODELOS_PREVISAO,
     return resultado
 
 
-def _buscar_lote(lote: pd.DataFrame, modelos: tuple[str, ...], dias: int) -> pd.DataFrame:
-    resposta = _pedir("POST", config.URL_OPENMETEO, data={
+def _buscar_lote(lote: pd.DataFrame, modelos: tuple[str, ...], dias: int,
+                 rodada: datetime | None = None) -> pd.DataFrame:
+    url, avulsa = config.URL_OPENMETEO, {}
+    if rodada is not None:
+        url, avulsa = config.URL_OPENMETEO_RODADA_AVULSA, {"run": f"{rodada:%Y-%m-%dT%H:%M}"}
+    resposta = _pedir("POST", url, data={
         "latitude": ",".join(f"{valor:.4f}" for valor in lote["latitude"]),
         "longitude": ",".join(f"{valor:.4f}" for valor in lote["longitude"]),
         "hourly": ",".join(VARIAVEIS),
@@ -193,6 +197,7 @@ def _buscar_lote(lote: pd.DataFrame, modelos: tuple[str, ...], dias: int) -> pd.
         "temperature_unit": "celsius",
         "wind_speed_unit": "kmh",
         "precipitation_unit": "mm",
+        **avulsa,
     })
     locais = resposta if isinstance(resposta, list) else [resposta]
     if len(locais) != len(lote):
@@ -218,13 +223,13 @@ def _buscar_lote(lote: pd.DataFrame, modelos: tuple[str, ...], dias: int) -> pd.
 
 
 def previsao_horaria(pontos: pd.DataFrame, modelos: tuple[str, ...] = config.MODELOS_PREVISAO,
-                     dias: int = config.DIAS_PREVISAO) -> pd.DataFrame:
+                     dias: int = config.DIAS_PREVISAO, rodada: datetime | None = None) -> pd.DataFrame:
     por_lote = max(1, int(config.OPENMETEO_POR_MINUTO // custo(1, modelos=len(modelos), dias=dias)))
     partes = []
     for inicio in range(0, len(pontos), por_lote):
         if inicio:
             _dormir(ESPERA_ENTRE_LOTES)
-        partes.append(_buscar_lote(pontos.iloc[inicio:inicio + por_lote], modelos, dias))
+        partes.append(_buscar_lote(pontos.iloc[inicio:inicio + por_lote], modelos, dias, rodada))
     if not partes:
         return pd.DataFrame(columns=[coluna for coluna in COLUNAS_HORARIAS if coluna != "rodada_utc"])
     return pd.concat(partes, ignore_index=True)
@@ -245,6 +250,17 @@ def _na_mesma_rodada(modelos: tuple[str, ...], buscar_tabela: Callable[[], pd.Da
 def buscar(pontos: pd.DataFrame, modelos: tuple[str, ...] = config.MODELOS_PREVISAO,
            dias: int = config.DIAS_PREVISAO) -> pd.DataFrame:
     return _na_mesma_rodada(modelos, lambda: previsao_horaria(pontos, modelos, dias), COLUNAS_HORARIAS)
+
+
+# A rodada que passou sem entrar no banco. Vem da API das rodadas avulsas, que entrega a que se
+# pede pela hora dela; comparada em 21/10/2026 com a mesma rodada gravada pela busca normal, deu os
+# mesmos números, a menos de arredondamento (até 0,3 °C e 0,03 mm). A hora prevista começa na da
+# rodada: as de antes dela no mesmo dia, que a busca normal completa com a rodada anterior, não vêm.
+def buscar_rodada(pontos: pd.DataFrame, modelo: str, rodada: datetime,
+                  dias: int = config.DIAS_PREVISAO) -> pd.DataFrame:
+    tabela = previsao_horaria(pontos, (modelo,), dias, rodada)
+    tabela.insert(1, "rodada_utc", pd.Timestamp(rodada))
+    return tabela[COLUNAS_HORARIAS]
 
 
 # =====================================================

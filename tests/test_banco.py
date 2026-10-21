@@ -184,6 +184,17 @@ def test_a_rodada_mais_nova_de_cada_modelo_atravessa_as_particoes(limpa):
     assert banco.rodadas_guardadas(limpa, "grade") == {}
 
 
+def test_as_rodadas_ausentes_sao_as_esperadas_que_nao_estao_no_conjunto(limpa):
+    banco.gravar_previsao(limpa, previsao(rodada=RODADA), "estacao")   # o ECMWF e o GFS
+    outra = RODADA + timedelta(hours=12)
+    esperadas = [("ecmwf_ifs025", outra), ("ecmwf_ifs025", RODADA), ("icon_seamless", RODADA)]
+
+    assert banco.rodadas_ausentes(limpa, "estacao", esperadas) == [("icon_seamless", pd.Timestamp(RODADA)),
+                                                                    ("ecmwf_ifs025", pd.Timestamp(outra))]
+    assert len(banco.rodadas_ausentes(limpa, "grade", esperadas)) == 3
+    assert banco.rodadas_ausentes(limpa, "grade", []) == []
+
+
 def test_a_ultima_rodada_das_semanas_e_a_do_conjunto_pedido(limpa):
     ec46 = "ecmwf_ec46_ensemble_mean"
     banco.gravar_semanas(limpa, semanas_do(ec46, RODADA), "estacao")

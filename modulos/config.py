@@ -192,6 +192,8 @@ HORAS_BUSCA_TEMPO_REAL = 96    # histórico baixado no modo tempo real (cobre o 
 # As decisões por trás destes números estão em docs/escopo_v0.3.1.md.
 URL_OPENMETEO = "https://api.open-meteo.com/v1/forecast"
 URL_OPENMETEO_RODADA = "https://api.open-meteo.com/data/{modelo}/static/meta.json"
+# A rodada pela hora dela, e não só a mais recente: o ECMWF desde 2024, os outros desde abril de 2026
+URL_OPENMETEO_RODADA_AVULSA = "https://single-runs-api.open-meteo.com/v1/forecast"
 TIMEOUT_OPENMETEO = 120        # segundos: um pedido de centenas de pontos leva uns 2 s, mas pode demorar
 # Os modelos que a equipe de meteorologia prefere (07/10/2026). O ICON só vai até o dia 7,5.
 MODELOS_PREVISAO = ("ecmwf_ifs025", "gfs_seamless", "icon_seamless")
