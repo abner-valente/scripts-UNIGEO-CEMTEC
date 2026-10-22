@@ -33,6 +33,7 @@ from app import dados as coleta
 from app import interativo
 from app import previsao
 from app import qualidade
+from app import referencia
 from app import risco
 from app import superficie
 from app import variaveis
@@ -540,13 +541,14 @@ def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, 
     casas = produto.decimais
     st.caption(f"{valores.min():.{casas}f} a {valores.max():.{casas}f} {produto.unidade} · "
                f"{valores.notna().sum()} estações · {produto.regra}.")
-    arquivo = produto.nome.lower().replace(" ", "_")
+    arquivo = produto.nome.lower().replace("/", "").replace(" ", "_")
     st.download_button(f"Baixar PNG — {medida}", png, mime="image/png", key=f"baixar_{produto.nome}",
                        file_name=f"Mapa_{arquivo}_{carimbo}.png")
+    # O título do boletim pode não ser o nome da tela: "Rajada s/ direção" sai "Rajada máxima em MS"
     botao_do_boletim(medida, produto.nome, boletim.nome_do_arquivo(produto.nome, uf, carimbo),
-                     desenho_do_boletim(valores, produto.nome, produto.grandeza, produto.unidade,
-                                        produto.paleta, produto.decimais, subtitulo, uf, niveis,
-                                        direcoes, apoio))
+                     desenho_do_boletim(valores, produto.titulo or produto.nome, produto.grandeza,
+                                        produto.unidade, produto.paleta, produto.decimais, subtitulo, uf,
+                                        niveis, direcoes, apoio))
 
 
 def escala_do_periodo(produto: variaveis.Produto, leituras: pd.DataFrame, horas_janela):
@@ -605,7 +607,7 @@ def painel_do_gif(produto: variaveis.Produto, leituras: pd.DataFrame, modo: str,
                f"o período inteiro. {len(gif) / 1e6:.1f} MB.")
     st.download_button(f"Baixar GIF — {produto.nome.lower()}", gif, mime="image/gif",
                        key=f"baixar_{chave}",
-                       file_name=f"Animacao_{produto.nome.lower().replace(' ', '_')}_"
+                       file_name=f"Animacao_{produto.nome.lower().replace('/', '').replace(' ', '_')}_"
                                  f"{momentos[0]:%Y%m%d}_a_{momentos[-1]:%Y%m%d}.gif")
 
 
@@ -1089,8 +1091,8 @@ def painel_do_mapa_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: da
                        key=f"baixar_previsto_{mapa.nome}",
                        file_name=f"Mapa_{mapa.titulo.replace(' ', '_')}_{carimbo}.png")
     espec = boletim.espec(mapa.titulo, mapa.grandeza, mapa.unidade, mapa.paleta, mapa.decimais,
-                          previsao.UF, previsao.subtitulo(modelo, rodada, mapa, dia, hoje), mapa.setas,
-                          credito=previsao.CREDITO, coluna=mapa.nome)
+                          previsao.UF, previsao.subtitulo(mapa, dia, hoje), mapa.setas,
+                          credito=previsao.CREDITO, coluna=mapa.nome, credito_no_rodape=True)
     gdf = _pontos_previstos(pontos, mapa.nome)
     botao_do_boletim(mapa.nome.lower(), f"previsto_{mapa.nome}",
                      boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo),
@@ -1110,7 +1112,7 @@ def painel_do_risco_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: d
     nivel, horas_alto = calculado
     pontos = previsao.nas_estacoes(diaria_estacoes, estacoes, mapa, dia, hoje)
     carimbo = previsao.carimbo(modelo, rodada, mapa, dia, hoje)
-    subtitulo = previsao.subtitulo_do_risco(modelo, rodada, dia)
+    subtitulo = previsao.subtitulo_do_risco(dia)
     gdf = _pontos_previstos(pontos, mapa.nome)
     no_estado = (nivel if mapa.risco == "nivel" else horas_alto)[base.dentro_uf]
 
@@ -1123,7 +1125,7 @@ def painel_do_risco_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: d
                   if (no_estado == classe).any()]
         st.caption(f"{' · '.join(partes)} do estado · {mapa.regra}.")
         espec = mapas.EspecClasses(boletim.titulo(mapa.titulo, previsao.UF), subtitulo, "", config.CORES_RISCO,
-                                   config.ROTULOS_RISCO, credito=previsao.CREDITO)
+                                   config.ROTULOS_RISCO, credito=previsao.CREDITO, credito_no_rodape=True)
         desenhar = lambda: mapas.mapa_classes_interpolado(nivel, gdf, mapa.nome, espec, base)  # noqa: E731
     else:
         niveis = niveis_das_horas(horas_alto)
@@ -1136,7 +1138,7 @@ def painel_do_risco_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: d
         st.caption(f"0 a {int(no_estado.max())} h · {mapa.regra}.")
         espec = mapas.EspecMapa("", mapa.nome, boletim.titulo(mapa.titulo, previsao.UF), subtitulo, "",
                                 mapa.paleta, "Horas em risco alto", "5 MAIORES EXPOSIÇÕES", decimais=0,
-                                credito=previsao.CREDITO)
+                                credito=previsao.CREDITO, credito_no_rodape=True)
         desenhar = lambda: mapas.mapa_de_grade(horas_alto, gdf, espec, base, niveis=niveis)  # noqa: E731
 
     arquivo = mapa.titulo.replace(" — ", " ")   # sem o travessão no nome do arquivo
@@ -1279,10 +1281,11 @@ def painel_do_mapa_semanal(mapa: previsao.MapaSemanal, rodada: datetime, semana:
     # O ranking é o dos maiores desvios, para cima ou para baixo, em qualquer mapa: o "mínima" do
     # nome, que nos outros mapas pede as menores, aqui não muda o que se procura
     espec = mapas.EspecMapa(tabela="", coluna=mapa.titulo, titulo=boletim.titulo(mapa.titulo, previsao.UF),
-                            subtitulo=previsao.subtitulo_da_semana(rodada, semana), arquivo="",
+                            subtitulo=previsao.subtitulo_da_semana(semana), arquivo="",
                             cmap=mapa.paleta, unidade=f"{mapa.unidade} em relação ao normal",
                             ranking=previsao.RANKING_SEMANAS, decimais=mapa.decimais,
-                            credito=previsao.CREDITO, ranking_absoluto=True, com_sinal=True)
+                            credito=previsao.CREDITO, credito_no_rodape=True, ranking_absoluto=True,
+                            com_sinal=True)
     gdf = _pontos_previstos(pontos, mapa.titulo)
     botao_do_boletim(mapa.titulo.lower(), f"semana_{chave}",
                      boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo),
@@ -1889,6 +1892,96 @@ def pagina_mapas_interativos() -> None:
         risco_interativo(uf, recorte, intervalo, estacoes, inicio, fim)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def tabela_das_estacoes(uf: str) -> pd.DataFrame:
+    # As estações do estado, numeradas, com o município, a altitude e desde quando operam.
+    return referencia.tabela_de_referencia(carregar_estacoes(uf), base_cartografica(uf).municipios)
+
+
+def mapa_das_estacoes(tabela: pd.DataFrame, destacadas: pd.Series, uf: str) -> pdk.Deck:
+    # O mapa navegável com cada estação e o nome dela ao lado; as que a busca achou, em vermelho.
+    base = base_cartografica(uf)
+    pontos = pd.DataFrame({
+        "nome": tabela["Estação"], "municipio": tabela["Município"].fillna("—"), "codigo": tabela["Código"],
+        "altitude": tabela["Altitude (m)"].map(lambda metros: "—" if pd.isna(metros) else f"{metros} m"),
+        "desde": tabela["Em operação desde"].fillna("—"),
+        "Longitude": tabela["Longitude"], "Latitude": tabela["Latitude"],
+        "cor": [[200, 30, 30, 235] if destacada else [31, 78, 121, 225] for destacada in destacadas],
+    })
+    nomes = pdk.Layer("TextLayer", data=pontos, get_position=["Longitude", "Latitude"], get_text="nome",
+                      get_size=12, get_color=[20, 20, 20], get_pixel_offset=[9, 0],
+                      background=True, get_background_color=[255, 255, 255, 200])
+    # Como a imagem dos mapas: passados no construtor, o pydeck trataria os textos como expressões
+    nomes.get_text_anchor = "start"
+    nomes.get_alignment_baseline = "center"
+    nomes.font_family = "'Source Sans Pro', Arial, sans-serif"   # a do painel, e não a de máquina de escrever
+    camadas = [
+        pdk.Layer("GeoJsonLayer", data=base.municipios[[referencia.COLUNA_DO_MUNICIPIO, "geometry"]].__geo_interface__,
+                  stroked=True, filled=False, get_line_color=[110, 110, 110, 140], line_width_min_pixels=0.5),
+        pdk.Layer("GeoJsonLayer", data=base.uf.__geo_interface__, stroked=True, filled=False,
+                  get_line_color=[40, 40, 40], line_width_min_pixels=1.5),
+        pdk.Layer("ScatterplotLayer", data=pontos, get_position=["Longitude", "Latitude"], get_fill_color="cor",
+                  get_line_color=[255, 255, 255], stroked=True, line_width_min_pixels=1, get_radius=2500,
+                  radius_min_pixels=5, pickable=True),
+        nomes,
+    ]
+    # O mapa ocupa três quintos da largura: com o zoom do mapa largo, o leste do estado ficaria de fora
+    visao = visao_inicial(config.recorte_de(uf))
+    visao["zoom"] = round(visao["zoom"] - 0.7, 1)
+    # O fundo claro da Carto, como era o do Mapa Navegação: os nomes escuros se leem nele em qualquer tema
+    return pdk.Deck(layers=camadas, map_style=pdk.map_styles.LIGHT, initial_view_state=pdk.ViewState(**visao),
+                    tooltip={"html": "<b>{nome}</b><br/>Município: {municipio}<br/>Código: {codigo}<br/>"
+                                     "Altitude: {altitude}<br/>Em operação desde: {desde}"})
+
+
+def pagina_estacoes() -> None:
+    # Onde fica cada estação do INMET em MS: o mapa, a lista com busca e o PNG de referência.
+    # Os mapas das variáveis mostram números em pontos. Para o meteorologista é óbvio de quem é cada
+    # ponto; para o público, não (pedido de uma colega da equipe, 22/10/2026). Só as do estado, e só
+    # as em operação, que são as dos mapas.
+    uf = config.UF
+    st.title("Estações meteorológicas automáticas - INMET+SEMADESC")
+    aviso = st.container()
+    if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
+        st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
+        st.stop()
+    try:
+        tabela = tabela_das_estacoes(uf)
+    except fonte.ErroFonte:
+        sem_lista_de_estacoes(aviso, uf)
+    st.caption(f"As {len(tabela)} estações automáticas do INMET em operação em {uf}. São os pontos dos mapas do "
+               "painel: o número que cada mapa mostra num ponto é o que aquela estação mediu.")
+
+    busca = st.text_input("Procurar", key="busca_estacoes",
+                          placeholder="nome da estação, município ou código (ex.: Dourados, A702)")
+    achadas = referencia.procurar(tabela, busca)
+    procurando = bool(busca.strip())
+    if procurando and not achadas.any():
+        st.info(f"Nenhuma estação com \"{busca.strip()}\" no nome, no município ou no código.")
+
+    mapa, lista = st.columns([3, 2])
+    with mapa:
+        st.pydeck_chart(mapa_das_estacoes(tabela, achadas & procurando, uf), height=ALTURA_MAPA)
+        st.caption("Passe o mouse numa estação para ver o município, o código e a altitude; aproxime o mapa "
+                   "para os nomes deixarem de se cobrir. As que a busca achou ficam em vermelho. O mapa base "
+                   "vem do Carto, fora da SEMADESC.")
+    with lista:
+        colunas = ["Nº", "Estação", "Município", "Código", "Altitude (m)", "Em operação desde"]
+        st.dataframe(tabela[achadas][colunas], hide_index=True, height=ALTURA_MAPA)
+
+    # O PNG só é desenhado no clique, numa thread à parte: chega com a tabela e a base prontas
+    hoje = date.today()
+    base = base_cartografica(uf)
+    titulo = f"Estações meteorológicas do INMET em {uf}"
+    subtitulo = f"{len(tabela)} estações automáticas em operação em {hoje:%d/%m/%Y}"
+    st.download_button("Baixar o mapa de referência (PNG)",
+                       lambda: boletim.png(mapas.mapa_de_referencia(tabela, titulo, subtitulo, base)),
+                       mime="image/png", key="baixar_referencia", on_click="ignore",
+                       file_name=f"Mapa_Estacoes_INMET_{uf}_{hoje:%Y%m%d}.png",
+                       help="As estações numeradas no mapa, com a lista dos nomes ao lado, no padrão do boletim "
+                            "(título e logos), em 300 dpi: para boletins, relatórios e apresentações.")
+
+
 def _observado() -> None:
     pass
 
@@ -1903,6 +1996,7 @@ pagina = st.navigation({
         observado,
         st.Page(pagina_mapas_interativos, title="Mapas interativos", icon=":material/travel_explore:",
                 url_path="mapas-interativos"),
+        st.Page(pagina_estacoes, title="Localização Estações", icon=":material/location_on:", url_path="estacoes"),
     ],
     "Previsão (MS)": [
         st.Page(pagina_previsao, title="Estações", icon=":material/show_chart:", url_path="previsao"),

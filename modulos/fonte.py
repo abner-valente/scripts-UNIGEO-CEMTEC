@@ -168,6 +168,7 @@ def _estacoes_do_banco(so_em_operacao: bool = True) -> pd.DataFrame:
         "CD_ESTACAO": cadastro["codigo"], "DC_NOME": cadastro["nome"], "SG_ESTADO": cadastro["uf"],
         "VL_LATITUDE": cadastro["latitude"], "VL_LONGITUDE": cadastro["longitude"],
         "VL_ALTITUDE": cadastro["altitude"], "CD_SITUACAO": cadastro["situacao"],
+        "DT_INICIO_OPERACAO": cadastro["inicio_operacao"],   # a página "Localização Estações" mostra
     })
     if so_em_operacao:   # como o inmet.listar_estacoes: só as que a lista dá como operantes
         tabela = tabela[tabela["CD_SITUACAO"].fillna("").str.strip().str.casefold() == inmet.SITUACAO_OPERANTE]
