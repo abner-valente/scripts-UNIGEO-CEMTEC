@@ -51,16 +51,17 @@ def nome_da_chuva(rotulo: str) -> str:
 
 def espec(nome: str, grandeza: str, unidade: str, paleta: str, decimais: int, uf: str,
           subtitulo: str, direcao_vento: bool = False, credito: str = mapas.CREDITO,
-          coluna: str | None = None) -> mapas.EspecMapa:
+          coluna: str | None = None, credito_no_rodape: bool = False) -> mapas.EspecMapa:
     texto, maiores = ranking(nome, grandeza)
     return mapas.EspecMapa(tabela="", coluna=coluna or nome, titulo=titulo(nome, uf), subtitulo=subtitulo,
                            arquivo="", cmap=paleta, unidade=f"{grandeza} ({unidade})", ranking=texto,
                            maiores=maiores, direcao_vento=direcao_vento, decimais=decimais,
-                           credito=credito)
+                           credito=credito, credito_no_rodape=credito_no_rodape)
 
 
 def nome_do_arquivo(nome: str, uf: str, carimbo: str) -> str:
-    return f"Mapa_{nome.replace(' ', '_')}_{uf}_{carimbo}.png"
+    # Sem barra, que não pode haver em nome de arquivo ("Rajada s/ direção" vira "Rajada_s_direção")
+    return f"Mapa_{nome.replace('/', '').replace(' ', '_')}_{uf}_{carimbo}.png"
 
 
 def png(figura) -> bytes:

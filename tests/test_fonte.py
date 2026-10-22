@@ -80,6 +80,7 @@ CADASTRO = pd.DataFrame({
     "latitude": [-20.44361111, -22.55, -20.79, -23.39, -15.79],
     "longitude": [-54.72166666, -55.72, -51.71, -53.64, -47.93],
     "situacao": ["Operante", "Pane", "Operante", "Operante", "Operante"],
+    "inicio_operacao": pd.to_datetime(["2001-05-07T00:00Z", None, "2003-02-01T00:00Z", None, None], utc=True),
 })
 DIA = datetime(2026, 10, 13, tzinfo=timezone.utc)
 
@@ -133,6 +134,8 @@ def test_as_estacoes_do_banco_sao_as_operantes_da_uf_como_na_lista_do_inmet(no_b
     assert estacoes["Estação"].tolist() == ["Aquidauana", "Campo Grande"]
     assert {"CD_ESTACAO", "DC_NOME", "SG_ESTADO", "VL_LATITUDE", "VL_LONGITUDE"} <= set(estacoes.columns)
     assert estacoes.set_index("CD_ESTACAO").at["A702", "VL_LATITUDE"] == -20.44361111
+    # O começo da operação, que a página "Localização Estações" mostra, como na lista do INMET
+    assert pd.Timestamp(estacoes.set_index("CD_ESTACAO").at["A702", "DT_INICIO_OPERACAO"]) == pd.Timestamp("2001-05-07", tz="UTC")
 
 
 def test_as_leituras_do_estado_vem_por_estacao(no_banco, capsys):

@@ -359,39 +359,50 @@ def test_nas_estacoes_vai_a_previsao_do_ponto_de_cada_uma_com_o_nome_do_mapa():
     assert pontos["Latitude"].iloc[0] == -20.45
 
 
+def test_a_rajada_sem_direcao_e_a_mesma_rajada_sem_seta_nem_graus():
+    tabela = diaria({HOJE: 31.5}, pontos=("A702", "A721"), coluna="rajada_max")
+    limpa = previsao.MAPAS["Rajada s/ direção"]
+
+    pontos = previsao.nas_estacoes(tabela, ESTACOES, limpa, HOJE, HOJE)
+
+    assert list(pontos["Rajada s/ direção"]) == [31.5, 31.5]
+    assert "Direção (°)" not in pontos
+    assert (limpa.setas, limpa.titulo) == (False, previsao.MAPAS["Rajada máxima"].titulo)
+
+
 def test_sem_a_previsao_das_estacoes_o_mapa_sai_sem_numeros():
     pontos = previsao.nas_estacoes(pd.DataFrame(), ESTACOES, previsao.MAPAS["Chuva do dia"], HOJE, HOJE)
 
     assert pontos.empty and "Chuva do dia" in pontos
 
 
-def test_subtitulo_e_carimbo_dizem_o_modelo_a_janela_e_a_rodada():
+def test_o_subtitulo_diz_so_a_data_e_o_carimbo_o_modelo_e_a_rodada():
     rodada = datetime(2026, 10, 8, 6, tzinfo=timezone.utc)
     dia = previsao.MAPAS["Chuva do dia"]
     acumulada = previsao.MAPAS["Chuva acumulada"]
 
-    assert (previsao.subtitulo("ecmwf_ifs025", rodada, dia, date(2026, 10, 10), HOJE)
-            == "Previsão para 10/10/2026 · ECMWF, rodada de 08/10 06 UTC")
-    assert (previsao.subtitulo("gfs_seamless", rodada, acumulada, date(2026, 10, 14), HOJE)
-            == "Previsão de 08/10 a 14/10/2026 · GFS, rodada de 08/10 06 UTC")
+    assert previsao.subtitulo(dia, date(2026, 10, 10), HOJE) == "Previsão para 10/10/2026"
+    assert previsao.subtitulo(acumulada, date(2026, 10, 14), HOJE) == "Previsão de 08/10 a 14/10/2026"
+    assert previsao.subtitulo_do_risco(date(2026, 10, 10)) == "Previsão para 10/10/2026"
     assert (previsao.carimbo("icon_seamless", rodada, acumulada, date(2026, 10, 14), HOJE)
             == "ICON_20261008_a_20261014_rodada_20261008_06UTC")
 
 
-def test_o_png_do_boletim_da_previsao_leva_o_credito_do_open_meteo():
+def test_o_png_do_boletim_da_previsao_leva_o_credito_do_open_meteo_no_rodape():
     base = mapas.carregar_base()
     mapa = previsao.MAPAS["Temperatura máxima"]
     pontos = previsao.nas_estacoes(diaria({HOJE: 33.0}, pontos=("A702", "A721"), coluna="temp_max"),
                                    ESTACOES, mapa, HOJE, HOJE)
     espec = boletim.espec(mapa.titulo, mapa.grandeza, mapa.unidade, mapa.paleta, mapa.decimais, "MS",
-                          "Previsão para 08/10/2026", credito=previsao.CREDITO, coluna=mapa.nome)
+                          "Previsão para 08/10/2026", credito=previsao.CREDITO, coluna=mapa.nome,
+                          credito_no_rodape=True)
 
     figura = mapas.mapa_de_grade(np.full(base.lon_grade.shape, 30.0),
                                  mapas.preparar_pontos(pontos, mapa.nome), espec, base,
                                  niveis=previsao.niveis(mapa))
 
-    assert figura.axes[0].get_title() == ("Temperatura máxima prevista em MS\n"
-                                          "Previsão para 08/10/2026 — Open-Meteo (CC BY 4.0)/SEMADESC")
+    assert figura.axes[0].get_title() == "Temperatura máxima prevista em MS\nPrevisão para 08/10/2026"
+    assert "Dados: Open-Meteo (CC BY 4.0)/SEMADESC" in [texto.get_text() for texto in figura.axes[0].texts]
     assert mapas.EspecMapa("", "", "", "", "", "", "", "").credito == "INMET/SEMADESC"
 
 
@@ -455,8 +466,7 @@ def test_a_escala_da_anomalia_tem_o_normal_no_meio(niveis):
 
 
 def test_subtitulo_e_carimbo_da_semana():
-    assert (previsao.subtitulo_da_semana(RODADA_EC46, date(2026, 10, 12))
-            == "Semana de 12/10 a 18/10/2026 · EC46 (média dos membros), rodada de 07/10 00 UTC")
+    assert previsao.subtitulo_da_semana(date(2026, 10, 12)) == "Semana de 12/10 a 18/10/2026"
     assert previsao.carimbo_da_semana(RODADA_EC46, date(2026, 10, 12)) == "EC46_semana_20261012_rodada_20261007_00UTC"
 
 

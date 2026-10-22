@@ -343,6 +343,23 @@ def rodadas_semanais_guardadas(conexao: psycopg.Connection, conjunto: str) -> di
 
 
 @_sem_deixar_transacao
+def rodadas_ausentes(conexao: psycopg.Connection, conjunto: str,
+                     esperadas: list[tuple[str, datetime]]) -> list[tuple[str, pd.Timestamp]]:
+    # Uma leitura do índice por rodada esperada. Com "NOT EXISTS", o PostgreSQL junta as esperadas
+    # com a tabela inteira e varre a grade toda (medido em 21/10/2026: 1,7 s contra 2 ms)
+    if not esperadas:
+        return []
+    modelos, rodadas = zip(*esperadas)
+    consulta = sql.SQL("""
+        SELECT e.modelo, e.rodada_utc FROM unnest(%s::text[], %s::timestamptz[]) AS e(modelo, rodada_utc)
+        WHERE (SELECT 1 FROM {tabela} t WHERE t.modelo = e.modelo AND t.rodada_utc = e.rodada_utc LIMIT 1) IS NULL
+        ORDER BY e.rodada_utc, e.modelo""").format(
+        tabela=sql.Identifier(f"previsao_horaria_{_conferir_conjunto(conjunto)}"))
+    linhas = conexao.execute(consulta, (list(modelos), [pd.Timestamp(rodada).to_pydatetime() for rodada in rodadas]))
+    return [(modelo, pd.Timestamp(rodada).tz_convert("UTC")) for modelo, rodada in linhas.fetchall()]
+
+
+@_sem_deixar_transacao
 def ler_estacoes(conexao: psycopg.Connection) -> pd.DataFrame:
     tabela = _tabela(conexao, sql.SQL("SELECT {} FROM estacao ORDER BY codigo").format(_lista(COLUNAS_ESTACAO)))
     return _numeros(tabela, ["latitude", "longitude", "altitude"])

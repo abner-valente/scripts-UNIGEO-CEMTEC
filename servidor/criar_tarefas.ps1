@@ -2,14 +2,15 @@
 #   UNIGEO - coletor INMET           de hora em hora, aos 50 minutos   coletar.bat inmet
 #   UNIGEO - coletor INMET extras    todo dia, as 03:00                coletar.bat inmet --extras
 #   UNIGEO - coletor INMET revisao   todo domingo, a 01:05             coletar.bat inmet --revisar 30
-#   UNIGEO - coletor previsao        todo dia, as 04:45 e as 16:45     coletar.bat previsao
+#   UNIGEO - coletor previsao        de hora em hora, aos 15 minutos   coletar.bat previsao
 #
 # O INMET aos 50 minutos: as estacoes mandam a leitura da hora ao longo de uns 40 minutos. A
 # revisao rebusca 30 dias, para o banco receber os valores que o INMET corrigiu depois.
-# A previsao guarda as rodadas das 00Z e das 12Z, e cada uma so pode ser buscada enquanto e a mais
-# recente do modelo: a das 00Z dos tres modelos, de ~03:50 (o ECMWF fica pronto) a ~06:00 (chega
-# a das 06Z do ICON), horario de MS; a das 12Z, de ~15:50 a ~18:00. As 04:45 e as 16:45 caem no
-# meio dessas janelas. Se o Open-Meteo falhar nesse horario, a rodada se perde.
+# A previsao guarda as rodadas das 00Z e das 12Z. A busca normal so alcanca cada uma enquanto e a
+# mais recente do modelo, e cada modelo publica numa hora: em 21/10/2026, a das 00Z do ECMWF ficou
+# pronta as 05:00 de MS, e a do ICON deixou de ser a mais recente as 05:30. Por isso a conferencia
+# e de hora em hora; a que nao acha rodada nova so le os metadados, que nao contam na cota. A rodada
+# que passar assim mesmo e recuperada depois, uma a cada 4 horas (modulos/coletor_previsao.py).
 #
 # Todas com "Executar estando o usuario conectado ou nao": rodam depois de um reinicio sem ninguem
 # entrar na sessao. Por isso o script pede a senha do Windows do usuario que as executa (o que
@@ -44,8 +45,7 @@ $tarefas = @(
     @{ Nome = "UNIGEO - coletor INMET revisao"; Argumentos = "inmet --revisar 30"
        Gatilho = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At $hoje.AddHours(1).AddMinutes(5) },
     @{ Nome = "UNIGEO - coletor previsao"; Argumentos = "previsao"
-       Gatilho = @((New-ScheduledTaskTrigger -Daily -At $hoje.AddHours(4).AddMinutes(45)),
-                   (New-ScheduledTaskTrigger -Daily -At $hoje.AddHours(16).AddMinutes(45))) }
+       Gatilho = New-ScheduledTaskTrigger -Once -At $hoje.AddMinutes(15) -RepetitionInterval $umaHora }
 )
 # Uma execucao por vez (a seguinte nao comeca se a anterior ainda roda), recupera a que a maquina
 # perdeu desligada, roda na bateria, e para a que passar de uma hora (a mais longa, a revisao,

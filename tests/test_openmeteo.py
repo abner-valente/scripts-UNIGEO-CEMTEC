@@ -150,6 +150,19 @@ def test_pedidos_grandes_vao_em_lotes_que_cabem_no_minuto(open_meteo, monkeypatc
     assert tabela["ponto"].nunique() == 61
 
 
+def test_a_rodada_avulsa_vem_da_api_das_rodadas_pela_hora_dela(open_meteo):
+    pedidos, _ = open_meteo
+    rodada = datetime(2026, 10, 5, 12, tzinfo=timezone.utc)
+
+    tabela = openmeteo.buscar_rodada(pontos(2), "gfs_seamless", rodada)
+
+    (_, url, dados), = pedidos   # sem conferir os metadados: a rodada é a pedida, e não muda no meio
+    assert url == config.URL_OPENMETEO_RODADA_AVULSA
+    assert (dados["run"], dados["models"], dados["forecast_days"]) == ("2026-10-05T12:00", "gfs_seamless", 14)
+    assert list(tabela.columns) == openmeteo.COLUNAS_HORARIAS
+    assert (tabela["rodada_utc"] == rodada).all() and len(tabela) == 2 * 336
+
+
 def test_a_rodada_e_a_anterior_ate_completar_a_margem(open_meteo):
     antes = openmeteo.rodadas(("ecmwf_ifs025",), agora=datetime(2026, 10, 7, 14, 5, tzinfo=timezone.utc))
     depois = openmeteo.rodadas(("ecmwf_ifs025",), agora=datetime(2026, 10, 7, 14, 11, tzinfo=timezone.utc))
