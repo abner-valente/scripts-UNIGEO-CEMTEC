@@ -19,6 +19,33 @@ Ainda não está na `main`. É o começo do banco da UNIGEO e dos coletores (fas
 - **O `.env.example` ganhou as conexões do banco** (`BANCO_GRAVACAO`, `BANCO_LEITURA` e `BANCO_TESTE`). Por enquanto, só quem programa usa a de teste.
 - **O coletor do INMET** (`python coletar.py inmet`), que grava no banco as leituras horárias de todas as estações automáticas do Brasil. De hora em hora, ele rebusca os últimos 3 dias, com uma consulta por hora que traz todas as estações, e o banco só reescreve o que o INMET mudou. Uma vez por dia (`--extras`), busca por estação a sensação térmica, a bateria e a temperatura do processador, que a consulta por hora não traz. A carga do histórico (`--historico 2018-01-01`) roda uma vez só: pode ser interrompida com Ctrl+C e retomada com o mesmo comando, e se a conexão com o banco cair no meio, reconecta e retoma sozinha. No servidor, o Agendador de Tarefas o chama pelo `servidor\coletar.bat`.
 
+## [0.3.5] — 22/10/2026
+
+Ajustes pedidos pela equipe depois de uma rodada de uso do painel, pensando em quem não é meteorologista.
+
+### Atenção ao atualizar
+
+- **Quem roda o painel na própria máquina precisa reiniciá-lo** (Ctrl+C e `streamlit run app/explorador.py` de novo) depois de atualizar: há um módulo novo e mudaram arquivos que o Streamlit não relê sozinho. As dependências não mudaram. No Streamlit Cloud, é o Reboot.
+- **O subtítulo dos PNG da previsão mudou** (veja Mudou): quem guardava os mapas pelo texto do subtítulo passa a achar o modelo e a rodada no nome do arquivo.
+
+### Novo
+
+- **Painel: a página "Localização Estações"**, no menu, logo abaixo do Observado. Os mapas mostram números em pontos, e para quem não lida com as estações todo dia não é óbvio de quem é cada ponto. A página traz as 60 estações automáticas do INMET em operação em MS:
+  - um mapa navegável, com o fundo da Carto, cada estação com o nome escrito ao lado e, ao passar o mouse, o município, o código, a altitude e desde quando ela opera;
+  - a lista ao lado, com uma busca pelo nome, pelo município ou pelo código, que ignora acento e maiúscula; as estações achadas ficam em vermelho no mapa;
+  - o botão **"Baixar o mapa de referência (PNG)"**: as estações numeradas no mapa e a lista dos nomes ao lado, no padrão do boletim (título e logos), em 300 dpi, para boletins, relatórios e apresentações.
+
+  O município não vem na lista do INMET. Vale o do começo do nome da estação, quando ele é um município do estado; senão (Nhumirim, por exemplo), o do ponto dela no mapa. Pelas coordenadas, a estação de Dourados cai do lado de Itaporã e a de Miranda do lado de Bodoquena.
+- **Mapas: "Rajada s/ direção"**, a rajada sem a seta e sem os graus da direção, para um mapa mais limpo para o público. Está no Painel (na hora, por dia e no período) e nos Mapas da previsão. O número é o mesmo da rajada; no PNG do boletim o título continua "Rajada máxima em MS" e "Rajada máxima prevista". Os mapas com a seta continuam.
+
+### Mudou
+
+- **Previsão, PNG do boletim: o subtítulo fica só com a data.** Era "Previsão para 22/10/2026 · ECMWF, rodada de 22/10 00 UTC — Open-Meteo (CC BY 4.0)/SEMADESC" e passa a "Previsão para 22/10/2026": para o público geral o modelo e a rodada não dizem nada. Vale para os três modelos, os acumulados, o risco de fogo e as semanas do EC46 ("Semana de 26/10 a 01/11/2026"). O modelo e a rodada continuam no nome do arquivo. A licença do Open-Meteo obriga o crédito, que foi para uma linha miúda embaixo do mapa, à direita. Os mapas do INMET não mudaram.
+
+### Corrigido
+
+- **"Laguna Carapã"**, e não "Laguna Caarapã", nos shapefiles de municípios de MS (o completo e o simplificado).
+
 ## [0.3.4] — 16/10/2026
 
 Ajustes de leitura nos gráficos do painel, pedidos pela equipe.

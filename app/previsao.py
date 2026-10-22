@@ -174,7 +174,8 @@ def planilha(horaria: pd.DataFrame, fuso=config.FUSO_MS) -> pd.DataFrame:
 # =====================================================
 # OS MAPAS
 # =====================================================
-# A licença do Open-Meteo (CC BY 4.0) obriga o crédito, que vai no subtítulo do PNG do boletim
+# A licença do Open-Meteo (CC BY 4.0) obriga o crédito. Ele vai numa linha no rodapé do PNG do
+# boletim, e não no subtítulo, que fica só com a data (veja `subtitulo`)
 CREDITO = "Open-Meteo (CC BY 4.0)/SEMADESC"
 DIAS_DA_SEMANA = ("seg", "ter", "qua", "qui", "sex", "sáb", "dom")
 
@@ -211,6 +212,9 @@ MAPAS = {mapa.nome: mapa for mapa in (
     MapaPrevisto("Rajada máxima", "Rajada máxima prevista", "rajada_max", "Vento", "km/h",
                  "turbo", 1, "a maior rajada das 24 horas do dia; a seta é a direção dominante",
                  setas=True),
+    # A mesma, sem a seta e sem os graus da direção: o mapa limpo, para o público (22/10/2026)
+    MapaPrevisto("Rajada s/ direção", "Rajada máxima prevista", "rajada_max", "Vento", "km/h",
+                 "turbo", 1, "a maior rajada das 24 horas do dia, sem a direção"),
     MapaPrevisto("Vento máximo", "Vento máximo previsto", "vento_max", "Vento", "km/h",
                  "turbo", 1, "a maior velocidade das 24 horas do dia; a seta é a direção dominante",
                  setas=True),
@@ -306,10 +310,12 @@ def _estacoes_com(valores: pd.Series, estacoes: pd.DataFrame, nome: str,
     return tabela.dropna(subset=[nome]).reset_index(drop=True)
 
 
-def subtitulo(modelo: str, rodada: datetime, mapa: MapaPrevisto, dia: date, hoje: date) -> str:
+def subtitulo(mapa: MapaPrevisto, dia: date, hoje: date) -> str:
+    # Só o dia (ou a janela): o modelo e a rodada ficam no nome do arquivo, porque ao público geral
+    # eles não dizem nada (pedido dos meteorologistas, 22/10/2026)
     quando = (f"de {hoje:%d/%m} a {dia:%d/%m/%Y}" if mapa.acumulado and dia > hoje
               else f"para {dia:%d/%m/%Y}")
-    return f"Previsão {quando} · {openmeteo.NOMES[modelo]}, rodada de {rodada:%d/%m %H} UTC"
+    return f"Previsão {quando}"
 
 
 def carimbo(modelo: str, rodada: datetime, mapa: MapaPrevisto, dia: date, hoje: date) -> str:
@@ -383,9 +389,8 @@ def nas_estacoes_na_semana(semanal: pd.DataFrame, estacoes: pd.DataFrame, mapa: 
     return _estacoes_com(valores, estacoes, mapa.titulo)
 
 
-def subtitulo_da_semana(rodada: datetime, semana: date) -> str:
-    return (f"Semana de {semana:%d/%m} a {semana + timedelta(days=6):%d/%m/%Y} · "
-            f"EC46 (média dos membros), rodada de {rodada:%d/%m %H} UTC")
+def subtitulo_da_semana(semana: date) -> str:
+    return f"Semana de {semana:%d/%m} a {semana + timedelta(days=6):%d/%m/%Y}"
 
 
 def carimbo_da_semana(rodada: datetime, semana: date) -> str:
@@ -454,9 +459,8 @@ def risco_na_grade(horaria: pd.DataFrame, pontos: pd.DataFrame, dia: date, lon_g
     return pilha.max(axis=0).astype(np.int8), (pilha == risco_fogo.NIVEL_ALTO).sum(axis=0)
 
 
-def subtitulo_do_risco(modelo: str, rodada: datetime, dia: date) -> str:
-    return (f"Previsão para {dia:%d/%m/%Y} · {openmeteo.NOMES[modelo]}, rodada de {rodada:%d/%m %H} UTC · "
-            "regra 30-30-30")
+def subtitulo_do_risco(dia: date) -> str:
+    return f"Previsão para {dia:%d/%m/%Y}"
 
 
 # A previsão da semana contra a normal da época, numa estação: é o gráfico que explica a anomalia.
