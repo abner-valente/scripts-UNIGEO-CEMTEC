@@ -1336,8 +1336,8 @@ def painel_do_mapa_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: da
                        key=f"baixar_previsto_{mapa.nome}",
                        file_name=f"Mapa_{mapa.titulo.replace(' ', '_')}_{carimbo}.png")
     espec = boletim.espec(mapa.titulo, mapa.grandeza, mapa.unidade, mapa.paleta, mapa.decimais,
-                          previsao.UF, previsao.subtitulo(modelo, rodada, mapa, dia, hoje), mapa.setas,
-                          credito=previsao.CREDITO, coluna=mapa.nome)
+                          previsao.UF, previsao.subtitulo(mapa, dia, hoje), mapa.setas,
+                          credito=previsao.CREDITO, coluna=mapa.nome, credito_no_rodape=True)
     gdf = _pontos_previstos(pontos, mapa.nome)
     botao_do_boletim(mapa.nome.lower(), f"previsto_{mapa.nome}",
                      boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo),
@@ -1362,7 +1362,7 @@ def painel_do_risco_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: d
     nivel, horas_alto = calculado
     pontos = previsao.nas_estacoes(diaria_estacoes, estacoes, mapa, dia, hoje)
     carimbo = previsao.carimbo(modelo, rodada, mapa, dia, hoje)
-    subtitulo = previsao.subtitulo_do_risco(modelo, rodada, dia)
+    subtitulo = previsao.subtitulo_do_risco(dia)
     gdf = _pontos_previstos(pontos, mapa.nome)
     no_estado = (nivel if mapa.risco == "nivel" else horas_alto)[base.dentro_uf]
 
@@ -1375,7 +1375,7 @@ def painel_do_risco_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: d
                   if (no_estado == classe).any()]
         st.caption(f"{' · '.join(partes)} do estado · {mapa.regra}.")
         espec = mapas.EspecClasses(boletim.titulo(mapa.titulo, previsao.UF), subtitulo, "", config.CORES_RISCO,
-                                   config.ROTULOS_RISCO, credito=previsao.CREDITO)
+                                   config.ROTULOS_RISCO, credito=previsao.CREDITO, credito_no_rodape=True)
         desenhar = lambda: mapas.mapa_classes_interpolado(nivel, gdf, mapa.nome, espec, base)  # noqa: E731
     else:
         niveis = niveis_das_horas(horas_alto)
@@ -1388,7 +1388,7 @@ def painel_do_risco_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: d
         st.caption(f"0 a {int(no_estado.max())} h · {mapa.regra}.")
         espec = mapas.EspecMapa("", mapa.nome, boletim.titulo(mapa.titulo, previsao.UF), subtitulo, "",
                                 mapa.paleta, "Horas em risco alto", "5 MAIORES EXPOSIÇÕES", decimais=0,
-                                credito=previsao.CREDITO)
+                                credito=previsao.CREDITO, credito_no_rodape=True)
         desenhar = lambda: mapas.mapa_de_grade(horas_alto, gdf, espec, base, niveis=niveis)  # noqa: E731
 
     arquivo = mapa.titulo.replace(" — ", " ")   # sem o travessão no nome do arquivo
@@ -1533,10 +1533,11 @@ def painel_do_mapa_semanal(mapa: previsao.MapaSemanal, rodada: datetime, semana:
     # O ranking é o dos maiores desvios, para cima ou para baixo, em qualquer mapa: o "mínima" do
     # nome, que nos outros mapas pede as menores, aqui não muda o que se procura
     espec = mapas.EspecMapa(tabela="", coluna=mapa.titulo, titulo=boletim.titulo(mapa.titulo, previsao.UF),
-                            subtitulo=previsao.subtitulo_da_semana(rodada, semana), arquivo="",
+                            subtitulo=previsao.subtitulo_da_semana(semana), arquivo="",
                             cmap=mapa.paleta, unidade=f"{mapa.unidade} em relação ao normal",
                             ranking=previsao.RANKING_SEMANAS, decimais=mapa.decimais,
-                            credito=previsao.CREDITO, ranking_absoluto=True, com_sinal=True)
+                            credito=previsao.CREDITO, credito_no_rodape=True, ranking_absoluto=True,
+                            com_sinal=True)
     gdf = _pontos_previstos(pontos, mapa.titulo)
     botao_do_boletim(mapa.titulo.lower(), f"semana_{chave}",
                      boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo),

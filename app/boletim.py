@@ -64,7 +64,7 @@ def nome_da_chuva(rotulo: str) -> str:
 
 def espec(nome: str, grandeza: str, unidade: str, paleta: str, decimais: int, uf: str,
           subtitulo: str, direcao_vento: bool = False, credito: str = mapas.CREDITO,
-          coluna: str | None = None) -> mapas.EspecMapa:
+          coluna: str | None = None, credito_no_rodape: bool = False) -> mapas.EspecMapa:
     """O que o relatório precisa saber para desenhar a moldura de um mapa da tela.
 
     A coluna é o próprio nome, que é como o painel monta os pontos que vão para o mapa, salvo
@@ -74,7 +74,7 @@ def espec(nome: str, grandeza: str, unidade: str, paleta: str, decimais: int, uf
     return mapas.EspecMapa(tabela="", coluna=coluna or nome, titulo=titulo(nome, uf), subtitulo=subtitulo,
                            arquivo="", cmap=paleta, unidade=f"{grandeza} ({unidade})", ranking=texto,
                            maiores=maiores, direcao_vento=direcao_vento, decimais=decimais,
-                           credito=credito)
+                           credito=credito, credito_no_rodape=credito_no_rodape)
 
 
 def nome_do_arquivo(nome: str, uf: str, carimbo: str) -> str:
