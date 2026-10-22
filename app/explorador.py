@@ -1747,7 +1747,7 @@ def pagina_estacoes() -> None:
     as em operação, que são as dos mapas.
     """
     uf = config.UF
-    st.title(f"Localização Estações — {config.ESTADOS[uf][0]}")
+    st.title("Estações meteorológicas automáticas - INMET+SEMADESC")
     aviso = st.container()
     if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
         st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
