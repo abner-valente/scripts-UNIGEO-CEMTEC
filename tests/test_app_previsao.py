@@ -358,6 +358,17 @@ def test_nas_estacoes_vai_a_previsao_do_ponto_de_cada_uma_com_o_nome_do_mapa():
     assert pontos["Latitude"].iloc[0] == -20.45
 
 
+def test_a_rajada_sem_direcao_e_a_mesma_rajada_sem_seta_nem_graus():
+    tabela = diaria({HOJE: 31.5}, pontos=("A702", "A721"), coluna="rajada_max")
+    limpa = previsao.MAPAS["Rajada s/ direção"]
+
+    pontos = previsao.nas_estacoes(tabela, ESTACOES, limpa, HOJE, HOJE)
+
+    assert list(pontos["Rajada s/ direção"]) == [31.5, 31.5]
+    assert "Direção (°)" not in pontos
+    assert (limpa.setas, limpa.titulo) == (False, previsao.MAPAS["Rajada máxima"].titulo)
+
+
 def test_sem_a_previsao_das_estacoes_o_mapa_sai_sem_numeros():
     pontos = previsao.nas_estacoes(pd.DataFrame(), ESTACOES, previsao.MAPAS["Chuva do dia"], HOJE, HOJE)
 

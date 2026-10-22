@@ -256,6 +256,9 @@ MAPAS = {mapa.nome: mapa for mapa in (
     MapaPrevisto("Rajada máxima", "Rajada máxima prevista", "rajada_max", "Vento", "km/h",
                  "turbo", 1, "a maior rajada das 24 horas do dia; a seta é a direção dominante",
                  setas=True),
+    # A mesma, sem a seta e sem os graus da direção: o mapa limpo, para o público (22/10/2026)
+    MapaPrevisto("Rajada s/ direção", "Rajada máxima prevista", "rajada_max", "Vento", "km/h",
+                 "turbo", 1, "a maior rajada das 24 horas do dia, sem a direção"),
     MapaPrevisto("Vento máximo", "Vento máximo previsto", "vento_max", "Vento", "km/h",
                  "turbo", 1, "a maior velocidade das 24 horas do dia; a seta é a direção dominante",
                  setas=True),

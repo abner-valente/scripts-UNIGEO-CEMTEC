@@ -703,13 +703,14 @@ def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, 
     casas = produto.decimais
     st.caption(f"{valores.min():.{casas}f} a {valores.max():.{casas}f} {produto.unidade} · "
                f"{valores.notna().sum()} estações · {produto.regra}.")
-    arquivo = produto.nome.lower().replace(" ", "_")
+    arquivo = produto.nome.lower().replace("/", "").replace(" ", "_")
     st.download_button(f"Baixar PNG — {medida}", png, mime="image/png", key=f"baixar_{produto.nome}",
                        file_name=f"Mapa_{arquivo}_{carimbo}.png")
+    # O título do boletim pode não ser o nome da tela: "Rajada s/ direção" sai "Rajada máxima em MS"
     botao_do_boletim(medida, produto.nome, boletim.nome_do_arquivo(produto.nome, uf, carimbo),
-                     desenho_do_boletim(valores, produto.nome, produto.grandeza, produto.unidade,
-                                        produto.paleta, produto.decimais, subtitulo, uf, niveis,
-                                        direcoes, apoio))
+                     desenho_do_boletim(valores, produto.titulo or produto.nome, produto.grandeza,
+                                        produto.unidade, produto.paleta, produto.decimais, subtitulo, uf,
+                                        niveis, direcoes, apoio))
 
 
 def escala_do_periodo(produto: variaveis.Produto, leituras: pd.DataFrame, horas_janela):
@@ -784,7 +785,7 @@ def painel_do_gif(produto: variaveis.Produto, leituras: pd.DataFrame, modo: str,
                f"o período inteiro. {len(gif) / 1e6:.1f} MB.")
     st.download_button(f"Baixar GIF — {produto.nome.lower()}", gif, mime="image/gif",
                        key=f"baixar_{chave}",
-                       file_name=f"Animacao_{produto.nome.lower().replace(' ', '_')}_"
+                       file_name=f"Animacao_{produto.nome.lower().replace('/', '').replace(' ', '_')}_"
                                  f"{momentos[0]:%Y%m%d}_a_{momentos[-1]:%Y%m%d}.gif")
 
 

@@ -90,6 +90,10 @@ def test_o_arquivo_leva_a_sigla_do_estado():
             == "Mapa_Temperatura_máxima_SC_20260903.png")
 
 
+def test_o_arquivo_nao_leva_barra():
+    assert boletim.nome_do_arquivo("Rajada s/ direção", "MS", "20260903") == "Mapa_Rajada_s_direção_MS_20260903.png"
+
+
 # =====================================================
 # O DESENHO
 # =====================================================

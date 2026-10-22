@@ -78,8 +78,11 @@ def espec(nome: str, grandeza: str, unidade: str, paleta: str, decimais: int, uf
 
 
 def nome_do_arquivo(nome: str, uf: str, carimbo: str) -> str:
-    """Leva a sigla do estado, como os arquivos do main.py, e o nome que a pessoa escolheu."""
-    return f"Mapa_{nome.replace(' ', '_')}_{uf}_{carimbo}.png"
+    """Leva a sigla do estado, como os arquivos do main.py, e o nome que a pessoa escolheu.
+
+    Sem barra, que não pode haver em nome de arquivo ("Rajada s/ direção" vira "Rajada_s_direção").
+    """
+    return f"Mapa_{nome.replace('/', '').replace(' ', '_')}_{uf}_{carimbo}.png"
 
 
 def png(figura) -> bytes:

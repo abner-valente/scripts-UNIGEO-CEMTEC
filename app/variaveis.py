@@ -51,6 +51,7 @@ class Produto:
     decimais: int = 1
     zero_na_base: bool = False     # o eixo do gráfico começa no zero (chuva, radiação, vento)
     direcao: str | None = None     # chave de DIRECOES: a seta que acompanha o valor no mapa
+    titulo: str | None = None      # o nome no título do PNG do boletim, quando não é o da tela
 
 
 # =====================================================
@@ -240,6 +241,12 @@ PRODUTOS = [
     Produto("Rajada máxima", "Vento", (DIA, PERIODO), ("VEN_RAJ",), "maior",
             "km/h", "turbo", "maior rajada horária da janela; a seta traz a direção daquela hora",
             zero_na_base=True, direcao="da_maior"),
+    # A mesma rajada, sem a seta e sem os graus da direção: o mapa limpo, para o público (pedido da
+    # equipe, 22/10/2026). Na hora, a maior da janela é a própria rajada da hora. Só mapa: no
+    # gráfico ela repetiria a rajada
+    Produto("Rajada s/ direção", "Vento", (HORA, DIA, PERIODO), ("VEN_RAJ",), "maior",
+            "km/h", "turbo", "maior rajada horária da janela, sem a direção", onde=(MAPA,),
+            zero_na_base=True, titulo="Rajada máxima"),
     Produto("Vento médio", "Vento", (DIA, PERIODO), ("VEN_VEL",), "media",
             "km/h", "turbo",
             "média das velocidades horárias; a seta traz a resultante das horas da janela",

@@ -200,6 +200,21 @@ def test_sem_a_direcao_na_api_o_mapa_de_vento_sai_sem_setas():
     assert variaveis.direcoes(variaveis.por_nome("Rajada máxima"), dia).empty
 
 
+def test_a_rajada_sem_direcao_e_a_mesma_rajada_sem_a_seta():
+    """O mapa limpo para o público: o mesmo número da rajada, sem seta nem graus, na hora e no dia."""
+    dia = um_dia(VEN_RAJ=[10.0] * 23 + [80.0], VEN_DIR=[180.0] * 23 + [45.0])
+    limpa, com_seta = variaveis.por_nome("Rajada s/ direção"), variaveis.por_nome("Rajada máxima")
+
+    assert variaveis.calcular(limpa, dia) == variaveis.calcular(com_seta, dia) == pytest.approx(80.0)
+    assert variaveis.direcoes(limpa, dia).empty
+    ultima_hora = variaveis.recorte(dia, variaveis.HORA, variaveis.momentos(dia, variaveis.HORA)[-1])
+    assert (variaveis.por_estacao(limpa, ultima_hora)["Bonito"]
+            == variaveis.por_estacao(variaveis.por_nome("Rajada na hora"), ultima_hora)["Bonito"])
+    assert all(limpa in variaveis.disponiveis(modo) for modo in (variaveis.HORA, variaveis.DIA, variaveis.PERIODO))
+    assert limpa not in variaveis.disponiveis(variaveis.DIA, variaveis.GRAFICO)
+    assert limpa.titulo == "Rajada máxima"   # o título do boletim, que o público lê
+
+
 # =====================================================
 # AGRUPAMENTOS
 # =====================================================
