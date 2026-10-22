@@ -1747,7 +1747,7 @@ def pagina_estacoes() -> None:
     as em operação, que são as dos mapas.
     """
     uf = config.UF
-    st.title(f"Onde ficam as estações — {config.ESTADOS[uf][0]}")
+    st.title(f"Localização Estações — {config.ESTADOS[uf][0]}")
     aviso = st.container()
     if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
         st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
@@ -1799,7 +1799,7 @@ def _observado() -> None:
 observado = st.Page(_observado, title="Observado (INMET)", icon=":material/history:", default=True)
 lembrar_filtros()
 pagina = st.navigation({
-    "": [observado, st.Page(pagina_estacoes, title="Onde ficam as estações", icon=":material/location_on:",
+    "": [observado, st.Page(pagina_estacoes, title="Localização Estações", icon=":material/location_on:",
                             url_path="estacoes")],
     "Previsão (MS)": [
         st.Page(pagina_previsao, title="Estações", icon=":material/show_chart:", url_path="previsao"),
