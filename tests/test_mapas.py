@@ -366,3 +366,15 @@ def test_com_classes_a_barra_marca_todas_as_fronteiras():
     figura = mapas.mapa_de_grade(np.zeros(base.lon_grade.shape), _sem_estacoes(), espec, base, niveis=niveis)
 
     assert list(figura.axes[1].get_yticks()) == niveis
+
+
+def test_o_mapa_de_referencia_numera_as_estacoes_e_lista_os_nomes(base):
+    tabela = pd.DataFrame({"Nº": [1, 2], "Estação": ["Corumba", "Dourados"],
+                           "Latitude": [-19.02, -22.19], "Longitude": [-57.67, -54.91]})
+
+    figura = mapas.mapa_de_referencia(tabela, "Estações do INMET em MS", "2 estações", base)
+
+    mapa, lista = figura.axes[0], figura.axes[1]
+    assert mapa.get_title() == "Estações do INMET em MS\n2 estações — INMET/SEMADESC"
+    assert {"1", "2"} <= {texto.get_text() for texto in mapa.texts}
+    assert {"ESTAÇÕES", "1", "Corumba", "2", "Dourados"} <= {texto.get_text() for texto in lista.texts}

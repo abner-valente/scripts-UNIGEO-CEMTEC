@@ -45,6 +45,7 @@ class EspecMapa:
     direcao_vento: bool = False  # desenha as setas de direção do vento
     decimais: int = 1            # casas decimais dos rótulos e do ranking (0 para contagens, como horas)
     credito: str = CREDITO
+    credito_no_rodape: bool = False  # o crédito numa linha embaixo do mapa, e não no subtítulo
     ranking_absoluto: bool = False  # ranqueia pelo tamanho do valor, para cima ou para baixo (anomalias)
     com_sinal: bool = False         # escreve o + dos positivos: nas anomalias, o número é um desvio
 
@@ -63,6 +64,7 @@ class EspecClasses:
     cores: list[str]
     rotulos: list[str]
     credito: str = CREDITO
+    credito_no_rodape: bool = False
 
 
 @dataclass(frozen=True)
@@ -307,6 +309,42 @@ def mapa_classes_pontual(gdf, coluna: str, espec: EspecClasses, base: BaseCartog
     return _finalizar(fig, ax, espec, base, caminho, tela)
 
 
+def mapa_de_referencia(tabela: pd.DataFrame, titulo: str, subtitulo: str, base: BaseCartografica,
+                       caminho: Path | None = None) -> Figure:
+    """As estações numeradas no mapa, e a lista dos números com os nomes ao lado.
+
+    É a referência para quem não lida com as estações todo dia. Numa imagem parada, os nomes
+    escritos no mapa se atropelariam onde as estações ficam juntas (o sul de MS); o número é curto e
+    cabe. `tabela` traz o "Nº", a "Estação" e as coordenadas, na ordem da lista.
+    """
+    fig = Figure(figsize=(19, 12))
+    fig.patch.set_facecolor("white")
+    partes = fig.add_gridspec(1, 2, width_ratios=[2.1, 1.2])
+    ax, lista = fig.add_subplot(partes[0]), fig.add_subplot(partes[1])
+    ax.set_facecolor("white")
+    _desenhar_limites(ax, base)
+    ax.scatter(tabela["Longitude"], tabela["Latitude"], s=190, color="#1f4e79", edgecolor="white",
+               linewidth=1.0, zorder=5)
+    for numero, longitude, latitude in zip(tabela["Nº"], tabela["Longitude"], tabela["Latitude"]):
+        ax.text(longitude, latitude, str(numero), ha="center", va="center", fontsize=6.5, color="white",
+                weight="bold", zorder=6)
+
+    # A lista em duas colunas, de cima para baixo: o número à direita de uma margem, o nome depois
+    lista.axis("off")
+    por_coluna = -(-len(tabela) // 2)
+    passo = 0.96 / max(por_coluna, 1)
+    lista.text(0.0, 1.0, "ESTAÇÕES", fontsize=11, weight="bold", va="bottom", transform=lista.transAxes)
+    for indice, (numero, nome) in enumerate(zip(tabela["Nº"], tabela["Estação"])):
+        coluna, linha = divmod(indice, por_coluna)
+        x, y = coluna * 0.5, 0.975 - linha * passo
+        lista.text(x + 0.05, y, str(numero), ha="right", va="top", fontsize=9, weight="bold",
+                   color="#1f4e79", transform=lista.transAxes)
+        lista.text(x + 0.07, y, nome, ha="left", va="top", fontsize=9, transform=lista.transAxes)
+
+    espec = EspecClasses(titulo, subtitulo, "", [], [])
+    return _finalizar(fig, ax, espec, base, caminho)
+
+
 def mapa_classes_interpolado(grade, gdf, coluna: str, espec: EspecClasses, base: BaseCartografica,
                              caminho: Path | None = None, indicadores: Indicadores | None = None,
                              tela: Tela | None = None) -> Figure:
@@ -512,7 +550,13 @@ def _finalizar(fig, ax, espec, base: BaseCartografica, caminho: Path | None,
     miniatura. O relatório, que não passa `tela`, continua saindo com tudo.
     """
     if tela is None:
-        ax.set_title(f"{espec.titulo}\n{espec.subtitulo} — {espec.credito}", fontsize=16, weight="bold", pad=20)
+        # O crédito vai no fim do subtítulo ou, quando o subtítulo deve ficar só com a data (os
+        # mapas da previsão), numa linha miúda embaixo do mapa, à direita
+        subtitulo = espec.subtitulo if espec.credito_no_rodape else f"{espec.subtitulo} — {espec.credito}"
+        ax.set_title(f"{espec.titulo}\n{subtitulo}", fontsize=16, weight="bold", pad=20)
+        if espec.credito_no_rodape:
+            ax.annotate(f"Dados: {espec.credito}", xy=(1, 0), xycoords="axes fraction", xytext=(0, -30),
+                        textcoords="offset points", ha="right", va="top", fontsize=9, color="#555555")
     # O enquadramento vem da base, e não do módulo: é a base que sabe de que recorte ela é
     oeste, leste, sul, norte = base.recorte.limites
     ax.set_xlim(oeste, leste)
