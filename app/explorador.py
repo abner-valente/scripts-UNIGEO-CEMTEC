@@ -88,6 +88,8 @@ FONTE_DOS_ROTULOS = 12
 # cabe o maior lado dele na tela.
 ZOOM_POR_GRAU = 5.9 + 3.0  # calibrado em MS, que tem 8° de largura e abre bem no zoom 5,9
 ALTURA_MAPA = 900
+VISAO_3D = {"pitch": 52, "bearing": -18}   # a inclinação e o giro do protótipo que a equipe escolheu
+PONTOS_NO_RELEVO = "pontos_no_relevo"     # a grade que responde ao mouse no 3D (no plano, "pontos")
 # Dois ajustes no balão dos gráficos. Ele é um elemento só, pendurado no corpo da página fora
 # do gráfico, então as regras valem para todos eles; os seletores repetem o caminho inteiro do
 # estilo do Streamlit porque um mais curto perde na especificidade e não pega.
@@ -1508,18 +1510,24 @@ def celulas_do_ponto(valores: pd.Series, apoio: pd.Series, nome_produto: str, qu
     return interativo.celulas_do_ponto(grade_do_ponto(uf), entrada, nome, produto.unidade, produto.decimais, direcoes)
 
 
-def mapa_interativo(imagem: str, pontos: pd.DataFrame, uf: str, escritos: bool,
+def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos: bool,
                     celulas: pd.DataFrame | None = None,
-                    escolhido: list[int] = interativo.COR_DO_PONTO_ESCOLHIDO) -> pdk.Deck:
+                    escolhido: list[int] = interativo.COR_DO_PONTO_ESCOLHIDO,
+                    relevo: pd.DataFrame | None = None) -> pdk.Deck:
+    # Com o relevo (o 3D, de interativo.relevo), os blocos tomam o lugar da imagem, e as estações
+    # sobem à altura que vem na coluna "altura" dos pontos
     recorte = config.recorte_de(uf)
     estado, municipios = contornos_interativos(uf)
-    # A imagem entra depois de criada a camada: passada no construtor, o pydeck a trataria como
-    # expressão a ser avaliada no navegador ("@@=data:image/png;...")
-    campo = pdk.Layer("BitmapLayer", data=None, bounds=superficie.limites(recorte))
-    campo.image = imagem
     com_celulas = celulas is not None and not celulas.empty
-    camadas = [
-        campo,
+    em_3d = com_celulas and relevo is not None
+    camadas = []
+    if not em_3d:
+        # A imagem entra depois de criada a camada: passada no construtor, o pydeck a trataria como
+        # expressão a ser avaliada no navegador ("@@=data:image/png;...")
+        campo = pdk.Layer("BitmapLayer", data=None, bounds=superficie.limites(recorte))
+        campo.image = imagem
+        camadas.append(campo)
+    camadas += [
         # Preenchidos quase transparentes: é o preenchimento que responde ao mouse com o nome. Com a
         # grade do ponto por cima, quem responde é ela, que já traz o município; clicável, o
         # município inteiro ficaria pintado no clique (veja a camada da grade)
@@ -1532,7 +1540,24 @@ def mapa_interativo(imagem: str, pontos: pd.DataFrame, uf: str, escritos: bool,
         pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[25, 25, 25],
                   line_width_min_pixels=1.6),
     ]
-    if com_celulas:
+    if em_3d:
+        # Os blocos vão numa GridCellLayer porque, no clique, o Streamlit apaga para 40% as camadas que
+        # conhece (PolygonLayer, ColumnLayer...), e o relevo inteiro ficaria translúcido; esta ele deixa
+        # como está. A grade que responde ao mouse vai por cima, em colunas de quatro lados com a mesma
+        # medida e a mesma altura dos blocos: o balão é o do bloco sob o cursor, e o escolhido fica
+        # vermelho a 50%, como no mapa plano (veja abaixo). O nome é outro que o da grade plana: com o
+        # mesmo, ao ligar o 3D, o deck.gl passaria o estado da camada plana à de colunas, e ela quebra
+        lado = interativo.lado_do_bloco(grade_do_ponto(uf))
+        camadas.append(pdk.Layer(
+            "GridCellLayer", data=relevo.loc[relevo["pintada"], interativo.COLUNAS_DO_RELEVO], id="relevo",
+            get_position=["Longitude", "Latitude"], cell_size=lado, offset=[0, 0], extruded=True,
+            get_elevation="altura", get_fill_color="cor", pickable=False))
+        camadas.append(pdk.Layer(
+            "ColumnLayer", data=celulas[interativo.COLUNAS_DA_CAMADA].assign(altura=relevo["altura"].to_numpy()),
+            id=PONTOS_NO_RELEVO, get_position=["Longitude", "Latitude"], disk_resolution=4, angle=45,
+            radius=lado / math.sqrt(2), extruded=True, get_elevation="altura", get_fill_color=[*escolhido, 2],
+            opacity=0.5, pickable=True))
+    elif com_celulas:
         # A grade invisível do valor em qualquer ponto, por cima dos municípios (o balão dela já traz
         # o nome do município) e por baixo das estações, que continuam respondendo ao clique. O
         # quadrado de cada célula sai do centro no navegador, para não mandar quatro cantos por célula.
@@ -1544,16 +1569,19 @@ def mapa_interativo(imagem: str, pontos: pd.DataFrame, uf: str, escritos: bool,
             stroked=False, get_fill_color=[*escolhido, 2], opacity=0.5, pickable=True,
             get_polygon=(f"[[Longitude - {dx:.6f}, Latitude - {dy:.6f}], [Longitude + {dx:.6f}, Latitude - {dy:.6f}], "
                          f"[Longitude + {dx:.6f}, Latitude + {dy:.6f}], [Longitude - {dx:.6f}, Latitude + {dy:.6f}]]")))
+    # No 3D, as estações e os números ficam no alto e sempre na frente: no chão, sumiriam dentro dos blocos
+    posicao, na_frente = ((["Longitude", "Latitude", "altura"], {"parameters": {"depthCompare": "always"}})
+                          if em_3d and "altura" in pontos else (["Longitude", "Latitude"], {}))
     camadas += [
-        pdk.Layer("ScatterplotLayer", data=pontos, id="estacoes", get_position=["Longitude", "Latitude"],
+        pdk.Layer("ScatterplotLayer", data=pontos, id="estacoes", get_position=posicao,
                   get_fill_color="cor", get_line_color=[25, 25, 25], stroked=True, line_width_min_pixels=1,
-                  get_radius=3000, radius_min_pixels=6, radius_max_pixels=14, pickable=True),
+                  get_radius=3000, radius_min_pixels=6, radius_max_pixels=14, pickable=True, **na_frente),
     ]
     if escritos:
-        camadas.append(pdk.Layer("TextLayer", data=pontos, get_position=["Longitude", "Latitude"],
+        camadas.append(pdk.Layer("TextLayer", data=pontos, get_position=posicao,
                                  get_text="rotulo", get_size=12, get_color=[20, 20, 20],
                                  get_pixel_offset=[0, -17], background=True,
-                                 get_background_color=[255, 255, 255, 215]))
+                                 get_background_color=[255, 255, 255, 215], **na_frente))
     if "angulo" in pontos:
         # As setas do vento, ao lado de cada estação
         setas = pdk.Layer("TextLayer", data=pontos.dropna(subset=["angulo"]).assign(seta="↑"),
@@ -1562,7 +1590,7 @@ def mapa_interativo(imagem: str, pontos: pd.DataFrame, uf: str, escritos: bool,
         # Como a imagem acima: passado no construtor, o "↑" viraria expressão ("@@=↑") e a seta não sairia
         setas.character_set = "↑"
         camadas.append(setas)
-    visao = pdk.ViewState(**visao_inicial(recorte))
+    visao = pdk.ViewState(**visao_inicial(recorte), **(VISAO_3D if em_3d else {}))
     if st.session_state.get("fundo_interativo", True):
         # O fundo da Carto, claro ou escuro como o tema (é o que o Streamlit põe com map_style=None):
         # países, cidades, estradas e rios, da internet. Sem rede, só ele some
@@ -1973,7 +2001,7 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
         legenda = "Chuva na hora" if tipo == variaveis.HORA else "Chuva do dia"
         serie_de, serie_ate = inicio_local, fim.astimezone(recorte.fuso)
 
-    marcar, ajustar_tela = st.columns([1, 1])
+    marcar, ajustar_tela, relevo_tela = st.columns([1, 1, 1])
     with marcar:
         escritos = st.checkbox("Mostrar o valor de cada estação", value=True, key="valores_chuva_interativa",
                                help="O número sobre cada estação. Desligado, fica só o ponto.")
@@ -1981,32 +2009,47 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
         ajustar = st.checkbox("Ajustar a escala ao dado", value=False, key="ajustar_chuva_interativa",
                               help="Desligada, as classes são as do boletim: 20 mm têm a mesma cor em "
                                    "qualquer mapa.")
+    with relevo_tela:
+        em_3d = st.checkbox("Relevo 3D", value=False, key="relevo_chuva_interativa",
+                            help="A chuva vira altura: o topo da escala sobe 100 km, e o mapa abre inclinado. "
+                                 "Arraste com o botão direito para inclinar e girar.")
     medidas = valores.dropna()
     if len(medidas) < config.MIN_ESTACOES_INTERPOLACAO:
         st.warning(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram a chuva em {quando}.")
         return
     niveis = niveis_da_escala(produto, horas, ajustar)
-    imagem = camada_superficie(valores, produto.nome, quando, uf, tuple(niveis) if niveis is not None else None,
-                               valores_apoio)
+    niveis = tuple(niveis) if niveis is not None else None
     pontos = interativo.pontos_de_valores(_com_coordenadas(valores, produto.nome, uf), produto.nome, legenda,
                                           produto.unidade, produto.decimais)
     celulas = celulas_do_ponto(valores, valores_apoio, produto.nome, quando, uf, nome=legenda)
-    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos, celulas), on_select="rerun",
-                             selection_mode="single-object", key="mapa_chuva_interativa", height=ALTURA_MAPA)
+    if em_3d:
+        por_unidade = interativo.metros_por_unidade(niveis, medidas)
+        imagem, relevo = None, interativo.relevo(celulas, produto.paleta, niveis, medidas, por_unidade)
+        pontos = pontos.assign(altura=pontos["Estação"].map(valores).fillna(0).to_numpy(dtype=float) * por_unidade)
+    else:
+        imagem, relevo = camada_superficie(valores, produto.nome, quando, uf, niveis, valores_apoio), None
+    # Uma chave para cada modo: depois que a pessoa mexe no mapa, o Streamlit guarda a câmera, e ao
+    # ligar ou desligar o 3D o mapa não inclinaria nem voltaria a ficar plano
+    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos, celulas, relevo=relevo),
+                             on_select="rerun", selection_mode="single-object",
+                             key="mapa_chuva_interativa" + ("_3d" if em_3d else ""), height=ALTURA_MAPA)
     if niveis is not None:
-        barra_no_mapa("escala_mapa_chuva_interativa", produto.paleta, tuple(niveis), produto.unidade)
+        barra_no_mapa("escala_mapa_chuva_interativa", produto.paleta, niveis, produto.unidade)
     if medidas.max() == 0:
         st.info(f"Não choveu em nenhuma estação em {quando}.")
     st.caption(f"{legenda}, {quando}: de {medidas.min():.1f} a {medidas.max():.1f} mm em {len(medidas)} estações. "
                "A superfície é a do mapa do boletim (o IDW das estações, com as vizinhas na borda), e abaixo "
                "da primeira classe não se pinta. **Passe o mouse** em qualquer ponto para ler a chuva interpolada, "
-               "e **clique** para ver a chuva do ponto, ou a de uma estação.")
+               "e **clique** para ver a chuva do ponto, ou a de uma estação."
+               + (f" No relevo, {interativo.ALTURA_DO_TETO / por_unidade:g} mm sobem 100 km; **arraste com o "
+                  "botão direito** para inclinar e girar." if em_3d and por_unidade else ""))
 
     objetos = evento.selection.get("objects", {}) if evento is not None else {}
+    celula_clicada = objetos.get("pontos") or objetos.get(PONTOS_NO_RELEVO)
     if objetos.get("estacoes"):
         st.session_state["escolha_chuva_interativa"] = ("estacao", objetos["estacoes"][0]["titulo"])
-    elif objetos.get("pontos"):
-        st.session_state["escolha_chuva_interativa"] = ("ponto", int(objetos["pontos"][0]["celula"]))
+    elif celula_clicada:
+        st.session_state["escolha_chuva_interativa"] = ("ponto", int(celula_clicada[0]["celula"]))
     tipo, escolhida = st.session_state.get("escolha_chuva_interativa", (None, None))
     # Hora a hora até 4 dias; mais que isso, por dia, para as barras caberem
     por_dia = (serie_ate - serie_de) > timedelta(days=4)

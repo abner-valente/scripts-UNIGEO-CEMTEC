@@ -47,18 +47,24 @@ def superficie_png(pontos: pd.DataFrame, coluna: str, grade_fina: Malha, paleta:
     grade = calculos.interpolar_idw(entrada["Longitude"], entrada["Latitude"], entrada[coluna],
                                     grade_fina.lon, grade_fina.lat,
                                     config.IDW_VIZINHOS, config.IDW_POTENCIA)
-    if niveis is None:
-        normalizado, vazio = _normalizar(grade, pontos[coluna]), None
-    else:
-        normalizado, vazio = _pela_escala(grade, np.asarray(niveis, dtype=float))
-
-    cores = colormaps[paleta](normalizado, alpha=opacidade, bytes=True)
-    cores[~grade_fina.dentro] = 0  # transparente fora do estado
+    pintura, vazio = cores(grade, paleta, niveis, pontos[coluna], opacidade)
+    pintura[~grade_fina.dentro] = 0  # transparente fora do estado
     if vazio is not None:
-        cores[vazio] = 0  # abaixo da primeira classe (chuva) não se pinta: ali não choveu
+        pintura[vazio] = 0  # abaixo da primeira classe (chuva) não se pinta: ali não choveu
 
     # A primeira linha da imagem é o norte; a grade começa no sul
-    return _png(Image.fromarray(np.flipud(cores), mode="RGBA"))
+    return _png(Image.fromarray(np.flipud(pintura), mode="RGBA"))
+
+
+def cores(valores: np.ndarray, paleta: str, niveis=None, medidas: pd.Series | None = None,
+          opacidade: float = OPACIDADE) -> tuple[np.ndarray, np.ndarray | None]:
+    # A cor de cada valor (RGBA, de 0 a 255) e o que fica abaixo da primeira classe. Sem escala
+    # fixa, as cores vão do menor ao maior valor medido nas estações (`medidas`)
+    if niveis is None:
+        normalizado, vazio = _normalizar(valores, medidas), None
+    else:
+        normalizado, vazio = _pela_escala(valores, np.asarray(niveis, dtype=float))
+    return colormaps[paleta](normalizado, alpha=opacidade, bytes=True), vazio
 
 
 def _pela_escala(grade: np.ndarray, niveis: np.ndarray):

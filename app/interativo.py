@@ -237,6 +237,43 @@ def celulas_do_ponto(grade: GradeDoPonto, entrada: pd.DataFrame, coluna: str, un
     })
 
 
+# O relevo (o mapa em 3D): cada célula da grade do ponto vira um bloco com a altura do valor,
+# pintado como a superfície. O topo da escala sobe 100 km, um oitavo da largura de MS: é a altura
+# do protótipo que a equipe escolheu (a chuva do mês, com 300 mm no topo)
+ALTURA_DO_TETO = 100_000
+OPACIDADE_DO_RELEVO = 0.92
+METROS_POR_GRAU = 111_319.5   # no equador; o grau de longitude encolhe com o cosseno da latitude
+COLUNAS_DO_RELEVO = ["Longitude", "Latitude", "cor", "altura"]
+
+
+def metros_por_unidade(niveis, medidas: pd.Series) -> float:
+    # Com a escala fixa, o topo dela: 20 mm têm a mesma altura em qualquer instante, como têm a
+    # mesma cor. Ajustada ao dado, o maior valor medido
+    teto = float(np.max(niveis)) if niveis is not None else float(medidas.max())
+    return ALTURA_DO_TETO / teto if teto > 0 else 0.0
+
+
+def lado_do_bloco(grade: GradeDoPonto) -> float:
+    # O bloco é um quadrado em metros, e a célula é em graus: o grau de longitude encolhe para o
+    # sul. O lado cobre a célula no norte do recorte, onde ela é mais larga, para não abrir fresta
+    # entre os blocos; no sul eles se sobrepõem um pouco, sem que se veja
+    dx, dy = grade.meio_passo
+    norte = float(np.max(grade.lat))
+    return 2 * max(dx * np.cos(np.radians(norte)), dy) * METROS_POR_GRAU
+
+
+def relevo(celulas: pd.DataFrame, paleta: str, niveis, medidas: pd.Series, por_unidade: float) -> pd.DataFrame:
+    # Uma linha por célula, na ordem de `celulas`: a cor da superfície e a altura. Abaixo da
+    # primeira classe a célula não se pinta, como no mapa plano, e fica no chão
+    valores = celulas["valor"].to_numpy(dtype=float)
+    pintura, vazio = superficie.cores(valores, paleta, niveis, medidas, OPACIDADE_DO_RELEVO)
+    pintada = ~np.isnan(valores) if vazio is None else ~np.isnan(valores) & ~vazio
+    return pd.DataFrame({
+        "Longitude": celulas["Longitude"].to_numpy(), "Latitude": celulas["Latitude"].to_numpy(),
+        "cor": pintura.tolist(), "altura": np.where(pintada, np.nan_to_num(valores) * por_unidade, 0.0),
+        "pintada": pintada})
+
+
 def celulas_do_risco(grade: GradeDoPonto, niveis: np.ndarray, legenda: str, estacoes: pd.DataFrame,
                      com_medidas: bool, horas_alto: np.ndarray | None = None) -> pd.DataFrame:
     # O nível de cada célula é o que pinta o mapa. Hora a hora, o balão traz as três medidas

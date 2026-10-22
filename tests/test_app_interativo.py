@@ -12,7 +12,7 @@ import pytest
 import shapely
 from PIL import Image
 
-from app import interativo, variaveis
+from app import interativo, superficie, variaveis
 from modulos import calculos, config
 from modulos.produtos import risco_fogo
 
@@ -284,6 +284,44 @@ def test_a_chuva_no_ponto_com_poucas_estacoes_fica_vazia():
                                                leituras["dt_local"].max(), False, (-54.5, -20.5))
 
     assert serie.empty and list(serie.columns) == ["quando", "chuva", "acumulado"]
+
+
+def test_o_relevo_pinta_como_a_superficie_e_sobe_com_a_chuva():
+    grade = interativo.grade_do_ponto(base_de_teste(), resolucao=31)
+    entrada = ESTACOES_DO_TESTE.assign(Chuva=[0.0, 80.0, 40.0, 0.1])
+    celulas = interativo.celulas_do_ponto(grade, entrada, "Chuva", "mm", 1)
+    niveis = variaveis.CLASSES_CHUVA_CURTA
+
+    relevo = interativo.relevo(celulas, "Blues", niveis, entrada["Chuva"], 1000.0)
+
+    valores = celulas["valor"].to_numpy()
+    cores, vazio = superficie.cores(valores, "Blues", niveis, opacidade=interativo.OPACIDADE_DO_RELEVO)
+    assert len(relevo) == len(celulas)
+    np.testing.assert_array_equal(relevo["pintada"], ~vazio)               # abaixo de 0,2 mm, nada
+    assert relevo["pintada"].any() and not relevo["pintada"].all()
+    np.testing.assert_allclose(relevo["altura"], np.where(~vazio, valores * 1000.0, 0.0))
+    assert relevo["cor"].tolist() == cores.tolist()                        # a cor do mapa plano
+    np.testing.assert_array_equal(relevo[["Longitude", "Latitude"]], celulas[["Longitude", "Latitude"]])
+
+
+def test_a_altura_vem_do_topo_da_escala_ou_do_maior_valor_medido():
+    assert interativo.metros_por_unidade(variaveis.CLASSES_CHUVA_CURTA, pd.Series([5.0])) == 1000.0   # 100 mm
+    assert interativo.metros_por_unidade(variaveis.CLASSES_CHUVA_LONGA, pd.Series([5.0])) == pytest.approx(333.33, 0.01)
+    assert interativo.metros_por_unidade(None, pd.Series([10.0, 40.0])) == 2500.0
+    assert interativo.metros_por_unidade(None, pd.Series([0.0, 0.0])) == 0.0                         # sem chuva, plano
+
+
+def test_o_bloco_cobre_a_celula_mais_larga_sem_fresta():
+    # Células de 0,12° × 0,10°: no norte (17° S), a largura em metros ganha da altura
+    lat = np.array([[-24.0], [-17.0]])
+    grade = interativo.GradeDoPonto(lon=np.zeros_like(lat), lat=lat, dentro=np.ones_like(lat, dtype=bool),
+                                    municipio=np.full(lat.shape, ""), meio_passo=(0.06, 0.05))
+
+    lado = interativo.lado_do_bloco(grade)
+
+    largura_no_norte = 0.12 * np.cos(np.radians(17.0)) * interativo.METROS_POR_GRAU
+    assert lado == pytest.approx(largura_no_norte)
+    assert lado > 0.10 * interativo.METROS_POR_GRAU                         # e cobre a altura da célula
 
 
 def risco_das_quatro(rajada_de_b: float = 20.0) -> pd.DataFrame:
