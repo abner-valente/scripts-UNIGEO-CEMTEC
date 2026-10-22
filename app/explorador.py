@@ -32,6 +32,7 @@ from app import chuva as chuva_calc
 from app import dados as coleta
 from app import previsao
 from app import qualidade
+from app import referencia
 from app import risco
 from app import superficie
 from app import variaveis
@@ -1697,6 +1698,97 @@ def pagina_semanas() -> None:
 # =====================================================
 # PÁGINAS
 # =====================================================
+@st.cache_data(ttl=3600, show_spinner=False)
+def tabela_das_estacoes(uf: str) -> pd.DataFrame:
+    """As estações do estado, numeradas, com o município, a altitude e desde quando operam."""
+    return referencia.tabela_de_referencia(carregar_estacoes(uf), base_cartografica(uf).municipios)
+
+
+def mapa_das_estacoes(tabela: pd.DataFrame, destacadas: pd.Series, uf: str) -> pdk.Deck:
+    """O mapa navegável com cada estação e o nome dela ao lado; as que a busca achou, em vermelho."""
+    base = base_cartografica(uf)
+    pontos = pd.DataFrame({
+        "nome": tabela["Estação"], "municipio": tabela["Município"].fillna("—"), "codigo": tabela["Código"],
+        "altitude": tabela["Altitude (m)"].map(lambda metros: "—" if pd.isna(metros) else f"{metros} m"),
+        "desde": tabela["Em operação desde"].fillna("—"),
+        "Longitude": tabela["Longitude"], "Latitude": tabela["Latitude"],
+        "cor": [[200, 30, 30, 235] if destacada else [31, 78, 121, 225] for destacada in destacadas],
+    })
+    nomes = pdk.Layer("TextLayer", data=pontos, get_position=["Longitude", "Latitude"], get_text="nome",
+                      get_size=12, get_color=[20, 20, 20], get_pixel_offset=[9, 0],
+                      background=True, get_background_color=[255, 255, 255, 200])
+    # Como a imagem dos mapas: passados no construtor, o pydeck trataria os textos como expressões
+    nomes.get_text_anchor = "start"
+    nomes.get_alignment_baseline = "center"
+    nomes.font_family = "'Source Sans Pro', Arial, sans-serif"   # a do painel, e não a de máquina de escrever
+    camadas = [
+        pdk.Layer("GeoJsonLayer", data=base.municipios[[referencia.COLUNA_DO_MUNICIPIO, "geometry"]].__geo_interface__,
+                  stroked=True, filled=False, get_line_color=[110, 110, 110, 140], line_width_min_pixels=0.5),
+        pdk.Layer("GeoJsonLayer", data=base.uf.__geo_interface__, stroked=True, filled=False,
+                  get_line_color=[40, 40, 40], line_width_min_pixels=1.5),
+        pdk.Layer("ScatterplotLayer", data=pontos, get_position=["Longitude", "Latitude"], get_fill_color="cor",
+                  get_line_color=[255, 255, 255], stroked=True, line_width_min_pixels=1, get_radius=2500,
+                  radius_min_pixels=5, pickable=True),
+        nomes,
+    ]
+    # O mapa ocupa três quintos da largura: com o zoom do mapa largo, o leste do estado ficaria de fora
+    visao = visao_inicial(config.recorte_de(uf))
+    visao["zoom"] = round(visao["zoom"] - 0.7, 1)
+    return pdk.Deck(layers=camadas, map_style=MAPA_BASE, initial_view_state=pdk.ViewState(**visao),
+                    tooltip={"html": "<b>{nome}</b><br/>Município: {municipio}<br/>Código: {codigo}<br/>"
+                                     "Altitude: {altitude}<br/>Em operação desde: {desde}"})
+
+
+def pagina_estacoes() -> None:
+    """Onde fica cada estação do INMET em MS: o mapa, a lista com busca e o PNG de referência.
+
+    Os mapas das variáveis mostram números em pontos. Para o meteorologista é óbvio de quem é cada
+    ponto; para o público, não (pedido de uma colega da equipe, 22/10/2026). Só as do estado, e só
+    as em operação, que são as dos mapas.
+    """
+    uf = config.UF
+    st.title(f"Onde ficam as estações — {config.ESTADOS[uf][0]}")
+    aviso = st.container()
+    if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
+        st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
+        st.stop()
+    try:
+        tabela = tabela_das_estacoes(uf)
+    except fonte.ErroFonte:
+        sem_lista_de_estacoes(aviso, uf)
+    st.caption(f"As {len(tabela)} estações automáticas do INMET em operação em {uf}. São os pontos dos mapas do "
+               "painel: o número que cada mapa mostra num ponto é o que aquela estação mediu.")
+
+    busca = st.text_input("Procurar", key="busca_estacoes",
+                          placeholder="nome da estação, município ou código (ex.: Dourados, A702)")
+    achadas = referencia.procurar(tabela, busca)
+    procurando = bool(busca.strip())
+    if procurando and not achadas.any():
+        st.info(f"Nenhuma estação com \"{busca.strip()}\" no nome, no município ou no código.")
+
+    mapa, lista = st.columns([3, 2])
+    with mapa:
+        st.pydeck_chart(mapa_das_estacoes(tabela, achadas & procurando, uf), height=ALTURA_MAPA)
+        st.caption("Passe o mouse numa estação para ver o município, o código e a altitude; aproxime o mapa "
+                   "para os nomes deixarem de se cobrir. As que a busca achou ficam em vermelho. O mapa base "
+                   "vem do Carto, fora da SEMADESC.")
+    with lista:
+        colunas = ["Nº", "Estação", "Município", "Código", "Altitude (m)", "Em operação desde"]
+        st.dataframe(tabela[achadas][colunas], hide_index=True, height=ALTURA_MAPA)
+
+    # O PNG só é desenhado no clique, numa thread à parte: chega com a tabela e a base prontas
+    hoje = date.today()
+    base = base_cartografica(uf)
+    titulo = f"Estações meteorológicas do INMET em {uf}"
+    subtitulo = f"{len(tabela)} estações automáticas em operação em {hoje:%d/%m/%Y}"
+    st.download_button("Baixar o mapa de referência (PNG)",
+                       lambda: boletim.png(mapas.mapa_de_referencia(tabela, titulo, subtitulo, base)),
+                       mime="image/png", key="baixar_referencia", on_click="ignore",
+                       file_name=f"Mapa_Estacoes_INMET_{uf}_{hoje:%Y%m%d}.png",
+                       help="As estações numeradas no mapa, com a lista dos nomes ao lado, no padrão do boletim "
+                            "(título e logos), em 300 dpi: para boletins, relatórios e apresentações.")
+
+
 def _observado() -> None:
     """O observado do INMET: é o resto deste arquivo, que segue depois da navegação."""
 
@@ -1707,7 +1799,8 @@ def _observado() -> None:
 observado = st.Page(_observado, title="Observado (INMET)", icon=":material/history:", default=True)
 lembrar_filtros()
 pagina = st.navigation({
-    "": [observado],
+    "": [observado, st.Page(pagina_estacoes, title="Onde ficam as estações", icon=":material/location_on:",
+                            url_path="estacoes")],
     "Previsão (MS)": [
         st.Page(pagina_previsao, title="Estações", icon=":material/show_chart:", url_path="previsao"),
         st.Page(pagina_mapas_previstos, title="Mapas", icon=":material/map:", url_path="previsao-mapas"),
