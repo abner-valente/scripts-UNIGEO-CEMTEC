@@ -239,6 +239,22 @@ def test_a_serie_do_ponto_no_instante_do_mapa_e_o_valor_do_balao():
     assert serie["valor"].iloc[0] == pytest.approx(celula["valor"])   # o clique e o balão dizem o mesmo
 
 
+def test_com_varios_pontos_a_serie_e_a_media_deles():
+    # As células de um imóvel do CAR: a cada instante, a média das séries de cada uma
+    horas = pd.date_range("2026-10-13 01:00", periods=48, freq="h", tz=config.FUSO_MS)
+    rng = np.random.default_rng(5)
+    leituras = pd.concat([pd.DataFrame({"Estação": nome, "dt_local": horas, "TEM_MAX": rng.uniform(20, 35, 48)})
+                          for nome in ESTACOES_DO_TESTE["Estação"]], ignore_index=True)
+    maxima = variaveis.por_nome("Temperatura máxima")
+    lons, lats = np.array([-55.0, -54.5, -54.1]), np.array([-20.3, -20.6, -21.1])
+
+    juntas = interativo.serie_do_ponto(maxima, leituras, ESTACOES_DO_TESTE, lons, lats, variaveis.DIA, (-54.5, -20.5))
+
+    sozinhas = [interativo.serie_do_ponto(maxima, leituras, ESTACOES_DO_TESTE, lon, lat, variaveis.DIA, (-54.5, -20.5))
+                for lon, lat in zip(lons, lats)]
+    np.testing.assert_allclose(juntas["valor"], np.mean([serie["valor"] for serie in sozinhas], axis=0))
+
+
 def test_a_serie_do_ponto_com_poucas_estacoes_fica_vazia():
     horas = pd.date_range("2026-10-13 01:00", periods=24, freq="h", tz=config.FUSO_MS)
     leituras = pd.concat([pd.DataFrame({"Estação": nome, "dt_local": horas, "TEM_MAX": 30.0}) for nome in ("A", "B")],

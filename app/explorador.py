@@ -29,6 +29,7 @@ from matplotlib.figure import Figure
 
 from app import animacao
 from app import boletim
+from app import car
 from app import chuva as chuva_calc
 from app import dados as coleta
 from app import interativo
@@ -90,6 +91,14 @@ ZOOM_POR_GRAU = 5.9 + 3.0  # calibrado em MS, que tem 8° de largura e abre bem 
 ALTURA_MAPA = 900
 VISAO_3D = {"pitch": 52, "bearing": -18}   # a inclinação e o giro do protótipo que a equipe escolheu
 PONTOS_NO_RELEVO = "pontos_no_relevo"     # a grade que responde ao mouse no 3D (no plano, "pontos")
+# O imóvel do CAR: magenta não se confunde com o azul da chuva, com as cores do risco nem com o
+# vermelho e o ciano da célula clicada
+COR_DO_IMOVEL = [255, 0, 255]
+ACIMA_DO_BLOCO = 1500           # metros: no 3D, o topo das células do imóvel fica à vista
+LADO_MINIMO_DO_IMOVEL = 0.15    # graus: um imóvel pequeno (ou um ponto) abre com as células em volta
+FOLGA_DO_IMOVEL = 2.5
+ZOOM_DO_IMOVEL_EM_3D = 7.0
+ESCOLHAS_INTERATIVAS = ("escolha_mapa_interativo", "escolha_chuva_interativa", "escolha_risco_interativo")
 # Dois ajustes no balão dos gráficos. Ele é um elemento só, pendurado no corpo da página fora
 # do gráfico, então as regras valem para todos eles; os seletores repetem o caminho inteiro do
 # estilo do Streamlit porque um mais curto perde na especificidade e não pega.
@@ -1510,16 +1519,36 @@ def celulas_do_ponto(valores: pd.Series, apoio: pd.Series, nome_produto: str, qu
     return interativo.celulas_do_ponto(grade_do_ponto(uf), entrada, nome, produto.unidade, produto.decimais, direcoes)
 
 
+@st.cache_data(show_spinner=False, max_entries=10)
+def celulas_do_imovel(_imovel: car.Imovel, chave: str, uf: str) -> np.ndarray:
+    # A chave identifica o imóvel no cache (a forma em si não entra na conta do cache)
+    return car.celulas_do_imovel(grade_do_ponto(uf), _imovel.forma)
+
+
+def visao_do_imovel(imovel: car.Imovel, em_3d: bool) -> dict:
+    # Centrado no imóvel, com folga para as células vizinhas. No 3D, não tão perto: os blocos de até
+    # 100 km encheriam a tela
+    oeste, sul, leste, norte = imovel.forma.bounds
+    zoom = ZOOM_POR_GRAU - math.log2(max(leste - oeste, norte - sul, LADO_MINIMO_DO_IMOVEL) * FOLGA_DO_IMOVEL)
+    return {"latitude": (sul + norte) / 2, "longitude": (oeste + leste) / 2,
+            "zoom": round(min(zoom, ZOOM_DO_IMOVEL_EM_3D) if em_3d else zoom, 1)}
+
+
 def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos: bool,
                     celulas: pd.DataFrame | None = None,
                     escolhido: list[int] = interativo.COR_DO_PONTO_ESCOLHIDO,
-                    relevo: pd.DataFrame | None = None) -> pdk.Deck:
+                    relevo: pd.DataFrame | None = None, imovel: car.Imovel | None = None) -> pdk.Deck:
     # Com o relevo (o 3D, de interativo.relevo ou relevo_de_classes), os blocos tomam o lugar da
-    # imagem, e as estações sobem à altura que vem na coluna "altura" dos pontos
+    # imagem, e as estações sobem à altura que vem na coluna "altura" dos pontos. Com o imóvel do
+    # CAR, o mapa abre nele, com o contorno e as células que ele toca
     recorte = config.recorte_de(uf)
     estado, municipios = contornos_interativos(uf)
     com_celulas = celulas is not None and not celulas.empty
     em_3d = com_celulas and relevo is not None
+    # O quadrado de cada célula sai do centro no navegador, para não mandar quatro cantos por célula
+    dx, dy = grade_do_ponto(uf).meio_passo
+    quadrado = (f"[[Longitude - {dx:.6f}, Latitude - {dy:.6f}], [Longitude + {dx:.6f}, Latitude - {dy:.6f}], "
+                f"[Longitude + {dx:.6f}, Latitude + {dy:.6f}], [Longitude - {dx:.6f}, Latitude + {dy:.6f}]]")
     camadas = []
     if em_3d:
         # Os blocos vão numa GridCellLayer porque, no clique, o Streamlit apaga para 40% as camadas que
@@ -1560,16 +1589,35 @@ def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos:
     ]
     if com_celulas and not em_3d:
         # A grade invisível do valor em qualquer ponto, por cima dos municípios (o balão dela já traz
-        # o nome do município) e por baixo das estações, que continuam respondendo ao clique. O
-        # quadrado de cada célula sai do centro no navegador, para não mandar quatro cantos por célula.
+        # o nome do município) e por baixo das estações, que continuam respondendo ao clique.
         # No clique, o Streamlit pinta o objeto escolhido com a cor dele, mas opaca, e apaga os outros:
         # a célula leva o vermelho quase transparente, e a opacidade da camada deixa o escolhido em 50%
-        dx, dy = grade_do_ponto(uf).meio_passo
         camadas.append(pdk.Layer(
             "PolygonLayer", data=celulas[interativo.COLUNAS_DA_CAMADA], id="pontos", filled=True,
-            stroked=False, get_fill_color=[*escolhido, 2], opacity=0.5, pickable=True,
-            get_polygon=(f"[[Longitude - {dx:.6f}, Latitude - {dy:.6f}], [Longitude + {dx:.6f}, Latitude - {dy:.6f}], "
-                         f"[Longitude + {dx:.6f}, Latitude + {dy:.6f}], [Longitude - {dx:.6f}, Latitude + {dy:.6f}]]")))
+            stroked=False, get_fill_color=[*escolhido, 2], opacity=0.5, pickable=True, get_polygon=quadrado))
+    if imovel is not None and com_celulas:
+        # O imóvel do CAR: as células que ele toca em magenta translúcido (no 3D, um pouco acima dos
+        # blocos, para o topo delas aparecer) e o contorno dele com uma borda clara por baixo. Nada
+        # disso responde ao mouse: o balão continua sendo o da célula. Translúcidas, as células não
+        # mudam quando o Streamlit apaga as camadas no clique (ele só baixa o que passa de 40%)
+        dele = celulas["celula"].isin(celulas_do_imovel(imovel, imovel.chave, uf)).to_numpy()
+        quadrados = celulas.loc[dele, ["Longitude", "Latitude"]].assign(
+            altura=relevo["altura"].to_numpy()[dele] + ACIMA_DO_BLOCO if em_3d else 0.0)
+        camadas.append(pdk.Layer(
+            "PolygonLayer", data=quadrados, id="celulas_do_imovel", get_polygon=quadrado, filled=True,
+            stroked=True, extruded=em_3d, wireframe=em_3d, get_elevation="altura",
+            get_fill_color=[*COR_DO_IMOVEL, 70], get_line_color=[*COR_DO_IMOVEL, 230], line_width_min_pixels=1.5,
+            pickable=False))
+        contorno = gpd.GeoDataFrame(geometry=[imovel.forma], crs="EPSG:4326").__geo_interface__
+        ponto = imovel.forma.geom_type == "Point"
+        camadas += [
+            pdk.Layer("GeoJsonLayer", data=contorno, id="imovel_borda", stroked=True, filled=ponto,
+                      get_fill_color=[*COR_DO_IMOVEL, 255], get_line_color=[255, 255, 255, 230],
+                      line_width_min_pixels=4, point_radius_min_pixels=7, pickable=False),
+            pdk.Layer("GeoJsonLayer", data=contorno, id="imovel", stroked=True, filled=False,
+                      get_line_color=[*COR_DO_IMOVEL, 255], line_width_min_pixels=2, point_radius_min_pixels=7,
+                      pickable=False),
+        ]
     # No 3D, as estações e os números ficam no alto e sempre na frente: no chão, sumiriam dentro dos blocos
     posicao, na_frente = ((["Longitude", "Latitude", "altura"], {"parameters": {"depthCompare": "always"}})
                           if em_3d and "altura" in pontos else (["Longitude", "Latitude"], {}))
@@ -1591,7 +1639,8 @@ def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos:
         # Como a imagem acima: passado no construtor, o "↑" viraria expressão ("@@=↑") e a seta não sairia
         setas.character_set = "↑"
         camadas.append(setas)
-    visao = pdk.ViewState(**visao_inicial(recorte), **(VISAO_3D if em_3d else {}))
+    visao = visao_inicial(recorte) if imovel is None else visao_do_imovel(imovel, em_3d)
+    visao = pdk.ViewState(**visao, **(VISAO_3D if em_3d else {}))
     if st.session_state.get("fundo_interativo", True):
         # O fundo da Carto, claro ou escuro como o tema (é o que o Streamlit põe com map_style=None):
         # países, cidades, estradas e rios, da internet. Sem rede, só ele some
@@ -1734,7 +1783,7 @@ def grafico_da_variavel_na_estacao(serie: pd.DataFrame, produto: variaveis.Produ
 
 
 def variaveis_interativas(uf: str, recorte: config.Recorte, intervalo: tuple, estacoes: pd.DataFrame,
-                          inicio: datetime, fim: datetime) -> None:
+                          inicio: datetime, fim: datetime, imovel: car.Imovel | None = None) -> None:
     if not st.session_state.get("mapa_liberado"):
         st.info(f"O mapa usa as {len(estacoes)} estações do estado, mais as vizinhas para a borda. Na "
                 "primeira vez a consulta demora; depois vem do cache.")
@@ -1800,8 +1849,9 @@ def variaveis_interativas(uf: str, recorte: config.Recorte, intervalo: tuple, es
         pontos = interativo.com_direcao(pontos, setas)
     rumos = pd.concat([setas, variaveis.direcoes(produto, fatia_apoio)]) if not setas.empty else None
     celulas = celulas_do_ponto(valores, valores_apoio, produto.nome, rotulo, uf, rumos)
-    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos, celulas), on_select="rerun",
-                             selection_mode="single-object", key="mapa_variavel_interativo", height=ALTURA_MAPA)
+    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos, celulas, imovel=imovel),
+                             on_select="rerun", selection_mode="single-object",
+                             key=chave_do_mapa("mapa_variavel_interativo", imovel=imovel), height=ALTURA_MAPA)
     if niveis is not None:
         barra_no_mapa("escala_mapa_variavel_interativo", produto.paleta, tuple(niveis), produto.unidade)
     casas = produto.decimais
@@ -1815,6 +1865,9 @@ def variaveis_interativas(uf: str, recorte: config.Recorte, intervalo: tuple, es
     # No período inteiro, a série é a do dia: o produto do período é o diário somado no tempo
     modo_serie = variaveis.DIA if modo == variaveis.PERIODO else modo
     marca = None if momento is None else pd.Timestamp(momento).tz_localize(None)
+    if imovel is not None:
+        painel_do_imovel(produto, celulas, imovel, pd.concat([leituras, apoio], ignore_index=True), uf, modo_serie,
+                         marca)
     objetos = evento.selection.get("objects", {}) if evento is not None else {}
     if objetos.get("estacoes"):
         st.session_state["escolha_mapa_interativo"] = ("estacao", objetos["estacoes"][0]["titulo"])
@@ -1936,8 +1989,192 @@ def painel_da_chuva_no_ponto(celulas: pd.DataFrame, celula: int, leituras: pd.Da
                   "barras sai um pouco diferente do valor dele." if acumulado else "") + NAVEGAR_NO_GRAFICO)
 
 
+# O imóvel do CAR (ou o ponto informado) na barra lateral: nos três mapas, o painel dele abre
+# embaixo do mapa, com as células que ele toca. Nas variáveis e na chuva, a média das células;
+# no risco, o pior nível delas
+def celulas_dele(celulas: pd.DataFrame, imovel: car.Imovel, uf: str) -> pd.DataFrame | None:
+    dele = celulas[celulas["celula"].isin(celulas_do_imovel(imovel, imovel.chave, uf))]
+    if dele.empty:
+        st.warning(f"**{imovel.titulo}** não toca nenhuma célula de {uf}: fica fora do estado, ou a latitude e "
+                   "a longitude vieram trocadas (a latitude vem primeiro).")
+        return None
+    return dele
+
+
+def coordenadas_das_celulas(dele: pd.DataFrame, uf: str) -> tuple[np.ndarray, np.ndarray]:
+    grade = grade_do_ponto(uf)
+    indices = dele["celula"].to_numpy()
+    return np.ravel(grade.lon)[indices], np.ravel(grade.lat)[indices]
+
+
+def mais_perto_do_centro(dele: pd.DataFrame, imovel: car.Imovel) -> pd.Series:
+    lon, lat = imovel.centro
+    return dele.iloc[int(np.argmin(np.hypot(dele["Longitude"] - lon, dele["Latitude"] - lat)))]
+
+
+def cabecalho_do_imovel(imovel: car.Imovel, dele: pd.DataFrame, linha_do_valor: str, uf: str, conta: str) -> None:
+    lon, lat = imovel.centro
+    perto = mais_perto_do_centro(dele, imovel)
+    lado = 2 * grade_do_ponto(uf).meio_passo[1] * interativo.METROS_POR_GRAU / 1000
+    coordenadas = f"{abs(lat):.2f}° S, {abs(lon):.2f}° O".replace(".", ",")
+    st.subheader(f"{imovel.titulo} · {perto['titulo']} · {coordenadas}")
+    st.markdown(linha_do_valor)
+    quantas = f"{len(dele)} {'célula' if len(dele) == 1 else 'células'} da grade de ~{lado:.0f} km"
+    de_onde = "do ponto" if imovel.ponto else "do centro do imóvel"
+    st.caption(" · ".join(parte for parte in (imovel.detalhe, quantas) if parte)
+               + f", em magenta no mapa. Estação mais próxima {de_onde}: **{perto['mais_proxima']}**, a "
+                 f"{perto['km']:.0f} km. {conta}")
+
+
+def painel_do_imovel(produto: variaveis.Produto, celulas: pd.DataFrame, imovel: car.Imovel, leituras: pd.DataFrame,
+                     uf: str, modo_serie: str, marca) -> None:
+    # Nas variáveis: a média das células no instante do mapa e a série da média, com o IDW refeito
+    # em cada célula a cada instante
+    dele = celulas_dele(celulas, imovel, uf)
+    if dele is None:
+        return
+    cabecalho_do_imovel(imovel, dele, f"**{produto.nome} {imovel.onde}:** "
+                                      f"{car.resumo(dele['valor'], produto.decimais, produto.unidade)}", uf,
+                        conta="Cada célula leva o IDW das estações, o mesmo que pinta o mapa.")
+    if modo_serie not in produto.modos:
+        st.info(f"{produto.nome} só existe para o período inteiro: não há série dia a dia.")
+        return
+    lons, lats = coordenadas_das_celulas(dele, uf)
+    serie = interativo.serie_do_ponto(produto, leituras, coordenadas_das_estacoes(uf), lons, lats, modo_serie,
+                                      grade_do_ponto(uf).centro)
+    if serie.empty:
+        st.info(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram {produto.nome.lower()} no período.")
+        return
+    st.altair_chart(grafico_da_variavel_na_estacao(serie, produto, modo_serie == variaveis.DIA, marca),
+                    width="stretch")
+    st.caption(f"{produto.nome} {imovel.onde}, " + ("dia a dia" if modo_serie == variaveis.DIA else "hora a hora")
+               + " no período" + (f": a média das {len(dele)} células." if len(dele) > 1 else ".")
+               + (" A linha azul é o instante do mapa." if marca is not None else "") + NAVEGAR_NO_GRAFICO)
+
+
+def painel_da_chuva_no_imovel(celulas: pd.DataFrame, imovel: car.Imovel, leituras: pd.DataFrame, uf: str,
+                              legenda: str, quando: str, de, ate, por_dia: bool, acumulado: bool) -> None:
+    dele = celulas_dele(celulas, imovel, uf)
+    if dele is None:
+        return
+    cabecalho_do_imovel(imovel, dele, f"**{legenda} {imovel.onde}, {quando}:** {car.resumo(dele['valor'], 1, 'mm')}",
+                        uf, conta="Cada célula leva o IDW das estações, o mesmo que pinta o mapa.")
+    lons, lats = coordenadas_das_celulas(dele, uf)
+    serie = interativo.serie_da_chuva_no_ponto(leituras, coordenadas_das_estacoes(uf), lons, lats, de, ate, por_dia,
+                                               grade_do_ponto(uf).centro)
+    if serie.empty:
+        st.info(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram a chuva nessa janela.")
+        return
+    total = f"{serie['acumulado'].iloc[-1]:.1f}".replace(".", ",")
+    st.altair_chart(grafico_da_chuva_na_estacao(serie, por_dia), width="stretch")
+    st.caption(f"A chuva {imovel.onde} em cada {'dia' if por_dia else 'hora'}"
+               + (f" (a média das {len(dele)} células)" if len(dele) > 1 else "")
+               + f", de {de:%d/%m %H:%M} a {ate:%d/%m %H:%M}: {total} mm somados. A linha tracejada é o acumulado."
+               + (" O mapa interpola o total de cada estação; quando alguma deixou de mandar horas, a soma das "
+                  "barras sai um pouco diferente do valor dele." if acumulado else "") + NAVEGAR_NO_GRAFICO)
+
+
+def painel_do_risco_no_imovel(celulas: pd.DataFrame, imovel: car.Imovel, avaliadas: dict, uf: str, legenda: str,
+                              fuso, hora_local) -> None:
+    # No risco, o imóvel leva o pior nível das células dele, e as três medidas são as da célula de
+    # pior nível (entre as de mesmo nível, a mais perto do centro do imóvel)
+    dele = celulas_dele(celulas, imovel, uf)
+    if dele is None:
+        return
+    pior = int(dele["nivel"].max())
+    com_o_pior = dele[dele["nivel"] == pior]
+    escolhida = mais_perto_do_centro(com_o_pior, imovel)
+    quantas = ("" if len(dele) == 1 else f", nas {len(dele)} células" if len(com_o_pior) == len(dele)
+               else f", em {len(com_o_pior)} das {len(dele)} células")
+    nivel = f"{config.ROTULOS_RISCO[pior]} ({pior} de 3){quantas}"
+    cabecalho_do_imovel(imovel, dele, f"**{imovel.onde.capitalize()}, {legenda.lower()}:** {nivel}", uf,
+                        conta="A regra 30-30-30 é aplicada célula a célula, às três medidas interpoladas pelo IDW"
+                              + ("." if imovel.ponto else "; o imóvel leva o pior nível das células dele."))
+    grade = grade_do_ponto(uf)
+    serie = interativo.serie_do_risco_no_ponto(avaliadas, float(np.ravel(grade.lon)[escolhida["celula"]]),
+                                               float(np.ravel(grade.lat)[escolhida["celula"]]), grade.centro, fuso)
+    if serie.empty:
+        return
+    for grafico in graficos_do_risco(serie, hora_local):
+        st.altair_chart(grafico, width="stretch")
+    st.caption("As três medidas interpoladas hora a hora "
+               + ("na célula do ponto" if imovel.ponto else "na célula de pior nível do imóvel")
+               + (", a mais perto do centro dele entre as de mesmo nível" if len(com_o_pior) > 1 else "")
+               + f". A linha tracejada é o limiar de cada condição ({config.LIMIAR_TEMP_MAX:g} °C, "
+                 f"{config.LIMIAR_UMIDADE_MIN:g} % e {config.LIMIAR_RAJADA:g} km/h); os pontos vermelhos, as horas "
+                 "em que ela valeu." + (" A linha azul é a hora do mapa." if hora_local is not None else "")
+               + NAVEGAR_NO_GRAFICO)
+
+
+@st.cache_data(show_spinner="Lendo o shapefile do CAR", max_entries=3)
+def camadas_do_car(arquivos: tuple[tuple[str, bytes], ...]) -> dict[str, tuple[gpd.GeoDataFrame, list[str]]]:
+    lidas = {}
+    for nome, partes in car.camadas(list(arquivos)).items():
+        tabela = car.ler_camada(partes)
+        lidas[nome] = (tabela, car.rotulos(tabela))
+    return lidas
+
+
+def imovel_da_barra() -> car.Imovel | None:
+    # Na barra lateral: o shapefile do CAR (um imóvel por vez) ou as coordenadas de um ponto. O
+    # arquivo fica só na memória: não é gravado
+    entrada = st.radio("Imóvel do CAR", ["Nenhum", "Shapefile", "Coordenadas"], horizontal=True,
+                       key="imovel_entrada", help="Para ver as condições num imóvel: nos três mapas aparecem o contorno dele e as células "
+                            "da grade que ele toca, e o painel do imóvel abre embaixo do mapa. O arquivo fica só "
+                            "na memória: não é gravado.")
+    imovel = None
+    if entrada == "Shapefile":
+        arquivos = st.file_uploader("Shapefile do CAR", type=["zip", "shp", "shx", "dbf", "prj", "cpg"],
+                                    accept_multiple_files=True, key="imovel_arquivos",
+                                    help="O .zip que o SICAR entrega, ou o .shp junto com o .dbf, o .shx e o .prj.")
+        if arquivos:
+            try:
+                lidas = camadas_do_car(tuple((arquivo.name, arquivo.getvalue()) for arquivo in arquivos))
+            except car.ErroDoArquivo as erro:
+                st.error(str(erro))
+                lidas = None
+            if lidas == {}:
+                st.error("Nenhum shapefile completo no que veio: cada um precisa do .shp, do .shx e do .dbf.")
+            elif lidas:
+                nomes = sorted(lidas)
+                camada = nomes[0] if len(nomes) == 1 else st.selectbox(
+                    "Camada", nomes, index=nomes.index(car.camada_padrao(nomes)), key="imovel_camada",
+                    help="O .zip de um imóvel do SICAR traz uma camada por tema; a da área do imóvel vem primeiro.")
+                tabela, rotulos = lidas[camada]
+                if tabela.empty:
+                    st.warning("A camada não tem nenhum desenho.")
+                else:
+                    posicao = 0 if len(tabela) == 1 else st.selectbox(
+                        f"Imóvel ({len(tabela)} no arquivo)", range(len(tabela)), format_func=rotulos.__getitem__,
+                        key=f"imovel_escolhido_{camada}", help="Digite parte do código do CAR para procurar.")
+                    imovel = car.imovel_da_linha(tabela, posicao)
+    elif entrada == "Coordenadas":
+        texto = st.text_input("Latitude e longitude", key="imovel_coordenadas", placeholder="-20.4697, -54.6201",
+                              help="A latitude primeiro, como sai do Google Maps, com ponto ou vírgula decimal; ou "
+                                   "em graus, minutos e segundos: 20°28'11\" S 54°37'12\" O.")
+        if texto.strip():
+            try:
+                imovel = car.imovel_do_ponto(*car.ler_coordenadas(texto))
+            except ValueError as erro:
+                st.error(str(erro))
+    # Imóvel novo: a escolha de antes (o ponto ou a estação clicada) sai, e o painel dele fica sozinho
+    chave = imovel.chave if imovel is not None else None
+    if chave != st.session_state.get("imovel_chave"):
+        for nome in ESCOLHAS_INTERATIVAS:
+            st.session_state.pop(nome, None)
+        st.session_state["imovel_chave"] = chave
+    return imovel
+
+
+def chave_do_mapa(nome: str, em_3d: bool = False, imovel: car.Imovel | None = None) -> str:
+    # Uma chave para cada modo e para cada imóvel: depois que a pessoa mexe no mapa, o Streamlit
+    # guarda a câmera, e sem a chave nova o mapa não inclinaria, não voltaria a ficar plano nem
+    # abriria no imóvel novo
+    return nome + ("_3d" if em_3d else "") + (f"_{imovel.chave}" if imovel is not None else "")
+
+
 def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, inicio: datetime,
-                     fim: datetime) -> None:
+                     fim: datetime, imovel: car.Imovel | None = None) -> None:
     horas_do_periodo = pd.date_range(inicio.astimezone(recorte.fuso) + pd.Timedelta(hours=1),
                                      fim.astimezone(recorte.fuso), freq="h")
     # Uma consulta só, que fecha o mensal de qualquer instante do período
@@ -2029,11 +2266,9 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
         pontos = pontos.assign(altura=pontos["Estação"].map(valores).fillna(0).to_numpy(dtype=float) * por_unidade)
     else:
         imagem, relevo = camada_superficie(valores, produto.nome, quando, uf, niveis, valores_apoio), None
-    # Uma chave para cada modo: depois que a pessoa mexe no mapa, o Streamlit guarda a câmera, e ao
-    # ligar ou desligar o 3D o mapa não inclinaria nem voltaria a ficar plano
-    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos, celulas, relevo=relevo),
+    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos, celulas, relevo=relevo, imovel=imovel),
                              on_select="rerun", selection_mode="single-object",
-                             key="mapa_chuva_interativa" + ("_3d" if em_3d else ""), height=ALTURA_MAPA)
+                             key=chave_do_mapa("mapa_chuva_interativa", em_3d, imovel), height=ALTURA_MAPA)
     if niveis is not None:
         barra_no_mapa("escala_mapa_chuva_interativa", produto.paleta, niveis, produto.unidade)
     if medidas.max() == 0:
@@ -2054,6 +2289,9 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
     tipo, escolhida = st.session_state.get("escolha_chuva_interativa", (None, None))
     # Hora a hora até 4 dias; mais que isso, por dia, para as barras caberem
     por_dia = (serie_ate - serie_de) > timedelta(days=4)
+    if imovel is not None:
+        painel_da_chuva_no_imovel(celulas, imovel, pd.concat([leituras, apoio], ignore_index=True), uf, legenda,
+                                  quando, serie_de, serie_ate, por_dia, modo == "Acumulado")
     if tipo == "ponto":
         painel_da_chuva_no_ponto(celulas, escolhida, pd.concat([leituras, apoio], ignore_index=True), uf, legenda,
                                  quando, serie_de, serie_ate, por_dia, modo == "Acumulado")
@@ -2071,7 +2309,7 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
 
 
 def risco_interativo(uf: str, recorte: config.Recorte, intervalo: tuple, estacoes: pd.DataFrame,
-                     inicio: datetime, fim: datetime) -> None:
+                     inicio: datetime, fim: datetime, imovel: car.Imovel | None = None) -> None:
     if not st.session_state.get("mapa_liberado"):
         st.info(f"O mapa usa as {len(estacoes)} estações do estado, mais as vizinhas para a borda. Na "
                 "primeira vez a consulta demora; depois vem do cache.")
@@ -2143,10 +2381,9 @@ def risco_interativo(uf: str, recorte: config.Recorte, intervalo: tuple, estacoe
     else:
         imagem, relevo = interativo.imagem_de_classes(grade, malha_fina(uf).dentro), None
     mapa = mapa_interativo(imagem, pontos, uf, escritos, celulas, interativo.COR_DO_PONTO_ESCOLHIDO_NO_RISCO,
-                           relevo)
-    # Uma chave para cada modo, como na chuva: o 3D abre inclinado, e o plano volta reto
+                           relevo, imovel)
     evento = st.pydeck_chart(mapa, on_select="rerun", selection_mode="single-object",
-                             key="mapa_risco_interativo" + ("_3d" if em_3d else ""), height=ALTURA_MAPA)
+                             key=chave_do_mapa("mapa_risco_interativo", em_3d, imovel), height=ALTURA_MAPA)
     escala_no_mapa("escala_mapa_risco_interativo", legenda_do_risco(vertical=True))
     st.caption("Role para aproximar, arraste para deslocar, passe o mouse em qualquer ponto para ver o nível"
                + (" e as três medidas interpoladas" if com_medidas else " e as horas em risco alto")
@@ -2156,6 +2393,8 @@ def risco_interativo(uf: str, recorte: config.Recorte, intervalo: tuple, estacoe
                + (f" No relevo, cada nível sobe {interativo.metros_por_nivel() / 1000:.0f} km; **arraste com o "
                   "botão direito** para inclinar e girar." if em_3d else ""))
 
+    if imovel is not None:
+        painel_do_risco_no_imovel(celulas, imovel, avaliadas, uf, legenda, recorte.fuso, hora_local)
     # O ponto ou a estação clicada fica escolhida enquanto o deslizante anda, até outro clique
     objetos = evento.selection.get("objects", {}) if evento is not None else {}
     celula_clicada = objetos.get("pontos") or objetos.get(PONTOS_NO_RELEVO)
@@ -2194,17 +2433,18 @@ def pagina_mapas_interativos() -> None:
                     help="Países, cidades, estradas e rios, para ver além do estado. Vem da internet: sem rede, o "
                          "fundo some e o resto do mapa continua. Desligado, ficam só os limites do estado e dos "
                          "municípios.")
+        imovel = imovel_da_barra()
     inicio, fim = janela_do_periodo(intervalo, recorte)
     st.caption("Os mapas do boletim continuam no Painel. Aqui eles se aproximam, se arrastam e respondem "
                "ao clique. O mapa de fundo vem da internet e pode ser desligado na barra lateral; o resto é "
                "desenhado aqui, com os limites do estado e dos municípios.")
     aba_mapas_interativos, aba_chuva_interativa, aba_risco_interativo = st.tabs(["Mapas", "Chuva", "Risco de Fogo"])
     with aba_mapas_interativos:
-        variaveis_interativas(uf, recorte, intervalo, estacoes, inicio, fim)
+        variaveis_interativas(uf, recorte, intervalo, estacoes, inicio, fim, imovel)
     with aba_chuva_interativa:
-        chuva_interativa(uf, recorte, estacoes, inicio, fim)
+        chuva_interativa(uf, recorte, estacoes, inicio, fim, imovel)
     with aba_risco_interativo:
-        risco_interativo(uf, recorte, intervalo, estacoes, inicio, fim)
+        risco_interativo(uf, recorte, intervalo, estacoes, inicio, fim, imovel)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)

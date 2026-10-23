@@ -336,7 +336,8 @@ def celulas_do_risco(grade: GradeDoPonto, niveis: np.ndarray, legenda: str, esta
 def serie_do_ponto(produto, leituras: pd.DataFrame, coordenadas: pd.DataFrame, lon: float, lat: float,
                    modo: str, centro: tuple[float, float]) -> pd.DataFrame:
     # A variável do mapa no ponto, hora a hora ou dia a dia: a cada instante, o IDW das estações que
-    # mediram. Com menos de MIN_ESTACOES_INTERPOLACAO, o instante fica sem valor, como no mapa
+    # mediram. Com menos de MIN_ESTACOES_INTERPOLACAO, o instante fica sem valor, como no mapa. Com
+    # vários pontos (as células de um imóvel do CAR), a média deles a cada instante
     vazia = pd.DataFrame(columns=["quando", "valor"])
     largo = variaveis.no_tempo(produto, leituras, modo)
     posicoes = coordenadas.drop_duplicates("Estação").set_index("Estação")[["Longitude", "Latitude"]]
@@ -345,9 +346,11 @@ def serie_do_ponto(produto, leituras: pd.DataFrame, coordenadas: pd.DataFrame, l
     largo = largo[[estacao for estacao in largo.columns if estacao in posicoes.index]]
     if largo.shape[1] == 0:
         return vazia
-    valores = calculos.idw_no_tempo(posicoes.loc[largo.columns, "Longitude"], posicoes.loc[largo.columns, "Latitude"],
-                                    largo.to_numpy(dtype=float), lon, lat, centro,
-                                    config.IDW_VIZINHOS, config.IDW_POTENCIA)
+    medidas = largo.to_numpy(dtype=float)
+    valores = np.mean([calculos.idw_no_tempo(posicoes.loc[largo.columns, "Longitude"],
+                                             posicoes.loc[largo.columns, "Latitude"], medidas, x, y, centro,
+                                             config.IDW_VIZINHOS, config.IDW_POTENCIA)
+                       for x, y in zip(np.atleast_1d(lon), np.atleast_1d(lat))], axis=0)
     valores[largo.notna().sum(axis=1).to_numpy() < config.MIN_ESTACOES_INTERPOLACAO] = np.nan
     quando = pd.to_datetime(largo.index)
     if quando.tz is not None:
@@ -410,8 +413,9 @@ def serie_da_chuva(leituras: pd.DataFrame, nome: str, de, ate, por_dia: bool) ->
 def serie_da_chuva_no_ponto(leituras: pd.DataFrame, coordenadas: pd.DataFrame, lon: float, lat: float, de, ate,
                             por_dia: bool, centro: tuple[float, float]) -> pd.DataFrame:
     # A chuva num ponto em (de, ate], por hora ou por dia, com o acumulado: a cada hora (ou dia), o IDW
-    # das estações que mediram. O mapa interpola o total de cada estação; quando alguma deixou de
-    # mandar horas, a soma das horas interpoladas sai um pouco diferente dele
+    # das estações que mediram (com vários pontos, a média deles, como em serie_do_ponto). O mapa
+    # interpola o total de cada estação; quando alguma deixou de mandar horas, a soma das horas
+    # interpoladas sai um pouco diferente dele
     janela = leituras[(leituras["dt_local"] > de) & (leituras["dt_local"] <= ate)]
     produto, modo = ((variaveis.por_nome("Chuva acumulada"), variaveis.DIA) if por_dia
                      else (variaveis.por_nome("Chuva na hora"), variaveis.HORA))
