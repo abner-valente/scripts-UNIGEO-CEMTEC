@@ -274,6 +274,22 @@ def relevo(celulas: pd.DataFrame, paleta: str, niveis, medidas: pd.Series, por_u
         "pintada": pintada})
 
 
+def metros_por_nivel(cores: list[str] = config.CORES_RISCO) -> float:
+    # Nas classes (o risco), um degrau por nível, com o mais alto no topo
+    return ALTURA_DO_TETO / (len(cores) - 1)
+
+
+def relevo_de_classes(celulas: pd.DataFrame, cores: list[str] = config.CORES_RISCO) -> pd.DataFrame:
+    # O mesmo formato de `relevo`, com a altura e a cor do nível de cada célula. O nível 0 fica no
+    # chão, mas pintado, como no mapa plano
+    nivel = celulas["nivel"].to_numpy(dtype=int)
+    paleta = [rgba(cor, int(255 * OPACIDADE_DO_RELEVO)) for cor in cores]
+    return pd.DataFrame({
+        "Longitude": celulas["Longitude"].to_numpy(), "Latitude": celulas["Latitude"].to_numpy(),
+        "cor": [paleta[valor] for valor in nivel], "altura": nivel * metros_por_nivel(cores),
+        "pintada": np.ones(len(nivel), dtype=bool)})
+
+
 def celulas_do_risco(grade: GradeDoPonto, niveis: np.ndarray, legenda: str, estacoes: pd.DataFrame,
                      com_medidas: bool, horas_alto: np.ndarray | None = None) -> pd.DataFrame:
     # O nível de cada célula é o que pinta o mapa. Hora a hora, o balão traz as três medidas

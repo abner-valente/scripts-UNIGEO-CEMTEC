@@ -311,6 +311,20 @@ def test_a_altura_vem_do_topo_da_escala_ou_do_maior_valor_medido():
     assert interativo.metros_por_unidade(None, pd.Series([0.0, 0.0])) == 0.0                         # sem chuva, plano
 
 
+def test_no_risco_cada_nivel_sobe_um_degrau_com_a_cor_dele():
+    celulas = pd.DataFrame({"Longitude": [-55.0, -54.9, -54.8, -54.7], "Latitude": [-20.0] * 4,
+                            "nivel": [0, 1, 2, 3]})
+
+    relevo = interativo.relevo_de_classes(celulas)
+
+    assert interativo.metros_por_nivel() == pytest.approx(interativo.ALTURA_DO_TETO / 3)
+    np.testing.assert_allclose(relevo["altura"], np.arange(4) * interativo.metros_por_nivel())
+    alfa = int(255 * interativo.OPACIDADE_DO_RELEVO)
+    assert relevo["cor"].tolist() == [interativo.rgba(cor, alfa) for cor in config.CORES_RISCO]
+    assert relevo["pintada"].all()                                         # o nível 0 fica no chão, pintado
+    assert list(relevo.columns) == interativo.COLUNAS_DO_RELEVO + ["pintada"]
+
+
 def test_o_bloco_cobre_a_celula_mais_larga_sem_fresta():
     # Células de 0,12° × 0,10°: no norte (17° S), a largura em metros ganha da altura
     lat = np.array([[-24.0], [-17.0]])

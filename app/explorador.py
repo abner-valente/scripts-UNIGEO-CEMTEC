@@ -1514,14 +1514,32 @@ def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos:
                     celulas: pd.DataFrame | None = None,
                     escolhido: list[int] = interativo.COR_DO_PONTO_ESCOLHIDO,
                     relevo: pd.DataFrame | None = None) -> pdk.Deck:
-    # Com o relevo (o 3D, de interativo.relevo), os blocos tomam o lugar da imagem, e as estações
-    # sobem à altura que vem na coluna "altura" dos pontos
+    # Com o relevo (o 3D, de interativo.relevo ou relevo_de_classes), os blocos tomam o lugar da
+    # imagem, e as estações sobem à altura que vem na coluna "altura" dos pontos
     recorte = config.recorte_de(uf)
     estado, municipios = contornos_interativos(uf)
     com_celulas = celulas is not None and not celulas.empty
     em_3d = com_celulas and relevo is not None
     camadas = []
-    if not em_3d:
+    if em_3d:
+        # Os blocos vão numa GridCellLayer porque, no clique, o Streamlit apaga para 40% as camadas que
+        # conhece (PolygonLayer, ColumnLayer...), e o relevo inteiro ficaria translúcido; esta ele deixa
+        # como está. A grade que responde ao mouse vai por cima, em colunas de quatro lados com a mesma
+        # medida e a mesma altura dos blocos: o balão é o do bloco sob o cursor, e o escolhido fica na
+        # cor dele a 50%, como no mapa plano (veja abaixo). O nome é outro que o da grade plana: com o
+        # mesmo, ao ligar o 3D, o deck.gl passaria o estado da camada plana à de colunas, e ela quebra.
+        # Os limites vêm depois, como sobre a imagem: no chão, por cima do que fica no nível 0
+        lado = interativo.lado_do_bloco(grade_do_ponto(uf))
+        camadas.append(pdk.Layer(
+            "GridCellLayer", data=relevo.loc[relevo["pintada"], interativo.COLUNAS_DO_RELEVO], id="relevo",
+            get_position=["Longitude", "Latitude"], cell_size=lado, offset=[0, 0], extruded=True,
+            get_elevation="altura", get_fill_color="cor", pickable=False))
+        camadas.append(pdk.Layer(
+            "ColumnLayer", data=celulas[interativo.COLUNAS_DA_CAMADA].assign(altura=relevo["altura"].to_numpy()),
+            id=PONTOS_NO_RELEVO, get_position=["Longitude", "Latitude"], disk_resolution=4, angle=45,
+            radius=lado / math.sqrt(2), extruded=True, get_elevation="altura", get_fill_color=[*escolhido, 2],
+            opacity=0.5, pickable=True))
+    else:
         # A imagem entra depois de criada a camada: passada no construtor, o pydeck a trataria como
         # expressão a ser avaliada no navegador ("@@=data:image/png;...")
         campo = pdk.Layer("BitmapLayer", data=None, bounds=superficie.limites(recorte))
@@ -1540,24 +1558,7 @@ def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos:
         pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[25, 25, 25],
                   line_width_min_pixels=1.6),
     ]
-    if em_3d:
-        # Os blocos vão numa GridCellLayer porque, no clique, o Streamlit apaga para 40% as camadas que
-        # conhece (PolygonLayer, ColumnLayer...), e o relevo inteiro ficaria translúcido; esta ele deixa
-        # como está. A grade que responde ao mouse vai por cima, em colunas de quatro lados com a mesma
-        # medida e a mesma altura dos blocos: o balão é o do bloco sob o cursor, e o escolhido fica
-        # vermelho a 50%, como no mapa plano (veja abaixo). O nome é outro que o da grade plana: com o
-        # mesmo, ao ligar o 3D, o deck.gl passaria o estado da camada plana à de colunas, e ela quebra
-        lado = interativo.lado_do_bloco(grade_do_ponto(uf))
-        camadas.append(pdk.Layer(
-            "GridCellLayer", data=relevo.loc[relevo["pintada"], interativo.COLUNAS_DO_RELEVO], id="relevo",
-            get_position=["Longitude", "Latitude"], cell_size=lado, offset=[0, 0], extruded=True,
-            get_elevation="altura", get_fill_color="cor", pickable=False))
-        camadas.append(pdk.Layer(
-            "ColumnLayer", data=celulas[interativo.COLUNAS_DA_CAMADA].assign(altura=relevo["altura"].to_numpy()),
-            id=PONTOS_NO_RELEVO, get_position=["Longitude", "Latitude"], disk_resolution=4, angle=45,
-            radius=lado / math.sqrt(2), extruded=True, get_elevation="altura", get_fill_color=[*escolhido, 2],
-            opacity=0.5, pickable=True))
-    elif com_celulas:
+    if com_celulas and not em_3d:
         # A grade invisível do valor em qualquer ponto, por cima dos municípios (o balão dela já traz
         # o nome do município) e por baixo das estações, que continuam respondendo ao clique. O
         # quadrado de cada célula sai do centro no navegador, para não mandar quatro cantos por célula.
@@ -2119,31 +2120,49 @@ def risco_interativo(uf: str, recorte: config.Recorte, intervalo: tuple, estacoe
     if modo != variaveis.HORA:
         das_celulas = pd.concat([avaliada.estacoes for avaliada in avaliadas.values()]).drop_duplicates("Estação")
     # As vizinhas já entraram na superfície; nos pontos, só as do estado
-    pontos = interativo.pontos_de_risco(pontos[pontos["Estação"].isin(nomes_do_estado)], coluna, legenda)
+    do_estado = pontos[pontos["Estação"].isin(nomes_do_estado)]
+    nivel_da_estacao = do_estado.drop_duplicates("Estação").set_index("Estação")[coluna]
+    pontos = interativo.pontos_de_risco(do_estado, coluna, legenda)
 
-    escritos = st.checkbox("Mostrar o nível de cada estação", value=True, key="niveis_risco_interativo",
-                           help="O número sobre cada estação. Desligado, fica só a cor do ponto.")
-    imagem = interativo.imagem_de_classes(grade, malha_fina(uf).dentro)
+    mostrar, relevo_tela = st.columns([1, 1])
+    with mostrar:
+        escritos = st.checkbox("Mostrar o nível de cada estação", value=True, key="niveis_risco_interativo",
+                               help="O número sobre cada estação. Desligado, fica só a cor do ponto.")
+    with relevo_tela:
+        em_3d = st.checkbox("Relevo 3D", value=False, key="relevo_risco_interativo",
+                            help="O nível vira altura: cada nível sobe um degrau, e o risco alto chega a 100 km; "
+                                 "o mapa abre inclinado. Arraste com o botão direito para inclinar e girar.")
     com_medidas = modo == variaveis.HORA
     colunas = ["Estação", "Longitude", "Latitude"] + (list(interativo.MEDIDAS_DO_RISCO) if com_medidas else [])
     celulas = celulas_do_risco(grade, das_celulas[colunas].reset_index(drop=True), legenda, uf, com_medidas,
                                horas_alto)
-    mapa = mapa_interativo(imagem, pontos, uf, escritos, celulas, interativo.COR_DO_PONTO_ESCOLHIDO_NO_RISCO)
-    evento = st.pydeck_chart(mapa, on_select="rerun", selection_mode="single-object", key="mapa_risco_interativo",
-                             height=ALTURA_MAPA)
+    if em_3d:
+        imagem, relevo = None, interativo.relevo_de_classes(celulas)
+        pontos = pontos.assign(altura=pontos["Estação"].map(nivel_da_estacao).to_numpy(dtype=float)
+                               * interativo.metros_por_nivel())
+    else:
+        imagem, relevo = interativo.imagem_de_classes(grade, malha_fina(uf).dentro), None
+    mapa = mapa_interativo(imagem, pontos, uf, escritos, celulas, interativo.COR_DO_PONTO_ESCOLHIDO_NO_RISCO,
+                           relevo)
+    # Uma chave para cada modo, como na chuva: o 3D abre inclinado, e o plano volta reto
+    evento = st.pydeck_chart(mapa, on_select="rerun", selection_mode="single-object",
+                             key="mapa_risco_interativo" + ("_3d" if em_3d else ""), height=ALTURA_MAPA)
     escala_no_mapa("escala_mapa_risco_interativo", legenda_do_risco(vertical=True))
     st.caption("Role para aproximar, arraste para deslocar, passe o mouse em qualquer ponto para ver o nível"
                + (" e as três medidas interpoladas" if com_medidas else " e as horas em risco alto")
                + ", e **clique** para ver as três medidas do ponto, ou as de uma estação, no período. A superfície "
                "é a mesma do mapa do boletim: as três variáveis interpoladas separadas e a regra aplicada célula a "
-               "célula.")
+               "célula."
+               + (f" No relevo, cada nível sobe {interativo.metros_por_nivel() / 1000:.0f} km; **arraste com o "
+                  "botão direito** para inclinar e girar." if em_3d else ""))
 
     # O ponto ou a estação clicada fica escolhida enquanto o deslizante anda, até outro clique
     objetos = evento.selection.get("objects", {}) if evento is not None else {}
+    celula_clicada = objetos.get("pontos") or objetos.get(PONTOS_NO_RELEVO)
     if objetos.get("estacoes"):
         st.session_state["escolha_risco_interativo"] = ("estacao", objetos["estacoes"][0]["titulo"])
-    elif objetos.get("pontos"):
-        st.session_state["escolha_risco_interativo"] = ("ponto", int(objetos["pontos"][0]["celula"]))
+    elif celula_clicada:
+        st.session_state["escolha_risco_interativo"] = ("ponto", int(celula_clicada[0]["celula"]))
     tipo, escolhida = st.session_state.get("escolha_risco_interativo", (None, None))
     if tipo == "ponto":
         painel_do_risco_no_ponto(celulas, escolhida, avaliadas, uf, legenda, recorte.fuso, hora_local)
