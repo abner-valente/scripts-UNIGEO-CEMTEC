@@ -2106,48 +2106,66 @@ def painel_do_risco_no_imovel(celulas: pd.DataFrame, imovel: car.Imovel, avaliad
                + NAVEGAR_NO_GRAFICO)
 
 
-@st.cache_data(show_spinner="Lendo o shapefile do CAR", max_entries=3)
-def camadas_do_car(arquivos: tuple[tuple[str, bytes], ...]) -> dict[str, tuple[gpd.GeoDataFrame, list[str]]]:
+@st.cache_data(show_spinner="Lendo o arquivo do imóvel", max_entries=3)
+def camadas_do_car(arquivos: tuple[tuple[str, bytes], ...]) -> tuple[dict[str, tuple[gpd.GeoDataFrame, list[str]]],
+                                                                     list[str]]:
+    # As camadas com desenho, cada uma com os rótulos dos imóveis, e o que ficou de fora, com o porquê
+    fontes, de_fora = car.fontes(list(arquivos))
     lidas = {}
-    for nome, partes in car.camadas(list(arquivos)).items():
-        tabela = car.ler_camada(partes)
+    for nome, fonte in fontes.items():
+        try:
+            tabela = car.ler(fonte)
+        except car.ErroDoArquivo as erro:
+            de_fora.append(f"{nome}: {erro}")
+            continue
+        if tabela.empty:
+            de_fora.append(f"{nome}: sem nenhum desenho")
+            continue
         lidas[nome] = (tabela, car.rotulos(tabela))
-    return lidas
+    return lidas, de_fora
 
 
 def imovel_da_barra() -> car.Imovel | None:
-    # Na barra lateral: o shapefile do CAR (um imóvel por vez) ou as coordenadas de um ponto. O
-    # arquivo fica só na memória: não é gravado
-    entrada = st.radio("Imóvel do CAR", ["Nenhum", "Shapefile", "Coordenadas"], horizontal=True,
-                       key="imovel_entrada", help="Para ver as condições num imóvel: nos três mapas aparecem o contorno dele e as células "
+    # Na barra lateral: as coordenadas de um ponto ou os arquivos do imóvel (um imóvel por vez), com
+    # o tipo de cada arquivo reconhecido pelo conteúdo. O arquivo fica só na memória: não é gravado
+    entrada = st.radio("Imóvel do CAR", ["Nenhum", "Coordenadas", "Arquivos"], horizontal=True,
+                       key="imovel_entrada",
+                       help="Para ver as condições num imóvel: nos três mapas aparecem o contorno dele e as células "
                             "da grade que ele toca, e o painel do imóvel abre embaixo do mapa. O arquivo fica só "
                             "na memória: não é gravado.")
     imovel = None
-    if entrada == "Shapefile":
-        arquivos = st.file_uploader("Shapefile do CAR", type=["zip", "shp", "shx", "dbf", "prj", "cpg"],
-                                    accept_multiple_files=True, key="imovel_arquivos",
-                                    help="O .zip que o SICAR entrega, ou o .shp junto com o .dbf, o .shx e o .prj.")
+    if entrada == "Arquivos":
+        # Sem filtro de extensão: o tipo sai do conteúdo, e o que não for mapa fica de fora com aviso
+        arquivos = st.file_uploader("Arquivos do imóvel", accept_multiple_files=True, key="imovel_arquivos",
+                                    help="Shapefile (o .zip do SICAR, ou o .shp com o .dbf, o .shx e o .prj), "
+                                         "GeoJSON, GeoPackage, KML ou KMZ, soltos ou num .zip. O tipo de cada um é "
+                                         "reconhecido pelo conteúdo.")
         if arquivos:
             try:
-                lidas = camadas_do_car(tuple((arquivo.name, arquivo.getvalue()) for arquivo in arquivos))
+                lidas, de_fora = camadas_do_car(tuple((arquivo.name, arquivo.getvalue()) for arquivo in arquivos))
             except car.ErroDoArquivo as erro:
                 st.error(str(erro))
-                lidas = None
-            if lidas == {}:
-                st.error("Nenhum shapefile completo no que veio: cada um precisa do .shp, do .shx e do .dbf.")
-            elif lidas:
+                lidas, de_fora = {}, []
+            if de_fora:
+                st.caption("Ficou de fora: " + "; ".join(de_fora) + ".")
+            if not lidas:
+                st.error("Nenhum mapa com desenho no que veio. Valem shapefile (com o .shp, o .shx e o .dbf), "
+                         "GeoJSON, GeoPackage, KML e KMZ.")
+            else:
                 nomes = sorted(lidas)
-                camada = nomes[0] if len(nomes) == 1 else st.selectbox(
-                    "Camada", nomes, index=nomes.index(car.camada_padrao(nomes)), key="imovel_camada",
-                    help="O .zip de um imóvel do SICAR traz uma camada por tema; a da área do imóvel vem primeiro.")
-                tabela, rotulos = lidas[camada]
-                if tabela.empty:
-                    st.warning("A camada não tem nenhum desenho.")
+                if len(nomes) == 1:
+                    camada = nomes[0]
+                    st.caption(f"Reconhecido: **{camada}**.")
                 else:
-                    posicao = 0 if len(tabela) == 1 else st.selectbox(
-                        f"Imóvel ({len(tabela)} no arquivo)", range(len(tabela)), format_func=rotulos.__getitem__,
-                        key=f"imovel_escolhido_{camada}", help="Digite parte do código do CAR para procurar.")
-                    imovel = car.imovel_da_linha(tabela, posicao)
+                    camada = st.selectbox(
+                        "Camada", nomes, index=nomes.index(car.camada_padrao(nomes)), key="imovel_camada",
+                        help="Uma por arquivo (o GeoPackage e o KML podem ter várias), com o tipo reconhecido entre "
+                             "parênteses. Do SICAR, a da área do imóvel vem primeiro.")
+                tabela, rotulos = lidas[camada]
+                posicao = 0 if len(tabela) == 1 else st.selectbox(
+                    f"Imóvel ({len(tabela)} no arquivo)", range(len(tabela)), format_func=rotulos.__getitem__,
+                    key=f"imovel_escolhido_{camada}", help="Digite parte do código do CAR para procurar.")
+                imovel = car.imovel_da_linha(tabela, posicao)
     elif entrada == "Coordenadas":
         texto = st.text_input("Latitude e longitude", key="imovel_coordenadas", placeholder="-20.4697, -54.6201",
                               help="A latitude primeiro, como sai do Google Maps, com ponto ou vírgula decimal; ou "

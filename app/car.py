@@ -1,5 +1,5 @@
-"""O imóvel do CAR nos mapas interativos: o shapefile (ou as coordenadas) que a pessoa sobe, e as
-células da grade que ele ocupa.
+"""O imóvel do CAR nos mapas interativos: o arquivo (shapefile, GeoJSON, GeoPackage ou KML) ou
+as coordenadas que a pessoa sobe, e as células da grade que ele ocupa.
 
 Tudo na memória: o arquivo que vem do navegador não é gravado em disco. Só cálculo, sem tela,
 para poder ser testado.
@@ -7,13 +7,16 @@ para poder ser testado.
 import hashlib
 import io
 import re
+import warnings
 import zipfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import pyogrio
 import shapely
 
 CRS_DO_SICAR = "EPSG:4674"      # SIRGAS 2000, o dos arquivos do SICAR: vale quando vem sem o .prj
@@ -22,7 +25,7 @@ PARTES = (".shp", ".shx", ".dbf", ".prj", ".cpg")
 OBRIGATORIAS = {".shp", ".shx", ".dbf"}
 PROFUNDIDADE_DOS_ZIPS = 2       # o .zip do SICAR pode trazer outro .zip dentro
 # Os nomes das colunas do SICAR, em minúsculas (os arquivos vêm ora em maiúsculas, ora não)
-COLUNAS_DO_CODIGO = ("cod_imovel", "cod_car", "car", "codigo", "recibo")
+COLUNAS_DO_CODIGO = ("cod_imovel", "cod_car", "car", "codigo", "recibo", "name", "nome")
 COLUNAS_DO_MUNICIPIO = ("nom_munici", "municipio", "nom_municipio")
 COLUNAS_DA_AREA = ("num_area", "area_ha", "area")
 
@@ -58,30 +61,99 @@ class Imovel:
 
 
 # =====================================================
-# O SHAPEFILE
+# OS ARQUIVOS
 # =====================================================
-def camadas(arquivos: list[tuple[str, bytes]]) -> dict[str, dict[str, bytes]]:
-    # Os shapefiles que vieram, cada um com as suas partes (".shp", ".dbf"...): de um .zip, com
-    # pastas ou com outro .zip dentro, ou dos arquivos soltos. Fica só o que tem as três obrigatórias
-    partes: dict[str, dict[str, bytes]] = {}
+FORMATOS = {"geojson": "GeoJSON", "gpkg": "GeoPackage", "kml": "KML"}
 
-    def guardar(nome: str, conteudo: bytes, profundidade: int = 0) -> None:
+
+@dataclass(frozen=True)
+class Fonte:
+    # Uma camada que se pode ler: um shapefile (com as partes dele) ou uma camada de um GeoJSON, de
+    # um GeoPackage ou de um KML
+    nome: str
+    formato: str
+    partes: tuple[tuple[str, bytes], ...]   # (".shp", bytes)...; nos outros, uma só, sem sufixo
+    camada: str | None = None
+
+
+@contextmanager
+def _da_memoria():
+    # Lido da memória, o GeoPackage não tem a extensão .gpkg, e o leitor avisa a cada leitura
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*non conformant file extension", category=RuntimeWarning)
+        yield
+
+
+def reconhecer(nome: str, conteudo: bytes) -> str | None:
+    # O tipo pelo conteúdo, não pelo nome: um GeoJSON salvo como .txt também vale. As partes do
+    # shapefile, que não têm assinatura própria (o .dbf, o .prj), vão pelo nome
+    sufixo = PurePosixPath(nome).suffix.lower()
+    if sufixo in PARTES:
+        return sufixo
+    inicio = conteudo[:4096].lstrip(b"\xef\xbb\xbf \t\r\n")
+    if conteudo[:4] == b"PK\x03\x04":
+        return "zip"                      # também o .kmz, que é um .zip com o .kml dentro
+    if conteudo[:16] == b"SQLite format 3\x00":
+        return "gpkg"
+    if inicio[:1] == b"{":
+        return "geojson"
+    if inicio[:1] == b"<" and b"<kml" in inicio:
+        return "kml"
+    return None
+
+
+def fontes(arquivos: list[tuple[str, bytes]]) -> tuple[dict[str, Fonte], list[str]]:
+    # As camadas que vieram, de um .zip (com pastas, ou com outro .zip dentro, como os do SICAR) ou
+    # dos arquivos soltos, e o que ficou de fora, com o porquê. O shapefile só entra com as três
+    # partes obrigatórias; os outros formatos, uma fonte por camada
+    achadas: dict[str, Fonte] = {}
+    partes: dict[str, dict[str, bytes]] = {}
+    de_fora: list[str] = []
+
+    def guardar(nome: str, conteudo: bytes, profundidade: int = 0, pacote_de: str | None = None) -> None:
         caminho = PurePosixPath(nome.replace("\\", "/"))
-        sufixo = caminho.suffix.lower()
-        if sufixo == ".zip" and profundidade < PROFUNDIDADE_DOS_ZIPS:
+        tipo = reconhecer(caminho.name, conteudo)
+        if tipo == "zip":
+            if profundidade >= PROFUNDIDADE_DOS_ZIPS:
+                de_fora.append(f"{caminho.name}: .zip dentro de .zip dentro de .zip")
+                return
             try:
                 with zipfile.ZipFile(io.BytesIO(conteudo)) as pacote:
                     for membro in pacote.infolist():
                         if not membro.is_dir():
-                            guardar(membro.filename, pacote.read(membro), profundidade + 1)
+                            guardar(membro.filename, pacote.read(membro), profundidade + 1, caminho.stem)
             except zipfile.BadZipFile as erro:
                 raise ErroDoArquivo(f"{caminho.name} não é um .zip que se abra.") from erro
-        elif sufixo in PARTES:
-            partes.setdefault(caminho.stem, {})[sufixo] = conteudo
+        elif tipo in PARTES:
+            partes.setdefault(caminho.stem, {})[tipo] = conteudo
+        elif tipo in FORMATOS:
+            # O .kml de dentro do .kmz se chama "doc": o nome que diz algo é o do .kmz
+            base = pacote_de if caminho.stem.lower() == "doc" and pacote_de else caminho.stem
+            formato = FORMATOS[tipo]
+            try:
+                # As tabelas sem desenho de um GeoPackage não têm tipo de geometria e ficam de fora
+                with _da_memoria():
+                    camadas = pyogrio.list_layers(io.BytesIO(conteudo))
+                nomes = [str(camada) for camada, geometria in camadas if geometria is not None]
+            except Exception:
+                de_fora.append(f"{caminho.name}: parece {formato}, mas não se abriu")
+                return
+            for camada in nomes:
+                rotulo = f"{base} ({formato})" if len(nomes) == 1 else f"{base} ({formato}: {camada})"
+                achadas[rotulo] = Fonte(rotulo, formato, (("", conteudo),), camada)
+        else:
+            de_fora.append(f"{caminho.name}: não é um formato de mapa")
 
     for nome, conteudo in arquivos:
         guardar(nome, conteudo)
-    return {nome: dele for nome, dele in partes.items() if OBRIGATORIAS <= set(dele)}
+    for base, dele in partes.items():
+        faltam = sorted(OBRIGATORIAS - set(dele))
+        if faltam:
+            de_fora.append(f"{base}: shapefile sem o {' e o '.join(faltam)}")
+        else:
+            rotulo = f"{base} (shapefile)"
+            achadas[rotulo] = Fonte(rotulo, "shapefile", tuple(sorted(dele.items())))
+    return achadas, de_fora
 
 
 def camada_padrao(nomes: list[str]) -> str:
@@ -90,21 +162,44 @@ def camada_padrao(nomes: list[str]) -> str:
     return next((nome for nome in sorted(nomes) if "area_imovel" in nome.lower()), sorted(nomes)[0])
 
 
-def ler_camada(partes: dict[str, bytes]) -> gpd.GeoDataFrame:
-    # Um shapefile lido da memória: as partes vão num .zip montado aqui, sem pasta, que é o que o
-    # leitor abre direto dos bytes. Sai em graus, sem geometria vazia e com a inválida consertada
-    pacote = io.BytesIO()
-    with zipfile.ZipFile(pacote, "w") as saida:
-        for sufixo, conteudo in partes.items():
-            saida.writestr(f"camada{sufixo}", conteudo)
+def _codificacao(dbf: bytes) -> bytes | None:
+    # Sem o .cpg, o leitor toma o .dbf por Latin-1, e o "Corumbá" de um .dbf em UTF-8 (o do SICAR)
+    # sairia "CorumbÃ¡". Se os registros (depois do cabeçalho) se leem como UTF-8 e têm acento, são
+    if len(dbf) < 32:
+        return None
+    registros = dbf[int.from_bytes(dbf[8:10], "little"):]
     try:
-        tabela = gpd.read_file(io.BytesIO(pacote.getvalue()))
+        registros.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return b"UTF-8" if any(byte > 127 for byte in registros) else None
+
+
+def ler(fonte: Fonte) -> gpd.GeoDataFrame:
+    # Lido da memória. O shapefile vai num .zip montado aqui, sem pasta, que é o que o leitor abre
+    # direto dos bytes. Sai em graus e em 2D, sem geometria vazia e com a inválida consertada
+    if fonte.formato == "shapefile":
+        partes = dict(fonte.partes)
+        if ".cpg" not in partes and (codificacao := _codificacao(partes[".dbf"])):
+            partes[".cpg"] = codificacao
+        pacote = io.BytesIO()
+        with zipfile.ZipFile(pacote, "w") as saida:
+            for sufixo, conteudo in partes.items():
+                saida.writestr(f"camada{sufixo}", conteudo)
+        dados = pacote.getvalue()
+    else:
+        dados = fonte.partes[0][1]
+    try:
+        with _da_memoria():
+            tabela = gpd.read_file(io.BytesIO(dados), layer=fonte.camada)
     except Exception as erro:
-        raise ErroDoArquivo(f"O shapefile não se abriu: {erro}") from erro
+        raise ErroDoArquivo(f"não se abriu ({erro})") from erro
+    if not isinstance(tabela, gpd.GeoDataFrame):
+        return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")   # uma tabela sem desenho
     if tabela.crs is None:
         tabela = tabela.set_crs(CRS_DO_SICAR)
     tabela = tabela[tabela.geometry.notna() & ~tabela.geometry.is_empty].to_crs("EPSG:4326")
-    return tabela.set_geometry(tabela.geometry.make_valid()).reset_index(drop=True)
+    return tabela.set_geometry(shapely.force_2d(tabela.geometry.make_valid().values)).reset_index(drop=True)
 
 
 def _coluna(tabela: pd.DataFrame, candidatas: tuple[str, ...]) -> str | None:

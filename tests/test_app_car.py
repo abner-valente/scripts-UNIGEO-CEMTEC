@@ -11,9 +11,15 @@ import shapely
 from app import car, interativo
 
 
-def partes_do_shapefile(tabela: gpd.GeoDataFrame, tmp_path, nome: str = "AREA_IMOVEL_1") -> dict[str, bytes]:
-    tabela.to_file(tmp_path / f"{nome}.shp")
+def partes_do_shapefile(tabela: gpd.GeoDataFrame, tmp_path, nome: str = "AREA_IMOVEL_1",
+                        **opcoes) -> dict[str, bytes]:
+    tabela.to_file(tmp_path / f"{nome}.shp", **opcoes)
     return {caminho.suffix: caminho.read_bytes() for caminho in tmp_path.glob(f"{nome}.*")}
+
+
+def gravado(tabela: gpd.GeoDataFrame, caminho, **opcoes) -> bytes:
+    tabela.to_file(caminho, **opcoes)
+    return caminho.read_bytes()
 
 
 def zipado(arquivos: dict[str, bytes]) -> bytes:
@@ -26,9 +32,13 @@ def zipado(arquivos: dict[str, bytes]) -> bytes:
 
 def imoveis_do_teste() -> gpd.GeoDataFrame:
     return gpd.GeoDataFrame({"COD_IMOVEL": ["MS-5002704-AAA", "MS-5002704-BBB"], "NUM_AREA": [120.5, 3400.0],
-                             "NOM_MUNICI": ["Campo Grande", "Campo Grande"]},
+                             "NOM_MUNICI": ["Campo Grande", "Corumbá"]},
                             geometry=[shapely.box(-54.70, -20.50, -54.65, -20.45),
                                       shapely.box(-55.00, -21.00, -54.80, -20.80)], crs="EPSG:4674")
+
+
+def lida(fontes: dict[str, car.Fonte], nome: str) -> gpd.GeoDataFrame:
+    return car.ler(fontes[nome])
 
 
 def test_o_zip_do_sicar_abre_com_pasta_e_com_outro_zip_dentro(tmp_path):
@@ -36,23 +46,78 @@ def test_o_zip_do_sicar_abre_com_pasta_e_com_outro_zip_dentro(tmp_path):
     de_dentro = zipado({f"AREA_IMOVEL_1{sufixo}": conteudo for sufixo, conteudo in partes.items()})
     pacote = zipado({"SHAPE_5002704/AREA_IMOVEL.zip": de_dentro, "SHAPE_5002704/leia-me.txt": b"x"})
 
-    camadas = car.camadas([("SHAPE_5002704.zip", pacote)])
+    fontes, de_fora = car.fontes([("SHAPE_5002704.zip", pacote)])
 
-    assert list(camadas) == ["AREA_IMOVEL_1"]
-    assert {".shp", ".shx", ".dbf", ".prj"} <= set(camadas["AREA_IMOVEL_1"])
+    assert list(fontes) == ["AREA_IMOVEL_1 (shapefile)"]
+    assert de_fora == ["leia-me.txt: não é um formato de mapa"]
+    assert len(lida(fontes, "AREA_IMOVEL_1 (shapefile)")) == 2
 
 
 def test_os_arquivos_soltos_valem_e_o_shapefile_incompleto_fica_de_fora(tmp_path):
     partes = partes_do_shapefile(imoveis_do_teste(), tmp_path)
     soltos = [(f"AREA_IMOVEL_1{sufixo.upper()}", conteudo) for sufixo, conteudo in partes.items()]
 
-    assert list(car.camadas(soltos)) == ["AREA_IMOVEL_1"]
-    assert car.camadas([(nome, conteudo) for nome, conteudo in soltos if not nome.endswith(".SHX")]) == {}
+    assert list(car.fontes(soltos)[0]) == ["AREA_IMOVEL_1 (shapefile)"]
+    fontes, de_fora = car.fontes([(nome, conteudo) for nome, conteudo in soltos if not nome.endswith(".SHX")])
+    assert fontes == {} and de_fora == ["AREA_IMOVEL_1: shapefile sem o .shx"]
+
+
+def test_o_tipo_de_cada_arquivo_sai_do_conteudo(tmp_path):
+    # O caso da equipe: o mesmo imóvel em shapefile (sem o .cpg), GeoJSON e GeoPackage, de uma vez.
+    # Um GeoJSON com outro nome também vale; o que não é mapa fica de fora, com o nome
+    tabela = imoveis_do_teste()
+    partes = partes_do_shapefile(tabela, tmp_path, "A")
+    geojson = gravado(tabela, tmp_path / "A.geojson", driver="GeoJSON")
+    arquivos = ([(f"A{sufixo}", conteudo) for sufixo, conteudo in partes.items() if sufixo != ".cpg"]
+                + [("A.geojson", geojson), ("A.gpkg", gravado(tabela, tmp_path / "A.gpkg", driver="GPKG")),
+                   ("exportado.txt", geojson), ("foto.jpg", b"\xff\xd8\xff\xe0 nao e mapa")])
+
+    fontes, de_fora = car.fontes(arquivos)
+
+    assert sorted(fontes) == ["A (GeoJSON)", "A (GeoPackage)", "A (shapefile)", "exportado (GeoJSON)"]
+    assert de_fora == ["foto.jpg: não é um formato de mapa"]
+    for nome in fontes:
+        assert car.rotulos(lida(fontes, nome)) == ["MS-5002704-AAA · Campo Grande · 120,5 ha",
+                                                   "MS-5002704-BBB · Corumbá · 3.400,0 ha"], nome
+
+
+def test_sem_o_cpg_o_acento_sai_certo_em_utf8_e_em_latin1(tmp_path):
+    for codificacao in ("UTF-8", "latin1"):
+        pasta = tmp_path / codificacao
+        pasta.mkdir()
+        partes = partes_do_shapefile(imoveis_do_teste(), pasta, encoding=codificacao)
+        fontes, _ = car.fontes([(f"A{sufixo}", conteudo) for sufixo, conteudo in partes.items() if sufixo != ".cpg"])
+
+        assert lida(fontes, "A (shapefile)")["NOM_MUNICI"].tolist() == ["Campo Grande", "Corumbá"], codificacao
+
+
+def test_o_geopackage_com_varias_camadas_vira_uma_fonte_por_camada(tmp_path):
+    caminho = tmp_path / "imovel.gpkg"
+    imoveis_do_teste().to_file(caminho, layer="area_imovel", driver="GPKG")
+    imoveis_do_teste().iloc[:1].to_file(caminho, layer="app", driver="GPKG")
+
+    fontes, _ = car.fontes([("imovel.gpkg", caminho.read_bytes())])
+
+    assert sorted(fontes) == ["imovel (GeoPackage: app)", "imovel (GeoPackage: area_imovel)"]
+    assert car.camada_padrao(list(fontes)) == "imovel (GeoPackage: area_imovel)"
+    assert len(lida(fontes, "imovel (GeoPackage: app)")) == 1
+
+
+def test_o_kml_e_o_kmz_do_google_earth(tmp_path):
+    kml = gravado(imoveis_do_teste().to_crs("EPSG:4326"), tmp_path / "fazenda.kml", driver="KML")
+
+    fontes, de_fora = car.fontes([("fazenda.kml", kml), ("fazenda.kmz", zipado({"doc.kml": kml}))])
+
+    assert list(fontes) == ["fazenda (KML)"] and de_fora == []   # o .kmz leva o nome dele, e não "doc"
+    tabela = lida(fontes, "fazenda (KML)")
+    assert car.imovel_da_linha(tabela, 1).titulo == "MS-5002704-BBB"
+    assert not tabela.geometry.has_z.any()
 
 
 def test_um_zip_que_nao_abre_vira_erro_legivel():
     with pytest.raises(car.ErroDoArquivo, match="não é um .zip"):
-        car.camadas([("imovel.zip", b"isto nao e um zip")])
+        car.fontes([("imovel.zip", b"PK\x03\x04 cortado no meio")])
+    assert car.fontes([("imovel.zip", b"isto nao e um zip")]) == ({}, ["imovel.zip: não é um formato de mapa"])
 
 
 def test_a_camada_padrao_e_a_da_area_do_imovel():
@@ -62,20 +127,22 @@ def test_a_camada_padrao_e_a_da_area_do_imovel():
 
 def test_a_camada_sai_em_graus_e_sem_o_prj_vale_o_sirgas(tmp_path):
     partes = partes_do_shapefile(imoveis_do_teste(), tmp_path)
+    com_prj, _ = car.fontes([(f"A{sufixo}", conteudo) for sufixo, conteudo in partes.items()])
+    sem_prj, _ = car.fontes([(f"A{sufixo}", conteudo) for sufixo, conteudo in partes.items() if sufixo != ".prj"])
 
-    com_prj = car.ler_camada(partes)
-    sem_prj = car.ler_camada({sufixo: conteudo for sufixo, conteudo in partes.items() if sufixo != ".prj"})
+    tabelas = [lida(fontes, "A (shapefile)") for fontes in (com_prj, sem_prj)]
 
-    assert com_prj.crs.to_epsg() == 4326 and sem_prj.crs.to_epsg() == 4326
-    assert len(com_prj) == 2
-    np.testing.assert_allclose(com_prj.total_bounds, [-55.0, -21.0, -54.65, -20.45], atol=1e-6)
+    assert [tabela.crs.to_epsg() for tabela in tabelas] == [4326, 4326]
+    np.testing.assert_allclose(tabelas[0].total_bounds, [-55.0, -21.0, -54.65, -20.45], atol=1e-6)
 
 
 def test_o_rotulo_traz_o_codigo_o_municipio_e_a_area_declarada(tmp_path):
-    tabela = car.ler_camada(partes_do_shapefile(imoveis_do_teste(), tmp_path))
+    fontes, _ = car.fontes([(f"A{sufixo}", conteudo) for sufixo, conteudo in partes_do_shapefile(
+        imoveis_do_teste(), tmp_path).items()])
+    tabela = lida(fontes, "A (shapefile)")
 
     assert car.rotulos(tabela) == ["MS-5002704-AAA · Campo Grande · 120,5 ha",
-                                   "MS-5002704-BBB · Campo Grande · 3.400,0 ha"]
+                                   "MS-5002704-BBB · Corumbá · 3.400,0 ha"]
     imovel = car.imovel_da_linha(tabela, 1)
     assert imovel.titulo == "MS-5002704-BBB" and imovel.detalhe == "3.400,0 ha"
     assert imovel.centro == pytest.approx((-54.9, -20.9), abs=0.01)
