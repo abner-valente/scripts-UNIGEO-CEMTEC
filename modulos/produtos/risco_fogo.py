@@ -21,12 +21,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .. import calculos, config, excel, fonte, graficos, mapas
+from .. import calculos, config, excel, fonte, graficos, mapas, retiradas
 from ..config import Periodo
 from ..mapas import BaseCartografica, EspecClasses, EspecMapa, Indicadores
 
 NOME = "risco_fogo"
 TITULO = "Risco meteorológico de fogo — regra 30-30-30"
+VARIAVEL = "Risco de Fogo"   # o nome da lista de estações retiradas dos mapas (modulos/retiradas.py)
 
 COLUNAS_NECESSARIAS = ["TEM_MAX", "UMD_MIN", "VEN_RAJ"]
 ABA = "Risco"
@@ -469,8 +470,15 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
         leituras = leituras_validas(dados, periodo)
         if not leituras.empty:
             apoio.append((estacao, leituras))
-    horas = analisar_horas(completas, periodo, base, apoio)
-    gerar_mapas(tabela, horas, periodo, base, pasta / "mapas", opcoes.get("hrtodas", False))
+    # As retiradas a pedido saem das três medidas da regra, só nos mapas: a planilha, já gravada, e
+    # os gráficos continuam com todas (modulos/retiradas.py)
+    conhecidas = pd.DataFrame([{"Estação": estacao["Estação"], "CD_ESTACAO": estacao.get("CD_ESTACAO")}
+                               for estacao, _ in coletados + apoio])
+    fora = retiradas.para_o_produto(opcoes.get("retirar", {}), conhecidas, {VARIAVEL}, NOME).get(VARIAVEL, set())
+    mapeadas = [(estacao, leituras) for estacao, leituras in completas if estacao["Estação"] not in fora]
+    apoio = [(estacao, leituras) for estacao, leituras in apoio if estacao["Estação"] not in fora]
+    horas = analisar_horas(mapeadas, periodo, base, apoio)
+    gerar_mapas(retiradas.retirar(tabela, fora), horas, periodo, base, pasta / "mapas", opcoes.get("hrtodas", False))
 
     if periodo.modo == "periodo":
         print("\n📈 Gerando gráficos...")
