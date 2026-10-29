@@ -112,6 +112,23 @@ ESTILO_BALAO = """<style>
 # dia o Streamlit mudar o desenho dele, eles voltam a ser o deslizante de sempre, e nada quebra.
 COR_DA_LINHA_DO_TEMPO = "rgba(128, 128, 128, 0.35)"   # cinza translúcido: serve ao tema claro e ao escuro
 COR_DO_RISCO_DO_DIA = "rgba(128, 128, 128, 0.75)"
+# A gaveta das estações retiradas (ver gaveta_das_retiradas): flutua à direita, por cima dos mapas,
+# e aberta vira uma barra lateral da altura da tela. O fundo é o da barra lateral do Streamlit nos
+# dois temas: light-dark() segue o color-scheme que ele põe no .stApp, e acompanha a troca de tema
+# no menu. Se um dia o Streamlit mudar esse desenho, a gaveta volta a ser um expansor no meio da
+# aba, e nada quebra.
+GAVETA = '[class*="st-key-gaveta_retiradas_"]'
+ESTILO_DA_GAVETA = f"""<style>
+{GAVETA} {{ position: fixed; top: 4.5rem; right: 1rem; z-index: 100; width: auto;
+  max-width: calc(100vw - 2rem); }}
+{GAVETA}:has(details[open]) {{ width: 22rem; bottom: 1rem; }}
+{GAVETA}:has(details[open]) > *:has(details) {{ flex: 1 1 auto; min-height: 0; }}
+{GAVETA} [data-testid="stExpander"], {GAVETA} details[open] {{ height: 100%; }}
+{GAVETA} details {{ background-color: light-dark(#f0f2f6, #262730);
+  box-shadow: 0 0.25rem 1rem rgba(0, 0, 0, 0.3); }}
+{GAVETA} details[open] {{ overflow-y: auto; }}
+[data-testid="stLayoutWrapper"]:has(> {GAVETA}) {{ display: contents; }}
+</style>"""
 
 
 def _estilo_da_linha_do_tempo(chave: str, marcas: list[float]) -> str:
@@ -579,28 +596,36 @@ def retiradas_da_variavel(grandeza: str) -> set[str]:
     return set(st.session_state.get("retiradas", {}).get(grandeza, []))
 
 
-def coluna_das_retiradas(grandezas: list[str], estacoes: pd.DataFrame, vizinhas: pd.DataFrame) -> None:
-    """A coluna à direita dos mapas: uma lista de estações a retirar para cada variável na tela.
+def gaveta_das_retiradas(onde: str, grandezas: list[str], estacoes: pd.DataFrame,
+                         vizinhas: pd.DataFrame) -> None:
+    """A gaveta à direita dos mapas: uma lista de estações a retirar para cada variável na tela.
 
-    As do estado vêm primeiro, e as vizinhas (que seguram a borda da interpolação) depois, marcadas.
+    Flutua por cima da aba (ESTILO_DA_GAVETA) e abre e fecha sem refazer os mapas; fechada, mostra
+    quantas estações estão fora, para ninguém esquecer delas. `onde` separa as gavetas das abas,
+    que o Streamlit desenha todas de uma vez. As do estado vêm primeiro, e as vizinhas (que seguram
+    a borda da interpolação) depois, marcadas.
     """
     guardadas = st.session_state.setdefault("retiradas", {})
     de_fora = set(vizinhas["Estação"]) - set(estacoes["Estação"])
     opcoes = list(estacoes["Estação"]) + sorted(de_fora)
-    st.markdown("**Estações retiradas**")
-    for grandeza in grandezas:
-        chave = f"retiradas_{grandeza}"
-        # O valor sai do dicionário a cada execução; trocando o estado, as do anterior ficam de fora
-        # das opções, e o Streamlit recusaria o valor guardado
-        st.session_state[chave] = [nome for nome in guardadas.get(grandeza, []) if nome in opcoes]
-        st.multiselect(f"Dos mapas de {grandeza.lower()}", opcoes, key=chave, placeholder="Nenhuma",
-                       format_func=lambda nome: f"{nome} (vizinha)" if nome in de_fora else nome,
-                       on_change=lambda grandeza=grandeza, chave=chave: guardadas.__setitem__(
-                           grandeza, list(st.session_state[chave])))
-    st.caption("Para quando uma estação manda dado errado e a correção do INMET ainda não chegou: ela "
-               "sai do mapa, do ranking e da interpolação da variável, e continua nos gráficos e nas "
-               "tabelas. A lista vale para os mapas da variável em todas as abas, enquanto a página "
-               "estiver aberta.")
+    fora = sum(nome in opcoes for grandeza in grandezas for nome in guardadas.get(grandeza, []))
+    with st.container(key=f"gaveta_retiradas_{onde}"):
+        st.html(ESTILO_DA_GAVETA)
+        with st.expander(f"Estações retiradas ({fora})" if fora else "Estações retiradas",
+                         icon=":material/location_off:", key=f"expansor_retiradas_{onde}"):
+            for grandeza in grandezas:
+                chave = f"retiradas_{grandeza}"
+                # O valor sai do dicionário a cada execução; trocando o estado, as do anterior ficam
+                # de fora das opções, e o Streamlit recusaria o valor guardado
+                st.session_state[chave] = [nome for nome in guardadas.get(grandeza, []) if nome in opcoes]
+                st.multiselect(f"Dos mapas de {grandeza.lower()}", opcoes, key=chave, placeholder="Nenhuma",
+                               format_func=lambda nome: f"{nome} (vizinha)" if nome in de_fora else nome,
+                               on_change=lambda grandeza=grandeza, chave=chave: guardadas.__setitem__(
+                                   grandeza, list(st.session_state[chave])))
+            st.caption("Para quando uma estação manda dado errado e a correção do INMET ainda não chegou: "
+                       "ela sai do mapa, do ranking e da interpolação da variável, e continua nos gráficos "
+                       "e nas tabelas. A lista vale para os mapas da variável em todas as abas, enquanto a "
+                       "página estiver aberta.")
 
 
 def sem_lista_de_estacoes(onde, uf: str) -> None:
@@ -2081,16 +2106,14 @@ with aba_mapa:
 
                 fatia = variaveis.recorte(leituras_mapa, modo, momento)
                 fatia_apoio = variaveis.recorte(leituras_apoio, modo, momento)
-                # À direita, a lista das estações retiradas de cada variável na tela
-                mapas_tela, retiradas_tela = st.columns([4, 1])
-                with retiradas_tela:
-                    coluna_das_retiradas(list(dict.fromkeys(variaveis.por_nome(nome).grandeza
-                                                            for nome in escolhidos)), estacoes, vizinhas)
+                # À direita, flutuando, a lista das estações retiradas de cada variável na tela
+                gaveta_das_retiradas("boletim", list(dict.fromkeys(variaveis.por_nome(nome).grandeza
+                                                                   for nome in escolhidos)), estacoes, vizinhas)
                 # Todas as linhas com a mesma quantidade de colunas: se a última fosse dimensionada
                 # pelo que sobrou, os mapas dela sairiam maiores que os de cima. Com um mapa só, a
                 # coluna é uma e ele ocupa a largura inteira.
                 por_linha = min(len(escolhidos), MAPAS_POR_LINHA)
-                with mapas_tela, st.spinner("Desenhando os mapas..."):
+                with st.spinner("Desenhando os mapas..."):
                     for primeiro in range(0, len(escolhidos), por_linha):
                         linha = escolhidos[primeiro:primeiro + por_linha]
                         for coluna_tela, nome in zip(st.columns(por_linha), linha):
@@ -2258,25 +2281,22 @@ with aba_chuva:
 
                     if st.checkbox("Gerar também os mapas destas janelas", value=False,
                                    key="mapas_chuva"):
-                        # À direita, a lista das estações retiradas dos mapas de chuva; as barras
-                        # acima continuam com todas, que é onde o valor errado aparece
-                        mapas_tela, retiradas_tela = st.columns([4, 1])
-                        with retiradas_tela:
-                            coluna_das_retiradas(["Chuva"], estacoes, vizinhas_chuva)
+                        # À direita, flutuando, a lista das estações retiradas dos mapas de chuva; as
+                        # barras acima continuam com todas, que é onde o valor errado aparece
+                        gaveta_das_retiradas("chuva", ["Chuva"], estacoes, vizinhas_chuva)
                         fora_chuva = retiradas_da_variavel("Chuva")
-                        with mapas_tela:
-                            marcar, ajustar_escala = st.columns([1, 1])
-                            with marcar:
-                                rotulos_chuva = st.checkbox("Mostrar o valor de cada estação", value=True,
-                                                            key="valores_chuva")
-                            with ajustar_escala:
-                                ajustar_chuva = st.checkbox("Ajustar a escala ao dado", value=False,
-                                                            key="ajustar_chuva",
-                                                            help="Desligada, as classes são fixas: 20 mm "
-                                                                 "têm a mesma cor em qualquer mapa.")
+                        marcar, ajustar_escala = st.columns([1, 1])
+                        with marcar:
+                            rotulos_chuva = st.checkbox("Mostrar o valor de cada estação", value=True,
+                                                        key="valores_chuva")
+                        with ajustar_escala:
+                            ajustar_chuva = st.checkbox("Ajustar a escala ao dado", value=False,
+                                                        key="ajustar_chuva",
+                                                        help="Desligada, as classes são fixas: 20 mm "
+                                                             "têm a mesma cor em qualquer mapa.")
                         acumulada = variaveis.por_nome("Chuva acumulada")
                         por_linha = min(len(nomes_chovidos), MAPAS_POR_LINHA)
-                        with mapas_tela, st.spinner("Desenhando os mapas..."):
+                        with st.spinner("Desenhando os mapas..."):
                             for primeiro in range(0, len(nomes_chovidos), por_linha):
                                 linha = nomes_chovidos[primeiro:primeiro + por_linha]
                                 for coluna_tela, rotulo in zip(st.columns(por_linha), linha):
@@ -2309,14 +2329,13 @@ with aba_chuva:
                                                 key="valores_chuva_momento")
                     niveis_chuva = niveis_da_escala(produto, 1.0 if modo == variaveis.HORA else 24.0)
                     carimbo = (f"{momento:%Y%m%d}" if modo == variaveis.DIA else f"{momento:%Y%m%d_%H}h")
-                    # À direita do mapa, a lista das estações retiradas dos mapas de chuva
-                    _, meio, retiradas_tela = st.columns([1, 2, 1])
-                    with retiradas_tela:
-                        coluna_das_retiradas(["Chuva"], estacoes, vizinhas_chuva)
+                    # À direita, flutuando, a lista das estações retiradas dos mapas de chuva
+                    gaveta_das_retiradas("chuva", ["Chuva"], estacoes, vizinhas_chuva)
                     fora_chuva = retiradas_da_variavel("Chuva")
                     fatia = retiradas.retirar(variaveis.recorte(do_periodo, modo, momento), fora_chuva)
                     apoio_periodo = chuva_apoio[chuva_apoio["dt_local"] > inicio.astimezone(recorte.fuso)]
                     fatia_apoio = retiradas.retirar(variaveis.recorte(apoio_periodo, modo, momento), fora_chuva)
+                    _, meio, _ = st.columns([1, 2, 1])
                     with meio:
                         painel_do_mapa(produto, variaveis.por_estacao(produto, fatia),
                                        formatar(momento), boletim.subtitulo(modo, momento, periodo_painel),
@@ -2413,9 +2432,8 @@ with aba_risco:
                     # As de apoio já entraram na grade; nos pontos e na contagem, só as do estado
                     do_estado_na_hora = avaliada.estacoes[avaliada.estacoes["Estação"].isin(nomes_do_estado)]
                     local = hora.tz_convert(recorte.fuso)
-                    _, meio, retiradas_tela = st.columns([1, 3, 1])
-                    with retiradas_tela:
-                        coluna_das_retiradas(["Risco de Fogo"], estacoes, vizinhas_risco)
+                    gaveta_das_retiradas("risco", ["Risco de Fogo"], estacoes, vizinhas_risco)
+                    _, meio, _ = st.columns([1, 3, 1])
                     with meio:
                         png = mapa_de_risco(avaliada.grade, do_estado_na_hora,
                                             risco_fogo.COLUNA_NIVEL_HORA,
@@ -2459,9 +2477,8 @@ with aba_risco:
             elif modo_risco == variaveis.DIA:
                 dias = risco.por_dia(avaliadas_mapa)
                 dia = linha_do_tempo("Dia", list(dias), "dia_risco", lambda data: f"{data:%d/%m/%Y}")
-                _, meio, retiradas_tela = st.columns([1, 3, 1])
-                with retiradas_tela:
-                    coluna_das_retiradas(["Risco de Fogo"], estacoes, vizinhas_risco)
+                gaveta_das_retiradas("risco", ["Risco de Fogo"], estacoes, vizinhas_risco)
+                _, meio, _ = st.columns([1, 3, 1])
                 with meio:
                     do_dia = risco.estacoes_do_dia(avaliadas_mapa, dia)
                     png = mapa_de_risco(dias[dia], do_dia[do_dia["Estação"].isin(nomes_do_estado)],
@@ -2490,9 +2507,8 @@ with aba_risco:
                 # Os nomes de arquivo que o main.py daria a esses dois mapas, para o mesmo período
                 sufixo = f"{periodo_painel.identificador}_interpolado.png"
                 janela_risco = periodo_painel.descrever_janela(*periodo_painel.janela)
-                esquerda, direita, retiradas_tela = st.columns([2, 2, 1])
-                with retiradas_tela:
-                    coluna_das_retiradas(["Risco de Fogo"], estacoes, vizinhas_risco)
+                gaveta_das_retiradas("risco", ["Risco de Fogo"], estacoes, vizinhas_risco)
+                esquerda, direita = st.columns(2)
                 with esquerda:
                     st.markdown("**Pior nível do período**")
                     pior = risco.pior_nivel(avaliadas_mapa)
