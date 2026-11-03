@@ -500,8 +500,13 @@ def gaveta_das_retiradas(onde: str, grandezas: list[str], estacoes: pd.DataFrame
                                    grandeza, list(st.session_state[chave])))
             st.caption("Para quando uma estação manda dado errado e a correção do INMET ainda não chegou: "
                        "ela sai do mapa, do ranking e da interpolação da variável, e continua nos gráficos "
-                       "e nas tabelas. A lista vale para os mapas da variável em todas as abas, enquanto a "
-                       "página estiver aberta.")
+                       "e nas tabelas. A lista vale para os mapas da variável em todas as abas e nos Mapas "
+                       "interativos, enquanto o painel estiver aberto.")
+
+
+def nota_das_retiradas(fora: set[str]) -> str:
+    # Embaixo de um mapa interativo, quem a lista das retiradas tirou dele
+    return f" Fora deste mapa, a pedido: {', '.join(sorted(fora))}." if fora else ""
 
 
 def sem_lista_de_estacoes(onde, uf: str) -> None:
@@ -1669,6 +1674,10 @@ def variaveis_interativas(uf: str, recorte: config.Recorte, intervalo: tuple, es
                         help="Um mapa por vez. Cada um traz a sua regra: a máxima do dia é a maior das "
                              "máximas horárias, nunca a média delas.")
     produto = variaveis.por_nome(nome)
+    # As mesmas estações retiradas da variável no Painel saem do ponto e da superfície; a série da
+    # estação clicada fica com todas
+    gaveta_das_retiradas("interativo_mapas", [produto.grandeza], estacoes, vizinhas)
+    fora = retiradas_da_variavel(produto.grandeza)
 
     paradas = variaveis.momentos(leituras, modo)
     if modo == variaveis.PERIODO:
@@ -1691,7 +1700,8 @@ def variaveis_interativas(uf: str, recorte: config.Recorte, intervalo: tuple, es
         ajustar = st.checkbox("Ajustar a escala ao dado", value=False, key="ajustar_mapa_interativo",
                               help="Desligada, a escala é a do boletim: a mesma cor quer dizer o mesmo valor "
                                    "em qualquer dia.")
-    fatia, fatia_apoio = (variaveis.recorte(dados, modo, momento) for dados in (leituras, apoio))
+    fatia, fatia_apoio = (retiradas.retirar(variaveis.recorte(dados, modo, momento), fora)
+                          for dados in (leituras, apoio))
     valores = variaveis.por_estacao(produto, fatia)
     medidas = valores.dropna()
     if len(medidas) < config.MIN_ESTACOES_INTERPOLACAO:
@@ -1716,7 +1726,7 @@ def variaveis_interativas(uf: str, recorte: config.Recorte, intervalo: tuple, es
                f"{produto.unidade} em {len(medidas)} estações · {produto.regra}. A superfície é a do mapa do "
                "boletim (o IDW das estações, com as vizinhas na borda)"
                + ("; a seta aponta para onde o vento vai" if not setas.empty else "")
-               + ". **Clique numa estação** para ver a série dela.")
+               + ". **Clique numa estação** para ver a série dela." + nota_das_retiradas(fora))
 
     clicadas = evento.selection.get("objects", {}).get("estacoes", []) if evento is not None else []
     if clicadas:
@@ -1766,6 +1776,8 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
         return
 
     modo = st.radio("Mapa", ["Acumulado", "Hora a hora", "Por dia"], horizontal=True, key="modo_chuva_interativa")
+    gaveta_das_retiradas("interativo_chuva", ["Chuva"], estacoes, vizinhas)
+    fora = retiradas_da_variavel("Chuva")
     if modo == "Acumulado":
         janela_tela, ate_tela = st.columns([1, 3])
         with janela_tela:
@@ -1805,6 +1817,8 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
         quando = formatar(momento)
         legenda = "Chuva na hora" if tipo == variaveis.HORA else "Chuva do dia"
         serie_de, serie_ate = inicio_local, fim.astimezone(recorte.fuso)
+    # Sem as retiradas no ponto e na superfície; a chuva da estação clicada fica com todas
+    valores, valores_apoio = retiradas.retirar(valores, fora), retiradas.retirar(valores_apoio, fora)
 
     marcar, ajustar_tela = st.columns([1, 1])
     with marcar:
@@ -1831,7 +1845,8 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
         st.info(f"Não choveu em nenhuma estação em {quando}.")
     st.caption(f"{legenda}, {quando}: de {medidas.min():.1f} a {medidas.max():.1f} mm em {len(medidas)} estações. "
                "A superfície é a do mapa do boletim (o IDW das estações, com as vizinhas na borda), e abaixo "
-               "da primeira classe não se pinta. **Clique numa estação** para ver a chuva dela.")
+               "da primeira classe não se pinta. **Clique numa estação** para ver a chuva dela."
+               + nota_das_retiradas(fora))
 
     clicadas = evento.selection.get("objects", {}).get("estacoes", []) if evento is not None else []
     if clicadas:
@@ -1877,6 +1892,19 @@ def risco_interativo(uf: str, recorte: config.Recorte, intervalo: tuple, estacoe
         st.warning(f"Nenhuma hora teve {config.MIN_ESTACOES_INTERPOLACAO} estações com as três "
                    "medidas: com tão poucos pontos a superfície inventaria mais do que mostra.")
         return
+    # Como no Painel: o mapa sai sem as estações retiradas (as três medidas delas), e o gráfico da
+    # estação clicada fica com todas
+    gaveta_das_retiradas("interativo_risco", ["Risco de Fogo"], estacoes, vizinhas)
+    fora = retiradas_da_variavel("Risco de Fogo")
+    if fora:
+        _, sem_elas = risco_avaliado(retiradas.retirar(pd.concat([leituras, apoio], ignore_index=True), fora),
+                                     retiradas.retirar(pd.concat([estacoes, vizinhas], ignore_index=True), fora), uf)
+        if sem_elas:
+            avaliadas = sem_elas
+        else:
+            st.warning(f"Sem as estações retiradas, nenhuma hora fica com {config.MIN_ESTACOES_INTERPOLACAO} "
+                       "estações com as três medidas: o mapa sai com todas.")
+            fora = set()
 
     modo = MODOS_MAPA[st.radio("Agregação", list(MODOS_MAPA), horizontal=True, key="modo_risco_interativo")]
     hora_local = None
@@ -1896,8 +1924,10 @@ def risco_interativo(uf: str, recorte: config.Recorte, intervalo: tuple, estacoe
         grade = risco.pior_nivel(avaliadas)
         pontos = risco.resumo(do_produto, config.Periodo.de_datas(*intervalo, fuso=recorte.fuso), uf)
         coluna, legenda = risco_fogo.COLUNA_NIVEL, "Pior nível do período"
-    # As vizinhas já entraram na superfície; nos pontos, só as do estado
-    pontos = interativo.pontos_de_risco(pontos[pontos["Estação"].isin(nomes_do_estado)], coluna, legenda)
+    # As vizinhas já entraram na superfície; nos pontos, só as do estado, e sem as retiradas (o
+    # resumo do período sai de todas)
+    pontos = interativo.pontos_de_risco(retiradas.retirar(pontos[pontos["Estação"].isin(nomes_do_estado)], fora),
+                                        coluna, legenda)
 
     escritos = st.checkbox("Mostrar o nível de cada estação", value=True, key="niveis_risco_interativo",
                            help="O número sobre cada estação. Desligado, fica só a cor do ponto.")
@@ -1907,7 +1937,8 @@ def risco_interativo(uf: str, recorte: config.Recorte, intervalo: tuple, estacoe
     st.markdown(legenda_do_risco(), unsafe_allow_html=True)
     st.caption("Role para aproximar, arraste para deslocar, passe o mouse para ver o nível e as medidas, e "
                "**clique numa estação** para ver as três medidas dela no período. A superfície é a mesma "
-               "do mapa do boletim: as três variáveis interpoladas separadas e a regra aplicada célula a célula.")
+               "do mapa do boletim: as três variáveis interpoladas separadas e a regra aplicada célula a célula."
+               + nota_das_retiradas(fora))
 
     # A estação clicada fica escolhida enquanto o deslizante anda, até outro clique
     clicadas = evento.selection.get("objects", {}).get("estacoes", []) if evento is not None else []
