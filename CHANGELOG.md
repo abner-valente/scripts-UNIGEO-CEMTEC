@@ -9,6 +9,29 @@ Cada versão separa as mudanças em até quatro grupos:
 
 Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
+## [0.3.6] — 03/11/2026
+
+Um pedido da equipe de meteorologia: tirar dos mapas a estação que manda dado errado enquanto a correção do INMET não chega.
+
+### Atenção ao atualizar
+
+- **Quem roda o painel na própria máquina precisa reiniciá-lo** (Ctrl+C e `streamlit run app/explorador.py` de novo) depois de atualizar: há um módulo novo (`modulos/retiradas.py`) que o Streamlit não relê sozinho. As dependências não mudaram. No Streamlit Cloud, é o Reboot.
+
+### Novo
+
+- **Painel: estações retiradas dos mapas, uma lista por variável.** Quando um sensor falha (o pluviômetro entupido, o abrigo ao sol), a equipe pede a correção ao INMET, que leva até dois dias, e o boletim não pode esperar. Nas abas **Mapas Boletim**, **Chuva** e **Risco de Fogo**, o botão **"Estações retiradas"** no canto de cima, à direita, abre uma barra lateral por cima dos mapas, com uma lista para cada variável na tela:
+  - a estação escolhida sai do **ponto**, do **ranking** e da **interpolação** dos mapas daquela variável, e continua nos gráficos e nas tabelas, que é onde se vê o erro;
+  - a lista é da variável, e não da estação: um pluviômetro entupido não estraga a temperatura da mesma estação. Escolhida numa aba, vale nos mapas da variável em todas as abas, inclusive no Mapa Navegação, enquanto a página estiver aberta;
+  - as estações de fora do estado que seguram a borda da interpolação também podem sair, marcadas como "(vizinha)";
+  - no risco de fogo, a estação sai das três medidas da regra, e a tabela e os gráficos continuam com todas;
+  - fechada, a barra mostra quantas estações estão fora ("Estações retiradas (2)"), para ninguém esquecer delas, e abre e fecha sem refazer os mapas;
+  - o PNG do boletim e o GIF saem sem as estações retiradas, como o mapa da tela, e sem nota sobre elas (decisão da equipe).
+- **`main.py`: a mesma retirada nos dois produtos**, pela linha de comando ou pelo bloco de configuração:
+  - `--retirar "Chuva: Campo Grande; A702"`, com as estações pelo nome (sem ligar para acento e maiúscula) ou pelo código do INMET; repita a opção para outra variável;
+  - `RETIRAR = {"Chuva": ["Campo Grande"], "Temperatura": ["A702"]}` no topo do `main.py`; o `--retirar`, quando vier, vale no lugar dela;
+  - as variáveis são Temperatura, Umidade, Vento e Chuva no `relatorio_inmet`, e Risco de Fogo no `risco_fogo`;
+  - o terminal diz quem saiu de cada mapa e avisa a estação que não se achou. A planilha continua com todas as estações.
+
 ## [0.3.5] — 22/10/2026
 
 Ajustes pedidos pela equipe depois de uma rodada de uso do painel, pensando em quem não é meteorologista.
