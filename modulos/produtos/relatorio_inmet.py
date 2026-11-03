@@ -13,12 +13,15 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 
-from .. import calculos, config, excel, fonte, mapas
+from .. import calculos, config, excel, fonte, mapas, retiradas
 from ..config import Periodo
 from ..mapas import EspecMapa
 
 NOME = "relatorio_inmet"
 TITULO = "Relatório INMET — extremos e chuva das estações automáticas"
+# A variável de cada aba, para as estações que a equipe retira dos mapas (modulos/retiradas.py)
+VARIAVEL_DA_ABA = {"Temp_Min": "Temperatura", "Temp_Max": "Temperatura", "Umidade": "Umidade",
+                   "Vento": "Vento", "Chuva": "Chuva"}
 
 
 # =====================================================
@@ -163,6 +166,27 @@ def especificacoes_mapas(periodo: Periodo, recorte: config.Recorte = config.RECO
     return especificacoes
 
 
+def _sem_as_retiradas(tabelas: dict[str, pd.DataFrame], apoio: dict | None, pedidos: dict[str, list[str]],
+                      coletados: list) -> tuple[dict[str, pd.DataFrame], dict | None]:
+    # As tabelas dos mapas, e as das vizinhas, sem as estações que a equipe retirou.
+    # Cada aba perde as estações retiradas da variável dela (VARIAVEL_DA_ABA). A planilha já foi
+    # gravada com todas: é nela que se confere o dado que saiu do mapa.
+    conhecidas = pd.DataFrame([{"Estação": estacao["Estação"], "CD_ESTACAO": estacao.get("CD_ESTACAO")}
+                               for estacao, _ in coletados])
+    if apoio:
+        vizinhas = {nome for tabela in apoio.values() for nome in tabela["Estação"]}
+        conhecidas = pd.concat([conhecidas, pd.DataFrame({"Estação": sorted(vizinhas)})], ignore_index=True)
+    fora = retiradas.para_o_produto(pedidos, conhecidas, set(VARIAVEL_DA_ABA.values()), NOME)
+    if not fora:
+        return tabelas, apoio
+
+    def sem(tabelas_da_vez: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+        return {aba: retiradas.retirar(tabela, fora.get(VARIAVEL_DA_ABA.get(aba), set()))
+                for aba, tabela in tabelas_da_vez.items()}
+
+    return sem(tabelas), (sem(apoio) if apoio else apoio)
+
+
 # =====================================================
 # EXECUÇÃO
 # =====================================================
@@ -200,7 +224,8 @@ def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
         pass  # gerar_mapas tenta de novo e diz o que houve com os shapefiles
     else:
         apoio = _tabelas_de_apoio(recorte, base, periodo)
-    mapas.gerar_mapas(tabelas, especificacoes_mapas(periodo, recorte), pasta / "mapas",
+    tabelas_dos_mapas, apoio = _sem_as_retiradas(tabelas, apoio, (opcoes or {}).get("retirar", {}), coletados)
+    mapas.gerar_mapas(tabelas_dos_mapas, especificacoes_mapas(periodo, recorte), pasta / "mapas",
                       periodo.identificador, recorte, base=base, apoio=apoio)
 
     print("=" * 60)

@@ -233,3 +233,38 @@ def test_as_vizinhas_sao_baixadas_mas_nao_entram_na_planilha(api_simulada, capsy
     abas = pd.read_excel(pasta / f"Relatorio_{config.UF}_{DIA.identificador}.xlsx", sheet_name=None)
     nas_abas = {nome for aba in abas.values() for nome in aba["Estação"]}
     assert not nas_abas & api_simulada.vizinhas
+
+
+def test_estacao_retirada_sai_so_dos_mapas_da_variavel_e_fica_na_planilha(api_simulada, monkeypatch):
+    # O pedido da equipe: o pluviômetro de Campo Grande com defeito, e o termômetro de Dourados (A702)
+    recebidas = {}
+
+    def espiar(tabelas, especificacoes, pasta, identificador, recorte, base=None, apoio=None):
+        recebidas.update(tabelas=tabelas, apoio=apoio)
+
+    monkeypatch.setattr(relatorio_inmet.mapas, "gerar_mapas", espiar)
+    periodo = Periodo.de_datas(date(2026, 9, 16), date(2026, 9, 16))
+
+    assert relatorio_inmet.executar(periodo, {"retirar": {"Chuva": ["campo grande"],
+                                                          "Temperatura": ["A702"]}}) == 0
+
+    nos_mapas = {aba: set(tabela["Estação"]) for aba, tabela in recebidas["tabelas"].items()}
+    assert "Campo Grande" not in nos_mapas["Chuva"] and "Campo Grande" in nos_mapas["Temp_Max"]
+    assert "Dourados" not in nos_mapas["Temp_Min"] | nos_mapas["Temp_Max"]
+    assert {"Dourados", "Campo Grande"} <= nos_mapas["Umidade"] & nos_mapas["Vento"]
+    planilha = periodo.pasta_saida(relatorio_inmet.NOME) / f"Relatorio_{config.UF}_{periodo.identificador}.xlsx"
+    abas = pd.read_excel(planilha, sheet_name=None)
+    assert "Campo Grande" in set(abas["Chuva"]["Estação"]) and "Dourados" in set(abas["Temp_Max"]["Estação"])
+
+
+def test_vizinha_retirada_sai_da_borda_dos_mapas(api_simulada, monkeypatch):
+    recebidas = {}
+    monkeypatch.setattr(relatorio_inmet.mapas, "gerar_mapas",
+                        lambda tabelas, *args, apoio=None, **kwargs: recebidas.update(apoio=apoio))
+    periodo = Periodo.de_datas(date(2026, 9, 16), date(2026, 9, 16))
+    vizinha = sorted(api_simulada.vizinhas)[0]
+
+    assert relatorio_inmet.executar(periodo, {"retirar": {"Chuva": [vizinha]}}) == 0
+
+    assert vizinha not in set(recebidas["apoio"]["Chuva"]["Estação"])
+    assert vizinha in set(recebidas["apoio"]["Umidade"]["Estação"])
