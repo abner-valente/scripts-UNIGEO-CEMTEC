@@ -3,7 +3,8 @@
 PostgreSQL 16, com PostGIS 3.4, no schema `climageo`. O esquema está em `banco/esquema.sql`; as
 decisões que o desenham, no passo 3 de docs/plano_arquitetura.md e na decisão 6 de
 docs/escopo_v0.3.1.md. Em resumo: o banco guarda só as horas, do INMET e da previsão, e o dia, a
-semana e o mês saem delas na leitura; o EC46 é a exceção e fica por semana.
+semana e o mês saem delas na leitura; o EC46 é a exceção e fica por semana, e a chuva do CEMADEN fica
+por leitura, como a PED manda.
 
 Três coisas moram aqui:
 - **conectar**, com o papel certo: o usuário que grava (os coletores), o que só lê (o painel e a
@@ -32,14 +33,16 @@ import psycopg
 from psycopg import sql
 from psycopg.pq import TransactionStatus
 
-from . import config, openmeteo
+from . import cemaden, config, openmeteo
 
 # Como cada tabela particionada é dividida, e por qual coluna (decisão de 09/10/2026)
 PARTICOES = {
     "inmet_horaria": ("mes", "hora_utc"),
     "previsao_horaria_grade": ("dia", "rodada_utc"),
     "previsao_horaria_estacao": ("mes", "rodada_utc"),
+    "cemaden_chuva": ("mes", "leitura_utc"),
 }
+COLUNAS_CEMADEN_CHUVA = ["estacao", "leitura_utc", "chuva"]
 DIAS_DA_GRADE = 21   # a grade guarda 21 dias de rodadas: 14 de horizonte e uma semana de folga
 CONJUNTOS = ("grade", "estacao")
 
@@ -278,6 +281,46 @@ def gravar_extras_inmet(conexao: psycopg.Connection, extras: pd.DataFrame) -> in
     return _gravar_inmet(conexao, extras, COLUNAS_INMET_EXTRAS)
 
 
+def _atribuicoes(colunas: list[str], tabela: str) -> tuple[sql.Composed, sql.Composed, sql.Composed]:
+    # O "SET c = EXCLUDED.c" e os dois lados do "só se mudou" de um upsert
+    return (sql.SQL(", ").join(sql.SQL("{c} = EXCLUDED.{c}").format(c=sql.Identifier(c)) for c in colunas),
+            sql.SQL(", ").join(sql.SQL("{}.{}").format(sql.Identifier(tabela), sql.Identifier(c)) for c in colunas),
+            sql.SQL(", ").join(sql.SQL("EXCLUDED.{}").format(sql.Identifier(c)) for c in colunas))
+
+
+def gravar_cemaden_estacoes(conexao: psycopg.Connection, cadastro: pd.DataFrame) -> int:
+    # O cadastro da PED vale como vem, sem guardar o que ela deixou vazio. Só a estação que mudou é
+    # reescrita
+    if cadastro.empty:
+        return 0
+    colunas = list(cemaden.COLUNAS_DO_CADASTRO)
+    _carregar(conexao, "cemaden_estacao", colunas, _linhas(cadastro.drop_duplicates("codigo"), colunas))
+    novos, antes, depois = _atribuicoes(colunas[1:], "cemaden_estacao")
+    gravadas = conexao.execute(
+        sql.SQL("INSERT INTO cemaden_estacao ({}) SELECT {} FROM carga ON CONFLICT (codigo) DO UPDATE SET {}, "
+                "atualizada_em = now() WHERE ({}) IS DISTINCT FROM ({})")
+        .format(_lista(colunas), _lista(colunas), novos, antes, depois)).rowcount
+    conexao.commit()
+    return gravadas
+
+
+def gravar_cemaden_chuva(conexao: psycopg.Connection, leituras: pd.DataFrame) -> int:
+    # As leituras de cemaden.chuva_do_dia. A que a PED corrigiu depois é reescrita; a que veio igual,
+    # não. Em ordem, como no INMET: a carga do histórico e o coletor de hora em hora não se travam
+    if leituras.empty:
+        return 0
+    dados = leituras.rename(columns={"codigo": "estacao"})
+    garantir_particoes(conexao, "cemaden_chuva", dados["leitura_utc"].min(), dados["leitura_utc"].max())
+    _carregar(conexao, "cemaden_chuva", COLUNAS_CEMADEN_CHUVA, _linhas(dados, COLUNAS_CEMADEN_CHUVA))
+    gravadas = conexao.execute(
+        sql.SQL("INSERT INTO cemaden_chuva ({}) SELECT {} FROM carga ORDER BY estacao, leitura_utc "
+                "ON CONFLICT (estacao, leitura_utc) DO UPDATE SET chuva = EXCLUDED.chuva, coletada_em = now() "
+                "WHERE cemaden_chuva.chuva IS DISTINCT FROM EXCLUDED.chuva")
+        .format(_lista(COLUNAS_CEMADEN_CHUVA), _lista(COLUNAS_CEMADEN_CHUVA))).rowcount
+    conexao.commit()
+    return gravadas
+
+
 # =====================================================
 # LER
 # =====================================================
@@ -425,6 +468,29 @@ def estacoes_com_leituras(conexao: psycopg.Connection, inicio, fim) -> list[str]
     linhas = conexao.execute("SELECT DISTINCT estacao FROM inmet_horaria WHERE hora_utc > %s AND hora_utc <= %s "
                              "ORDER BY estacao", (_em_utc(inicio), _em_utc(fim))).fetchall()
     return [estacao for (estacao,) in linhas]
+
+
+@_sem_deixar_transacao
+def ler_cemaden_estacoes(conexao: psycopg.Connection, uf: str | None = None) -> pd.DataFrame:
+    colunas = list(cemaden.COLUNAS_DO_CADASTRO)
+    filtro, argumentos = (sql.SQL(" WHERE uf = %s"), (uf,)) if uf else (sql.SQL(""), ())
+    tabela = _tabela(conexao, sql.SQL("SELECT {} FROM cemaden_estacao{} ORDER BY codigo").format(_lista(colunas), filtro),
+                     argumentos)
+    for coluna in ("instalada_em", "ultima_parada", "ultima_remessa"):
+        tabela[coluna] = pd.to_datetime(tabela[coluna])
+    return _numeros(tabela, ["latitude", "longitude"])
+
+
+@_sem_deixar_transacao
+def ler_cemaden_chuva(conexao: psycopg.Connection, inicio, fim, estacoes: list[str] | None = None) -> pd.DataFrame:
+    # As leituras de (início, fim], como no INMET: começando numa hora cheia, são as das horas que
+    # terminam depois do início
+    filtro = sql.SQL(" AND estacao = ANY(%s)") if estacoes is not None else sql.SQL("")
+    argumentos = (_em_utc(inicio), _em_utc(fim), *([list(estacoes)] if estacoes is not None else []))
+    resultado = _tabela(conexao, sql.SQL("SELECT {} FROM cemaden_chuva WHERE leitura_utc > %s AND leitura_utc <= %s{} "
+                                         "ORDER BY estacao, leitura_utc")
+                        .format(_lista(COLUNAS_CEMADEN_CHUVA), filtro), argumentos)
+    return _horas_em_utc(_numeros(resultado, ["chuva"]), ["leitura_utc"])
 
 
 @_sem_deixar_transacao

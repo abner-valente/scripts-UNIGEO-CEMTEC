@@ -77,7 +77,8 @@ def test_o_esquema_pode_rodar_de_novo_sem_erro(conexao):
                                    "WHERE table_schema = %s", (SCHEMA,)).fetchall())
     assert tabelas == {"estacao": "BASE TABLE", "inmet_horaria": "BASE TABLE",
                        "previsao_horaria_grade": "BASE TABLE", "previsao_horaria_estacao": "BASE TABLE",
-                       "previsao_semanal": "BASE TABLE", "previsao_horaria": "VIEW"}
+                       "previsao_semanal": "BASE TABLE", "previsao_horaria": "VIEW",
+                       "cemaden_estacao": "BASE TABLE", "cemaden_chuva": "BASE TABLE"}
 
 
 # =====================================================
@@ -317,3 +318,72 @@ def test_as_medidas_voltam_do_banco_exatas_ate_6_algarismos(limpa):
     lidas = banco.ler_inmet(limpa, pd.Timestamp("2026-10-08 12:00", tz="UTC"), pd.Timestamp("2026-10-09", tz="UTC"))
 
     assert lidas["pre_ins"].tolist() == valores
+
+
+# =====================================================
+# OS PLUVIÔMETROS DO CEMADEN
+# =====================================================
+def cadastro_cemaden() -> pd.DataFrame:
+    # Como cemaden.cadastro devolve: uma estação ativa e uma parada
+    return pd.DataFrame({
+        "codigo": ["500270402A", "500830502A"], "id_estacao": [7931, 7929],
+        "nome": ["UPA Aparecida Gonçalves Saraiva", "São Carlos"], "municipio": ["Campo Grande", "Três Lagoas"],
+        "codibge": [5002704, 5008305], "uf": ["MS", "MS"], "latitude": [-20.52545, -20.80873],
+        "longitude": [-54.59831, -51.71331], "tipo": ["Pluviométrica", "Pluviométrica"],
+        "instalada_em": pd.to_datetime(["2014-05-20 10:00:00", "2015-04-01 13:43:30.134"], format="ISO8601"),
+        "ultima_parada": pd.to_datetime(["2026-01-22 12:59:16.233", "2026-10-21 16:46:23.509"], format="ISO8601"),
+        "ultima_remessa": pd.to_datetime(["2026-11-03 17:00:00", "2026-10-21 14:45:18"], format="ISO8601"),
+    })
+
+
+def chuva_cemaden(valores=(0.0, 2.4, 0.6)) -> pd.DataFrame:
+    # Uma leitura na virada do mês e duas de 10 em 10 minutos, chovendo
+    horas = pd.to_datetime(["2026-10-31 23:40", "2026-11-01 00:10", "2026-11-01 00:20"], utc=True)
+    return pd.DataFrame({"codigo": "500270402A", "leitura_utc": horas, "chuva": list(valores)})
+
+
+def test_o_cadastro_do_cemaden_volta_como_entrou_e_so_reescreve_a_estacao_que_mudou(limpa):
+    assert banco.gravar_cemaden_estacoes(limpa, cadastro_cemaden()) == 2
+    assert banco.gravar_cemaden_estacoes(limpa, cadastro_cemaden()) == 0
+
+    lido = banco.ler_cemaden_estacoes(limpa, "MS")
+    pd.testing.assert_frame_equal(lido, cadastro_cemaden(), check_dtype=False)
+
+    # A estação parada voltou a mandar dado: só a remessa dela mudou, e só ela é reescrita
+    voltou = cadastro_cemaden()
+    voltou.loc[1, "ultima_remessa"] = pd.Timestamp("2026-11-04 10:00")
+    assert banco.gravar_cemaden_estacoes(limpa, voltou) == 1
+    assert banco.ler_cemaden_estacoes(limpa).loc[1, "ultima_remessa"] == pd.Timestamp("2026-11-04 10:00")
+
+
+def test_a_chuva_do_cemaden_tem_uma_particao_por_mes_e_volta_como_entrou(limpa):
+    banco.gravar_cemaden_estacoes(limpa, cadastro_cemaden())
+
+    assert banco.gravar_cemaden_chuva(limpa, chuva_cemaden()) == 3
+
+    assert list(banco.particoes(limpa, "cemaden_chuva")) == ["cemaden_chuva_202610", "cemaden_chuva_202611"]
+    lida = banco.ler_cemaden_chuva(limpa, pd.Timestamp("2026-10-31", tz="UTC"), pd.Timestamp("2026-11-02", tz="UTC"))
+    pd.testing.assert_frame_equal(lida, chuva_cemaden().rename(columns={"codigo": "estacao"}), check_exact=True)
+
+
+def test_a_leitura_corrigida_pela_ped_e_reescrita_e_a_igual_nao(limpa):
+    banco.gravar_cemaden_estacoes(limpa, cadastro_cemaden())
+    banco.gravar_cemaden_chuva(limpa, chuva_cemaden())
+
+    assert banco.gravar_cemaden_chuva(limpa, chuva_cemaden()) == 0
+    assert banco.gravar_cemaden_chuva(limpa, chuva_cemaden(valores=(0.0, 2.4, 0.8))) == 1
+
+    lida = banco.ler_cemaden_chuva(limpa, pd.Timestamp("2026-10-31", tz="UTC"), pd.Timestamp("2026-11-02", tz="UTC"))
+    assert lida["chuva"].tolist() == [0.0, 2.4, 0.8]
+
+
+def test_a_chuva_do_cemaden_e_lida_de_inicio_a_fim_sem_a_leitura_do_inicio(limpa):
+    banco.gravar_cemaden_estacoes(limpa, cadastro_cemaden())
+    banco.gravar_cemaden_chuva(limpa, chuva_cemaden())
+
+    # Da hora que termina às 00:00 em diante: a leitura das 23:40 é da hora que terminou às 00:00
+    lida = banco.ler_cemaden_chuva(limpa, pd.Timestamp("2026-11-01 00:00", tz="UTC"),
+                                   pd.Timestamp("2026-11-01 00:20", tz="UTC"))
+    assert lida["leitura_utc"].dt.strftime("%H:%M").tolist() == ["00:10", "00:20"]
+    assert banco.ler_cemaden_chuva(limpa, pd.Timestamp("2026-10-31", tz="UTC"), pd.Timestamp("2026-11-02", tz="UTC"),
+                                   estacoes=["500830502A"]).empty

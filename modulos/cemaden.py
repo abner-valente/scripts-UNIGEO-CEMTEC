@@ -21,7 +21,8 @@ from . import config, inmet
 
 COLUNAS_DA_CHUVA = ["codigo", "leitura_utc", "chuva"]
 COLUNAS_DO_CADASTRO = ["codigo", "id_estacao", "nome", "municipio", "codibge", "uf", "latitude", "longitude", "tipo",
-                       "instalada_em", "inativa_desde", "ultima_remessa"]
+                       "instalada_em", "ultima_parada", "ultima_remessa"]
+CASAS_DA_CHUVA = 2   # o pluviômetro mede de 0,2 em 0,2 mm, e a PED manda 0.6000000000000001
 CABECALHO_DA_REDE = "cod.estacao"   # a linha dos nomes das colunas no CSV, depois do aviso do UTC
 
 # Uma sessão só, e o token dela, para o processo inteiro: o coletor é um só e consulta em fila
@@ -114,8 +115,8 @@ def _consultar(rota: str, parametros: dict) -> requests.Response:
 
 
 def cadastro(uf: str = config.UF) -> pd.DataFrame:
-    # As estações do CEMADEN no estado, ativas ou não: "inativa_desde" e "ultima_remessa" dizem quem
-    # parou. As datas vêm sem fuso declarado e ficam como vieram
+    # As estações do CEMADEN no estado, as ativas e as paradas (veja esta_parada). As datas vêm sem
+    # fuso declarado e ficam como vieram
     registros = _consultar("pcds-cadastro/dados-cadastrais", {"uf": uf, "formato": "JSON"}).json()
     if not isinstance(registros, list):
         raise ErroCEMADEN("o cadastro veio em formato inesperado")
@@ -123,14 +124,22 @@ def cadastro(uf: str = config.UF) -> pd.DataFrame:
         return pd.DataFrame(columns=COLUNAS_DO_CADASTRO)
     tabela = pd.DataFrame(registros).rename(columns={
         "codestacao": "codigo", "cidade": "municipio", "tipoestacao_descricao": "tipo",
-        "data_instalacao": "instalada_em", "dh_inicio_inativo": "inativa_desde", "dh_ultima_remessa": "ultima_remessa"})
+        "data_instalacao": "instalada_em", "dh_inicio_inativo": "ultima_parada", "dh_ultima_remessa": "ultima_remessa"})
     tabela["nome"] = tabela["nome"].str.strip()
     tabela["municipio"] = tabela["municipio"].map(inmet.formatar_nome_estacao)
-    for coluna in ("instalada_em", "inativa_desde", "ultima_remessa"):
-        tabela[coluna] = pd.to_datetime(tabela[coluna], errors="coerce")
+    for coluna in ("instalada_em", "ultima_parada", "ultima_remessa"):
+        # ISO: com o formato tirado da primeira linha, uma data sem os milissegundos viraria vazia
+        tabela[coluna] = pd.to_datetime(tabela[coluna], errors="coerce", format="ISO8601")
     for coluna in ("latitude", "longitude"):
         tabela[coluna] = pd.to_numeric(tabela[coluna], errors="coerce")
     return tabela.dropna(subset=["latitude", "longitude"])[COLUNAS_DO_CADASTRO].reset_index(drop=True)
+
+
+def esta_parada(cadastro: pd.DataFrame) -> pd.Series:
+    # A PED preenche "dh_inicio_inativo" em toda estação: é o começo da última parada, e não quer
+    # dizer que ela esteja parada agora. Parada é a que não mandou nada depois dele (conferido em
+    # 03/11/2026: dá as 6 de 28 que não mandavam dado havia mais de um dia)
+    return (cadastro["ultima_parada"] >= cadastro["ultima_remessa"]).fillna(False).astype(bool)
 
 
 def chuva_do_dia(dia: date, uf: str = config.UF) -> pd.DataFrame:
@@ -155,7 +164,7 @@ def ler_chuva(texto: str) -> pd.DataFrame:
         leituras = pd.DataFrame({
             "codigo": chuva["cod.estacao"].str.strip(),
             "leitura_utc": pd.to_datetime(chuva["datahora"], errors="coerce", utc=True),
-            "chuva": pd.to_numeric(chuva["valor"], errors="coerce"),
+            "chuva": pd.to_numeric(chuva["valor"], errors="coerce").round(CASAS_DA_CHUVA),
         })
     except (KeyError, ValueError) as erro:
         raise ErroCEMADEN(f"a chuva veio em formato inesperado ({erro})") from None

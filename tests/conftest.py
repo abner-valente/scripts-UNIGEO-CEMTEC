@@ -143,6 +143,6 @@ def limpa(conexao):
     for tabela in banco.PARTICOES:
         for nome in banco.particoes(conexao, tabela):
             conexao.execute(f'DROP TABLE "{nome}"')
-    conexao.execute("TRUNCATE previsao_semanal, estacao CASCADE")
+    conexao.execute("TRUNCATE previsao_semanal, estacao, cemaden_estacao CASCADE")
     conexao.commit()
     return conexao

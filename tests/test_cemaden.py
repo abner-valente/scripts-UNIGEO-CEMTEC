@@ -190,7 +190,7 @@ def test_o_cadastro_traz_as_estacoes_com_o_municipio_e_quem_parou(monkeypatch):
          "latitude": -20.80873, "longitude": -51.71331, "nome": "São Carlos ", "rede_sigla": "CEMADEN",
          "tipoestacao_descricao": "Pluviométrica", "uf": "MS"},
         {"altitude": 0.0, "cidade": "SÃO GABRIEL DO OESTE", "codestacao": "500769501A", "codibge": 5007695,
-         "data_instalacao": "2015-03-30 00:00:00.000", "dh_inicio_inativo": None,
+         "data_instalacao": "2015-03-30 00:00:00", "dh_inicio_inativo": None,     # sem os milissegundos
          "dh_ultima_remessa": "2026-11-03 11:50:28.000", "id_estacao": 7927, "id_rede": 11, "id_tipoestacao": 1,
          "latitude": -19.40076, "longitude": -54.57602, "nome": "SAAE", "rede_sigla": "CEMADEN",
          "tipoestacao_descricao": "Pluviométrica", "uf": "MS"},
@@ -203,8 +203,25 @@ def test_o_cadastro_traz_as_estacoes_com_o_municipio_e_quem_parou(monkeypatch):
     assert list(tabela.columns) == cemaden.COLUNAS_DO_CADASTRO
     assert tabela["municipio"].tolist() == ["Três Lagoas", "São Gabriel do Oeste"]
     assert tabela["nome"].tolist() == ["São Carlos", "SAAE"]
-    assert tabela.loc[0, "inativa_desde"] == pd.Timestamp("2026-10-21 16:46:23.509")
-    assert pd.isna(tabela.loc[1, "inativa_desde"])
+    assert tabela.loc[0, "ultima_parada"] == pd.Timestamp("2026-10-21 16:46:23.509")
+    assert pd.isna(tabela.loc[1, "ultima_parada"])
+    assert tabela["instalada_em"].tolist() == [pd.Timestamp("2015-04-01 13:43:30.134"), pd.Timestamp("2015-03-30")]
+
+
+def test_parada_e_a_estacao_que_nao_mandou_nada_depois_da_ultima_parada():
+    # Toda estação tem a data da última parada; a que mandou dado depois dela voltou
+    cadastro = pd.DataFrame({
+        "ultima_parada": pd.to_datetime(["2026-10-21 16:46", "2026-11-02 22:32", None]),
+        "ultima_remessa": pd.to_datetime(["2026-10-21 14:45", "2026-11-03 11:50", "2026-11-03 11:00"]),
+    })
+
+    assert cemaden.esta_parada(cadastro).tolist() == [True, False, False]
+
+
+def test_a_chuva_entra_sem_o_ruido_de_conta_da_ped():
+    ruidosa = CSV_DO_DIA.replace(";2.4;", ";2.4000000000000004;").replace(";0.6;", ";0.6000000000000001;")
+
+    assert cemaden.ler_chuva(ruidosa)["chuva"].tolist() == [0.0, 2.4, 0.6]
 
 
 def test_cadastro_em_outro_formato_vira_erro(monkeypatch):

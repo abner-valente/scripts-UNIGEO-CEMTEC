@@ -6,7 +6,8 @@
 --
 -- O banco guarda só as horas (decidido em 09/10/2026): o dia, a semana e o mês saem delas na hora
 -- de ler, pela regra do Python que o painel e os produtos usam. O EC46 é a exceção, porque já
--- chega por semana. As decisões estão em docs/escopo_v0.3.1.md (decisão 6) e no plano, em
+-- chega por semana, e a chuva do CEMADEN fica por leitura (de 10 em 10 minutos, chovendo), porque é
+-- assim que a PED manda. As decisões estão em docs/escopo_v0.3.1.md (decisão 6) e no plano, em
 -- docs/plano_arquitetura.md (passo 3).
 --
 -- As medidas são `real` (4 bytes), e voltam exatas: o PostgreSQL escreve o `real` pela representação
@@ -86,6 +87,55 @@ COMMENT ON COLUMN inmet_horaria.ten_bat IS
     'Tensão da bateria (V). Não vem na consulta por hora: o coletor a busca por estação, uma vez por dia.';
 COMMENT ON COLUMN inmet_horaria.tem_cpu IS
     'Temperatura do processador. Não vem na consulta por hora: o coletor a busca por estação, uma vez por dia.';
+
+-- =====================================================
+-- OS PLUVIÔMETROS DO CEMADEN
+-- =====================================================
+-- A rede do CEMADEN (a PED) é outra que a do INMET, com outros códigos e outro cadastro, e fica em
+-- tabelas à parte. A chuva vai como a PED manda, uma linha por leitura: sem chuva, uma por hora, com
+-- o zero escrito, num minuto que é de cada estação; chovendo, de 10 em 10 minutos. A hora e o dia
+-- saem delas na leitura, como as do INMET, e a hora sem leitura nenhuma é hora sem dado (a estação
+-- parada não manda nada). Conferido contra a PED em 03/11/2026.
+CREATE TABLE IF NOT EXISTS cemaden_estacao (
+    codigo         text PRIMARY KEY,
+    id_estacao     integer,
+    nome           text NOT NULL,
+    municipio      text,
+    codibge        integer,
+    uf             char(2) NOT NULL,
+    latitude       double precision NOT NULL,
+    longitude      double precision NOT NULL,
+    tipo           text,
+    instalada_em   timestamp,
+    ultima_parada  timestamp,
+    ultima_remessa timestamp,
+    atualizada_em  timestamptz NOT NULL DEFAULT now(),
+    geom           geometry(Point, 4326)
+                   GENERATED ALWAYS AS (ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)) STORED
+);
+COMMENT ON TABLE cemaden_estacao IS
+    'O cadastro das estações do CEMADEN no estado, como a PED manda, as ativas e as paradas.';
+COMMENT ON COLUMN cemaden_estacao.codigo IS 'O código da estação no CEMADEN (ex.: 500270402A).';
+COMMENT ON COLUMN cemaden_estacao.tipo IS 'Como a PED diz: "Pluviométrica" ou "Hidrológica".';
+COMMENT ON COLUMN cemaden_estacao.ultima_parada IS
+    'O começo da última parada da estação, como a PED diz, sem fuso declarado. Toda estação tem: a que '
+    'mandou dado depois (ultima_remessa mais nova) voltou.';
+COMMENT ON COLUMN cemaden_estacao.ultima_remessa IS 'A última remessa de dados, como a PED diz, sem fuso declarado.';
+
+CREATE TABLE IF NOT EXISTS cemaden_chuva (
+    estacao     text NOT NULL REFERENCES cemaden_estacao (codigo),
+    leitura_utc timestamptz NOT NULL,
+    chuva       real,
+    coletada_em timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (estacao, leitura_utc)
+) PARTITION BY RANGE (leitura_utc);
+CREATE INDEX IF NOT EXISTS cemaden_chuva_leitura ON cemaden_chuva (leitura_utc);
+COMMENT ON TABLE cemaden_chuva IS
+    'As leituras de chuva das estações do CEMADEN, uma linha por leitura, como a PED manda. Uma '
+    'partição por mês, para sempre.';
+COMMENT ON COLUMN cemaden_chuva.leitura_utc IS 'O momento da leitura, em UTC, como a estação mandou (ex.: 13:40).';
+COMMENT ON COLUMN cemaden_chuva.chuva IS
+    'mm desde a leitura anterior da estação (conferido: a soma do dia bate com o acumulado de 24 h da PED).';
 
 -- =====================================================
 -- A PREVISÃO DO OPEN-METEO, HORA A HORA
