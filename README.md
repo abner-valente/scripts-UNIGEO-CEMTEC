@@ -56,6 +56,7 @@ python main.py --produto relatorio_inmet --dataini 15/09/2026
 | `--hrfim` | Hora de fim, no horário do estado (0 a 24) | `--hrfim 18` |
 | `--tempo-real` | Últimas 24 horas até o momento em que roda | `--tempo-real` |
 | `--hrtodas` | Só para o `risco_fogo`: gera o mapa de todas as horas | `--hrtodas` |
+| `--retirar` | Tira estações dos mapas de uma variável (veja abaixo); repita para outra variável | `--retirar "Chuva: Campo Grande; A702"` |
 
 As horas aceitam `8`, `08h` ou `08:00`. Para ver todas as opções: `python main.py --help`.
 
@@ -67,9 +68,21 @@ DATA_INICIAL = date(2026, 8, 1)
 DATA_FINAL = date(2026, 8, 31)
 HORA_INICIAL = None  # opcional: hora de início (0 a 24); None = 00 h
 HORA_FINAL = None    # opcional: hora de fim (0 a 24); None = 24 h
+RETIRAR = {}         # opcional: estações fora dos mapas, por variável (veja abaixo)
 ```
 
 O que a linha de comando não informar é lido dessas variáveis.
+
+#### Estações retiradas dos mapas
+
+Quando uma estação manda dado errado (o sensor com defeito) e a correção do INMET ainda não chegou, ela pode sair dos mapas de uma variável: do ponto, do ranking e da interpolação. **A planilha continua com todas**, e é nela que se confere o dado que saiu do mapa. A lista é por variável porque quem falha é um sensor: um pluviômetro entupido não estraga a temperatura da mesma estação.
+
+```bash
+python main.py --tempo-real --retirar "Chuva: Campo Grande; Dourados" --retirar "Temperatura: A702"
+python main.py --produto risco_fogo --tempo-real --retirar "Risco: A702"
+```
+
+Ou, no topo do `main.py`, `RETIRAR = {"Chuva": ["Campo Grande", "Dourados"], "Temperatura": ["A702"]}`; o `--retirar`, quando vier, vale no lugar dela. A estação vale pelo nome, sem ligar para acento e maiúscula ("ponta pora" acha Ponta Porã), ou pelo código do INMET, e as de fora do estado que seguram a borda da interpolação também podem sair. As variáveis são **Temperatura**, **Umidade**, **Vento** e **Chuva** no `relatorio_inmet` (a de Temperatura vale para a máxima e a mínima) e **Risco de Fogo** (ou só "Risco") no `risco_fogo`, onde a estação sai das três medidas da regra. O terminal diz quem saiu de cada mapa, e avisa a estação que não se achou e a variável que o produto não mapeia.
 
 #### Os três modos de tempo
 
@@ -657,6 +670,19 @@ O que ela custa, e por isso está em teste:
 
 A decisão — substituir a aba `Mapa`, conviver com ela ou não valer a manutenção — depende de a equipe usar o explorador para **explorar** ou para **conferir e baixar** o mapa do relatório.
 
+### Botão "Estações retiradas"
+
+A mesma retirada do `main.py` (veja [Estações retiradas dos mapas](#estações-retiradas-dos-mapas)), na tela: para quando uma estação manda dado errado e a correção do INMET ainda não chegou.
+
+| | |
+|---|---|
+| **Onde fica** | Nas abas **Mapas Boletim**, **Chuva** e **Risco de Fogo**, o botão **"Estações retiradas"** no canto de cima, à direita, por cima dos mapas. Ele abre uma barra lateral da altura da tela, com uma lista para cada variável dos mapas na tela, e abre e fecha sem refazer os mapas. Fechado, mostra quantas estações estão fora ("Estações retiradas (2)"), para ninguém esquecer delas |
+| **O que sai** | O ponto, o ranking e a interpolação dos mapas da variável, inclusive no PNG do boletim e no GIF, sem nota sobre a retirada (decisão da equipe). Os gráficos e as tabelas continuam com todas as estações, que é onde se vê o erro |
+| **Por variável** | Quem falha é um sensor: um pluviômetro entupido não estraga a temperatura da mesma estação. A lista de uma variável, escolhida numa aba, vale nos mapas dela em todas as abas, inclusive no **Mapa Navegação**, que diz embaixo do mapa quem ficou de fora |
+| **As vizinhas** | As estações de fora do estado que seguram a borda da interpolação também podem sair, no fim da lista, marcadas como "(vizinha)" |
+| **No risco de fogo** | A estação sai das três medidas da regra, e o risco dos mapas é avaliado de novo sem ela. A tabela por estação e os gráficos continuam com todas |
+| **Até quando vale** | Enquanto a página estiver aberta: recarregar a página, ou abrir em outra máquina, começa sem retirada nenhuma. Cada pessoa tem a sua lista |
+
 ### Aba "Qualidade dos dados"
 
 Conferências que nenhum produto faz — os produtos calculam em cima do que a API mandou; aqui a pergunta é se dá para confiar nesse dado. Dá para analisar só as estações escolhidas ou **todas as de MS** de uma vez.
@@ -730,6 +756,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │   ├── mapas.py          # Mapas pontuais, interpolados e de classes (níveis de risco)
 │   ├── graficos.py       # Gráficos de barras e calendário, com o estilo comum aos produtos
 │   ├── excel.py          # Planilha Excel
+│   ├── retiradas.py      # Estações tiradas dos mapas a pedido, uma lista por variável (painel e --retirar)
 │   └── produtos/         # Um arquivo por produto
 │       ├── relatorio_inmet.py  # Extremos e chuva das estações automáticas
 │       └── risco_fogo.py       # Risco de fogo pela regra 30-30-30, hora a hora

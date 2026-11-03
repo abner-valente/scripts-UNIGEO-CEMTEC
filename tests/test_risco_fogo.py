@@ -338,3 +338,23 @@ def test_a_legenda_do_calendario_vai_do_alto_e_explica_o_branco(monkeypatch, tmp
 
     rotulos = [texto.get_text() for texto in figuras[0].axes[0].get_legend().get_texts()]
     assert rotulos == ["Risco alto", "Risco médio", "Risco baixo", "Sem condição", "Sem dado"]
+
+
+def test_estacao_retirada_sai_das_tres_medidas_do_mapa_e_fica_na_planilha(api_simulada, monkeypatch):
+    recebidas = {}
+    analisar = risco_fogo.analisar_horas
+
+    def espiar_horas(completas, periodo, base, apoio=None):
+        recebidas["nas_horas"] = {estacao["Estação"] for estacao, _ in completas}
+        return analisar(completas, periodo, base, apoio)
+
+    monkeypatch.setattr(risco_fogo, "analisar_horas", espiar_horas)
+    monkeypatch.setattr(risco_fogo, "gerar_mapas",
+                        lambda tabela, *args, **kwargs: recebidas.update(pontos=set(tabela["Estação"])))
+
+    assert risco_fogo.executar(MANHA, {"retirar": {"Risco de Fogo": ["Corumba"], "Chuva": ["Coxim"]}}) == 0
+
+    assert "Corumba" not in recebidas["nas_horas"] | recebidas["pontos"]
+    assert "Coxim" in recebidas["pontos"]        # a chuva não entra no risco: a retirada dela não muda nada
+    tabela = pd.read_excel(MANHA.pasta_saida(risco_fogo.NOME) / f"Risco_Fogo_{config.UF}_{MANHA.identificador}.xlsx")
+    assert "Corumba" in set(tabela["Estação"])
