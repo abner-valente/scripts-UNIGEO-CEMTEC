@@ -1599,6 +1599,25 @@ def visao_do_imovel(imovel: car.Imovel, em_3d: bool) -> dict:
             "zoom": round(min(zoom, ZOOM_DO_IMOVEL_EM_3D) if em_3d else zoom, 1)}
 
 
+# Os rótulos dos mapas navegáveis (o número sobre cada estação, o nome no mapa das estações): caixa
+# branca de cantos arredondados, borda fina e o texto em seminegrito, na fonte do painel. A equipe o
+# escolheu entre seis estilos testados lado a lado (03/11/2026)
+ESTILO_DOS_ROTULOS = dict(get_size=12, get_color=[20, 20, 20], background=True,
+                          get_background_color=[255, 255, 255, 235], get_border_color=[60, 60, 60, 200],
+                          get_border_width=1, background_padding=[4, 1, 4, 1], background_border_radius=4,
+                          font_weight=600)
+FONTE_DO_PAINEL = "'Source Sans Pro', Arial, sans-serif"
+
+
+def camada_de_rotulos(dados: pd.DataFrame, coluna: str, posicao: list[str], deslocamento: list[int],
+                      **extras) -> pdk.Layer:
+    camada = pdk.Layer("TextLayer", data=dados, get_position=posicao, get_text=coluna, get_pixel_offset=deslocamento,
+                       **ESTILO_DOS_ROTULOS, **extras)
+    # Como a imagem dos mapas: passada no construtor, a fonte viraria expressão, e não o nome dela
+    camada.font_family = FONTE_DO_PAINEL
+    return camada
+
+
 def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos: bool,
                     celulas: pd.DataFrame | None = None,
                     escolhido: list[int] = interativo.COR_DO_PONTO_ESCOLHIDO,
@@ -1692,10 +1711,7 @@ def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos:
                   get_radius=3000, radius_min_pixels=6, radius_max_pixels=14, pickable=True, **na_frente),
     ]
     if escritos:
-        camadas.append(pdk.Layer("TextLayer", data=pontos, get_position=posicao,
-                                 get_text="rotulo", get_size=12, get_color=[20, 20, 20],
-                                 get_pixel_offset=[0, -17], background=True,
-                                 get_background_color=[255, 255, 255, 215], **na_frente))
+        camadas.append(camada_de_rotulos(pontos, "rotulo", posicao, [0, -18], **na_frente))
     if "angulo" in pontos:
         # As setas do vento, ao lado de cada estação
         setas = pdk.Layer("TextLayer", data=pontos.dropna(subset=["angulo"]).assign(seta="↑"),
@@ -3430,13 +3446,10 @@ def mapa_das_estacoes(tabela: pd.DataFrame, destacadas: pd.Series, uf: str) -> p
         "Longitude": tabela["Longitude"], "Latitude": tabela["Latitude"],
         "cor": [[200, 30, 30, 235] if destacada else [31, 78, 121, 225] for destacada in destacadas],
     })
-    nomes = pdk.Layer("TextLayer", data=pontos, get_position=["Longitude", "Latitude"], get_text="nome",
-                      get_size=12, get_color=[20, 20, 20], get_pixel_offset=[9, 0],
-                      background=True, get_background_color=[255, 255, 255, 200])
+    nomes = camada_de_rotulos(pontos, "nome", ["Longitude", "Latitude"], [9, 0])
     # Como a imagem dos mapas: passados no construtor, o pydeck trataria os textos como expressões
     nomes.get_text_anchor = "start"
     nomes.get_alignment_baseline = "center"
-    nomes.font_family = "'Source Sans Pro', Arial, sans-serif"   # a do painel, e não a de máquina de escrever
     camadas = [
         pdk.Layer("GeoJsonLayer", data=base.municipios[[referencia.COLUNA_DO_MUNICIPIO, "geometry"]].__geo_interface__,
                   stroked=True, filled=False, get_line_color=[110, 110, 110, 140], line_width_min_pixels=0.5),
