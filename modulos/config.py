@@ -141,6 +141,10 @@ FUSO_MS = RECORTE.fuso
 load_dotenv(RAIZ / ".env")
 TOKEN_INMET = os.getenv("TOKEN_INMET", "").strip()
 TOKEN_EXEMPLO = "seu_token_aqui"  # valor do .env.example, tratado como "não configurado"
+# A conta da PED do CEMADEN (os pluviômetros): só a máquina do coletor precisa dela. A senha vai como
+# está, sem tirar espaços
+CEMADEN_EMAIL = os.getenv("CEMADEN_EMAIL", "").strip()
+CEMADEN_SENHA = os.getenv("CEMADEN_SENHA", "")
 
 # De onde vêm os dados (modulos/fonte.py), escolhido por instalação: no .env do servidor ou nos
 # Secrets do Streamlit Cloud: "apis", as APIs públicas, ou "banco", o banco da UNIGEO (com a conexão
@@ -185,6 +189,23 @@ DOWNLOADS_SIMULTANEOS = 8
 TENTATIVAS = 3                 # tentativas por requisição quando a API falha por um instante
 PAUSA_ENTRE_TENTATIVAS = 2     # segundos antes de repetir; dobra a cada tentativa (2 s, 4 s, ...)
 HORAS_BUSCA_TEMPO_REAL = 96    # histórico baixado no modo tempo real (cobre o acumulado de 72 h)
+
+# =====================================================
+# PED DO CEMADEN (PLUVIÔMETROS)
+# =====================================================
+# O token sai da conta (e-mail e senha) e vale 4 horas; ele carrega o usuário e a senha dentro, então
+# nunca vai para log nem para arquivo. Conferido contra a API em 03/11/2026
+URL_CEMADEN_TOKEN = "https://sgaa.cemaden.gov.br/SGAA/rest/controle-token/tokens"
+URL_CEMADEN = "https://sws.cemaden.gov.br/PED/rest"
+REDE_CEMADEN = "11"                  # a rede do CEMADEN, a única homologada na PED
+SENSOR_CHUVA_CEMADEN = "chuva"       # a chuva desde a leitura anterior, em mm
+VALIDADE_TOKEN_CEMADEN = 3.5 * 3600  # segundos: renova antes das 4 horas, numa carga longa
+TIMEOUT_CEMADEN = 120                # segundos: um dia do estado inteiro vem em ~1 s, mas pode demorar
+# O usuário externo da PED pode fazer até 12 consultas por minuto (o parceiro institucional, 180): o
+# coletor faz no máximo 10, uma a cada 6 s. Recusado pelo limite (HTTP 429), espera o minuto virar
+INTERVALO_CEMADEN = 6.0              # segundos entre o começo de uma consulta e o da seguinte
+PAUSA_NO_LIMITE_CEMADEN = 60         # segundos
+RECUSAS_NO_LIMITE_CEMADEN = 3
 
 # =====================================================
 # PREVISÃO (OPEN-METEO)
