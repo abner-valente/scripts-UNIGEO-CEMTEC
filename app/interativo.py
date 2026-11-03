@@ -76,8 +76,9 @@ def imagem_de_classes(grade: np.ndarray, dentro_fino: np.ndarray, cores: list[st
     return _como_uri(np.flipud(imagem))   # a primeira linha da imagem é o norte; a grade começa no sul
 
 
-def _numero(valor: float, casas: int = 1) -> str:
-    return f"{valor:.{casas}f}".replace(".", ",")
+def _numero(valor: float, casas: int = 1, com_sinal: bool = False) -> str:
+    # Com sinal nas anomalias: +1,2 °C é uma semana mais quente que o normal
+    return f"{valor:{'+' if com_sinal else ''}.{casas}f}".replace(".", ",")
 
 
 def _numero_perto_do_limiar(valor: float, casas: int, limiar: float) -> str:
@@ -115,12 +116,13 @@ def pontos_de_risco(estacoes: pd.DataFrame, coluna: str, legenda: str) -> pd.Dat
     return tabela[COLUNAS_DOS_PONTOS].reset_index(drop=True)
 
 
-def pontos_de_valores(pontos: pd.DataFrame, coluna: str, legenda: str, unidade: str, casas: int) -> pd.DataFrame:
+def pontos_de_valores(pontos: pd.DataFrame, coluna: str, legenda: str, unidade: str, casas: int,
+                      com_sinal: bool = False) -> pd.DataFrame:
     # As variáveis contínuas (a chuva): o ponto escuro, o valor escrito sobre ele e no balão
     tabela = pontos.dropna(subset=[coluna]).copy()
     if tabela.empty:
         return pd.DataFrame(columns=COLUNAS_DOS_PONTOS)
-    texto = tabela[coluna].map(lambda valor: _numero(valor, casas))
+    texto = tabela[coluna].map(lambda valor: _numero(valor, casas, com_sinal))
     tabela["cor"] = [COR_DA_ESTACAO] * len(tabela)
     tabela["rotulo"] = texto
     tabela["titulo"] = tabela["Estação"]
@@ -256,14 +258,15 @@ def _celulas(grade: GradeDoPonto, detalhes: list[str], **colunas) -> pd.DataFram
 
 
 def celulas_da_grade(grade: GradeDoPonto, campo: np.ndarray, nome: str, unidade: str, casas: int, origem: str,
-                     graus: np.ndarray | None = None) -> pd.DataFrame:
+                     graus: np.ndarray | None = None, com_sinal: bool = False) -> pd.DataFrame:
     # Na previsão o valor de cada célula já vem pronto, da superfície do modelo (a mesma que pinta o
     # mapa), e não do IDW das estações. `origem` diz de onde ele vem: o modelo e a grade dele
     valores = _no_estado(grade, campo)
     graus = _no_estado(grade, graus) if graus is not None else np.full(len(valores), np.nan)
     detalhes = []
     for valor, grau in zip(valores, graus):
-        texto = f"{nome}: {_numero(valor, casas)} {unidade}" if pd.notna(valor) else f"{nome}: sem valor"
+        texto = (f"{nome}: {_numero(valor, casas, com_sinal)} {unidade}" if pd.notna(valor)
+                 else f"{nome}: sem valor")
         if pd.notna(grau):
             texto += f"{QUEBRA}de {grau:.0f}° ({rumo(grau)})"
         detalhes.append(texto + QUEBRA + origem)
@@ -277,6 +280,31 @@ def celulas_do_risco_na_grade(grade: GradeDoPonto, nivel: np.ndarray, horas_alto
     detalhes = [f"{legenda}: {config.ROTULOS_RISCO[valor]} ({valor} de 3){QUEBRA}Horas em risco alto: "
                 f"{int(quantas)}{QUEBRA}{origem}" for valor, quantas in zip(niveis, horas)]
     return _celulas(grade, detalhes, nivel=niveis, valor=horas.astype(float))
+
+
+# As três medidas da regra na previsão, na ordem de risco_fogo.condicoes_atendidas: o modelo dá o
+# valor da hora cheia, e não a máxima e a mínima dentro da hora, como a estação
+MEDIDAS_PREVISTAS_DO_RISCO = (
+    ("temperatura", "Temperatura", "°C", config.LIMIAR_TEMP_MAX, 1),
+    ("umidade", "Umidade", "%", config.LIMIAR_UMIDADE_MIN, 0),
+    ("rajada", "Rajada", "km/h", config.LIMIAR_RAJADA, 1),
+)
+
+
+def celulas_do_risco_da_hora(grade: GradeDoPonto, campos: list[np.ndarray], legenda: str, origem: str) -> pd.DataFrame:
+    # O risco previsto numa hora: o nível de cada célula e as três medidas que o deram, com ✔ e ✘, como
+    # no balão do observado. Os ✔ somam o nível
+    medidas = [_no_estado(grade, campo) for campo in campos]
+    atendidas = risco_fogo.condicoes_atendidas(*medidas)
+    niveis = sum(atendida.astype(int) for atendida in atendidas)
+    detalhes = []
+    for indice, nivel in enumerate(niveis):
+        linhas = [f"{legenda}: {config.ROTULOS_RISCO[nivel]} ({nivel} de 3, interpolado)"]
+        for (_, nome, unidade, limiar, casas), medida, atendida in zip(MEDIDAS_PREVISTAS_DO_RISCO, medidas, atendidas):
+            linhas.append(f"{'✔' if atendida[indice] else '✘'} {nome}: "
+                          f"{_numero_perto_do_limiar(medida[indice], casas, limiar)} {unidade}")
+        detalhes.append(QUEBRA.join(linhas + [origem]))
+    return _celulas(grade, detalhes, nivel=niveis, valor=niveis.astype(float))
 
 
 # O relevo (o mapa em 3D): cada célula da grade do ponto vira um bloco com a altura do valor,

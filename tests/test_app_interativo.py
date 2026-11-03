@@ -462,3 +462,24 @@ def test_a_grade_vai_a_malha_fina_pelo_vizinho_mais_proximo():
     fina = interativo.na_malha_fina(np.array([[1.0, 2.0], [3.0, 4.0]]), (4, 4))
 
     assert fina.tolist() == [[1, 1, 2, 2], [1, 1, 2, 2], [3, 3, 4, 4], [3, 3, 4, 4]]
+
+
+def test_na_anomalia_o_balao_e_o_ponto_levam_o_sinal():
+    celulas = interativo.celulas_da_grade(grade_pequena(), np.full((2, 3), 1.25), "Anomalia da chuva", "mm", 1,
+                                          "EC46", com_sinal=True)
+    pontos = interativo.pontos_de_valores(pd.DataFrame({"Estação": ["Dourados"], "Longitude": [-54.8],
+                                                        "Latitude": [-22.2], "Anomalia": [-3.0]}),
+                                          "Anomalia", "Anomalia da chuva", "mm", 1, com_sinal=True)
+
+    assert celulas.loc[0, "detalhe"].startswith("Anomalia da chuva: +1,2 mm")
+    assert pontos.loc[0, "rotulo"] == "-3,0"
+
+
+def test_no_risco_da_hora_os_tres_sinais_somam_o_nivel_da_celula():
+    campos = [np.full((2, 3), 35.0), np.full((2, 3), 20.0), np.array([[40.0, 29.96, 0.0], [10.0, 0.0, 30.0]])]
+
+    celulas = interativo.celulas_do_risco_da_hora(grade_pequena(), campos, "Na hora", "GFS")
+
+    assert list(celulas["nivel"]) == [3, 2, 2, 3]
+    assert celulas.loc[1, "detalhe"] == ("Na hora: Risco médio (2 de 3, interpolado)\n✔ Temperatura: 35,0 °C\n"
+                                         "✔ Umidade: 20 %\n✘ Rajada: 29,96 km/h\nGFS")

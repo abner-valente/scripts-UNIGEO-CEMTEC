@@ -228,6 +228,26 @@ MAPAS = {mapa.nome: mapa for mapa in (
 )}
 PADRAO_MAPAS = ("Temperatura máxima", "Temperatura mínima", "Chuva do dia")
 
+# Os mapas hora a hora dos mapas interativos: o valor da hora cheia que o modelo dá; a chuva e a
+# rajada são as da hora que termina ali. O risco é o da hora, nas três medidas da hora cheia
+MAPAS_DA_HORA = {mapa.nome: mapa for mapa in (
+    MapaPrevisto("Temperatura", "Temperatura prevista", "temperatura", "Temperatura", "°C", "RdYlBu_r", 1,
+                 "a temperatura a 2 m na hora cheia"),
+    MapaPrevisto("Umidade", "Umidade prevista", "umidade", "Umidade", "%", "YlGnBu", 0,
+                 "a umidade relativa a 2 m na hora cheia"),
+    MapaPrevisto("Chuva na hora", "Chuva prevista na hora", "chuva", "Chuva", "mm", "Blues", 1,
+                 "a chuva da hora que termina ali"),
+    MapaPrevisto("Rajada", "Rajada prevista", "rajada", "Vento", "km/h", "turbo", 1,
+                 "a rajada mais forte da hora que termina ali; a seta é a direção do vento na hora cheia",
+                 setas=True),
+    MapaPrevisto("Rajada s/ direção", "Rajada prevista", "rajada", "Vento", "km/h", "turbo", 1,
+                 "a rajada mais forte da hora que termina ali, sem a direção"),
+    MapaPrevisto("Vento", "Vento previsto", "vento", "Vento", "km/h", "turbo", 1,
+                 "a velocidade a 10 m na hora cheia; a seta é a direção", setas=True),
+    MapaPrevisto("Risco de fogo", "Risco de fogo previsto na hora", "nivel", "Risco", "", "", 0,
+                 "o nível da hora pela regra 30-30-30, nas três medidas da hora cheia", risco="hora"),
+)}
+
 
 def nome_do_dia(dia: date) -> str:
     return f"{DIAS_DA_SEMANA[dia.weekday()]} {dia:%d/%m}"
@@ -252,10 +272,11 @@ def valores_do_dia(diaria: pd.DataFrame, mapa: MapaPrevisto, dia: date, hoje: da
     return soma.where(grupos.count() == dias_somados(mapa, dia, hoje))
 
 
-def niveis(mapa: MapaPrevisto, dias: int = 1, ajustar: bool = False):
+def niveis(mapa: MapaPrevisto, dias: int = 1, ajustar: bool = False, horas: float | None = None):
+    # A escala do observado para a mesma janela: `dias` inteiros, ou `horas` nos mapas hora a hora
     if ajustar:
         return None
-    escolhida = variaveis.escala(mapa, 24.0 * dias)
+    escolhida = variaveis.escala(mapa, 24.0 * dias if horas is None else horas)
     if escolhida is None:
         return None
     tipo, valores = escolhida
@@ -389,6 +410,30 @@ def nome_da_semana(semana: date) -> str:
 
 def valores_da_semana(semanal: pd.DataFrame, mapa: MapaSemanal, semana: date) -> pd.Series:
     return semanal[semanal["semana"] == semana].set_index("ponto")[mapa.coluna]
+
+
+def nome_da_hora(hora: pd.Timestamp, fuso=config.FUSO_MS) -> str:
+    local = hora.tz_convert(fuso)
+    return f"{nome_do_dia(local.date())} {local:%H:%M}"
+
+
+def horas_previstas(horaria: pd.DataFrame, desde: pd.Timestamp) -> list[pd.Timestamp]:
+    return sorted(pd.Timestamp(hora) for hora in horaria["hora_prevista_utc"].unique() if hora >= desde)
+
+
+def valores_da_hora(horaria: pd.DataFrame, coluna: str, hora: pd.Timestamp) -> pd.Series:
+    return horaria[horaria["hora_prevista_utc"] == hora].set_index("ponto")[coluna]
+
+
+def nas_estacoes_na_hora(horaria: pd.DataFrame, estacoes: pd.DataFrame, mapa: MapaPrevisto,
+                         hora: pd.Timestamp) -> pd.DataFrame:
+    if horaria.empty:
+        return _estacoes_com(pd.Series(dtype=float), estacoes, mapa.nome)
+    do_instante = horaria[horaria["hora_prevista_utc"] == hora]
+    if mapa.risco:
+        return _estacoes_com(risco_por_hora(do_instante).set_index("ponto")["nivel"], estacoes, mapa.nome)
+    por_ponto = do_instante.set_index("ponto")
+    return _estacoes_com(por_ponto[mapa.coluna], estacoes, mapa.nome, por_ponto["direcao"] if mapa.setas else None)
 
 
 def nas_estacoes_na_semana(semanal: pd.DataFrame, estacoes: pd.DataFrame, mapa: MapaSemanal,
@@ -556,6 +601,26 @@ def risco_no_ponto(largos: tuple[pd.DataFrame, ...], pontos: pd.DataFrame, lons,
     return dias.reset_index()[colunas]
 
 
+def por_hora_e_ponto(horaria: pd.DataFrame, coluna: str) -> pd.DataFrame:
+    return horaria.pivot(index="hora_prevista_utc", columns="ponto", values=coluna)
+
+
+def horario_no_ponto(largo: pd.DataFrame, pontos: pd.DataFrame, lons, lats) -> pd.Series:
+    # Uma variável no ponto, hora a hora (com vários pontos, a média deles), pela bilinear do mapa
+    if largo.empty:
+        return pd.Series(dtype=float)
+    return no_ponto(largo, vizinhos(pontos, lons, lats)).mean(axis=1)
+
+
+def risco_da_hora(horaria: pd.DataFrame, pontos: pd.DataFrame, hora: pd.Timestamp, lon_grade: np.ndarray,
+                  lat_grade: np.ndarray) -> list[np.ndarray] | None:
+    # As três medidas da hora na grade, pela mesma bilinear; a regra se aplica a elas célula a célula
+    completas = horaria[horaria["hora_prevista_utc"] == hora].dropna(subset=list(VARIAVEIS_DO_RISCO))
+    por_ponto = completas.set_index("ponto")
+    campos = [superficie(por_ponto[coluna], pontos, lon_grade, lat_grade) for coluna in VARIAVEIS_DO_RISCO]
+    return None if any(campo is None for campo in campos) else campos
+
+
 def direcoes_do_dia(diaria: pd.DataFrame, dia: date) -> pd.Series:
     inteiros = diaria[(diaria["horas"] == 24) & (diaria["dia_previsto"] == dia)]
     return inteiros.set_index("ponto")["direcao_dominante"]
@@ -583,14 +648,47 @@ SERIES_SEMANAIS = {
 PREVISTA, NORMAL = "Prevista (EC46)", "Normal da época"
 
 
+COLUNAS_CONTRA_O_NORMAL = ["semana", "rotulo", "prevista", "normal", "anomalia"]
+# A previsão que acompanha cada anomalia, e o nome dela no gráfico contra o normal
+PREVISTA_DA_ANOMALIA = {"anom_temperatura": ("temperatura", "Temperatura média"),
+                        "anom_temp_max": ("temp_max", "Máxima de 6 h"),
+                        "anom_temp_min": ("temp_min", "Mínima de 6 h"),
+                        "anom_chuva": ("chuva", "Chuva")}
+
+
+def _contra_o_normal(semanas: pd.Index, prevista: pd.Series, anomalia: pd.Series) -> pd.DataFrame:
+    return pd.DataFrame({"semana": semanas, "rotulo": [nome_da_semana(semana) for semana in semanas],
+                         "prevista": prevista.to_numpy(), "normal": (prevista - anomalia).round(1).to_numpy(),
+                         "anomalia": anomalia.to_numpy()}).dropna().reset_index(drop=True)[COLUNAS_CONTRA_O_NORMAL]
+
+
 def semana_contra_o_normal(semanal: pd.DataFrame, ponto: str, grandeza: str, rodada: datetime) -> pd.DataFrame:
     coluna, anomalia, _ = SERIES_SEMANAIS[grandeza]
-    colunas = ["semana", "rotulo", "prevista", "normal", "anomalia"]
+    return _na_estacao(semanal, ponto, coluna, anomalia, rodada)
+
+
+def semana_na_estacao(semanal: pd.DataFrame, ponto: str, mapa: MapaSemanal, rodada: datetime) -> pd.DataFrame:
+    return _na_estacao(semanal, ponto, PREVISTA_DA_ANOMALIA[mapa.coluna][0], mapa.coluna, rodada)
+
+
+def _na_estacao(semanal: pd.DataFrame, ponto: str, coluna: str, anomalia: str, rodada: datetime) -> pd.DataFrame:
     if semanal.empty or coluna not in semanal:
-        return pd.DataFrame(columns=colunas)
+        return pd.DataFrame(columns=COLUNAS_CONTRA_O_NORMAL)
     semanas = semanas_inteiras(semanal, rodada)
     tabela = semanal[(semanal["ponto"] == ponto) & semanal["semana"].isin(semanas)].sort_values("semana")
-    return pd.DataFrame({"semana": tabela["semana"], "rotulo": tabela["semana"].map(nome_da_semana),
-                         "prevista": tabela[coluna], "normal": (tabela[coluna] - tabela[anomalia]).round(1),
-                         "anomalia": tabela[anomalia]}).dropna().reset_index(drop=True)[colunas]
+    return _contra_o_normal(pd.Index(tabela["semana"]), tabela[coluna], tabela[anomalia])
+
+
+def semana_no_ponto(semanal: pd.DataFrame, pontos: pd.DataFrame, lons, lats, mapa: MapaSemanal,
+                    rodada: datetime) -> pd.DataFrame:
+    # A mesma tabela num ponto qualquer (ou na média das células de um imóvel), pela bilinear do mapa:
+    # a anomalia da semana escolhida é a do balão
+    coluna = PREVISTA_DA_ANOMALIA[mapa.coluna][0]
+    tabela = semanal[semanal["semana"].isin(semanas_inteiras(semanal, rodada))] if not semanal.empty else semanal
+    if tabela.empty or coluna not in tabela:
+        return pd.DataFrame(columns=COLUNAS_CONTRA_O_NORMAL)
+    perto = vizinhos(pontos, lons, lats)
+    prevista, anomalia = (no_ponto(tabela.pivot(index="semana", columns="ponto", values=nome), perto).mean(axis=1)
+                          for nome in (coluna, mapa.coluna))
+    return _contra_o_normal(prevista.index, prevista, anomalia)
 

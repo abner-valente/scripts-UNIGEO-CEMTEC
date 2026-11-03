@@ -8,6 +8,7 @@ import pytest
 
 from app import boletim, previsao
 from modulos import config, mapas, openmeteo
+from modulos.produtos import risco_fogo
 
 RODADA_00 = datetime(2026, 10, 7, 0, tzinfo=timezone.utc)
 RODADA_06 = datetime(2026, 10, 7, 6, tzinfo=timezone.utc)
@@ -666,3 +667,95 @@ def test_o_rumo_no_mapa_sai_das_componentes_e_nao_da_media_dos_graus():
     graus = previsao.rumo_na_grade(valores, direcoes, pontos, np.array([-55.25]), np.array([-21.0]))[0]
 
     assert min(graus, 360 - graus) < 1e-6           # o norte, e não os 180° da média de 350° e 10°
+
+
+# --- hora a hora e semanas ------------------------------------------------------------------
+def test_todo_mapa_da_hora_existe_na_previsao_horaria():
+    colunas = set(openmeteo.COLUNAS_HORARIAS)
+
+    assert all(mapa.coluna in colunas for mapa in previsao.MAPAS_DA_HORA.values() if not mapa.risco)
+    assert previsao.MAPAS_DA_HORA["Risco de fogo"].risco == "hora"
+
+
+def test_a_chuva_da_hora_usa_as_classes_curtas_do_observado():
+    assert previsao.niveis(previsao.MAPAS_DA_HORA["Chuva na hora"], horas=1.0)[0] == 0.2
+    assert previsao.niveis(previsao.MAPAS_DA_HORA["Temperatura"], horas=1.0)[-1] == 45.0
+
+
+def test_as_horas_do_deslizante_sao_as_de_agora_em_diante_com_o_dia_da_semana():
+    horas = horaria("2026-10-08 01:00", 5, modelos=("ecmwf_ifs025",))
+    agora = pd.Timestamp("2026-10-08 03:00", tz=config.FUSO_MS).tz_convert("UTC")
+
+    escolhidas = previsao.horas_previstas(horas, agora)
+
+    assert len(escolhidas) == 3 and escolhidas[0] == agora
+    assert previsao.nome_da_hora(escolhidas[0]) == "qui 08/10 03:00"
+
+
+def test_nas_estacoes_a_hora_leva_o_valor_e_a_direcao_do_modelo():
+    horas = horaria("2026-10-08 01:00", 2, modelos=("ecmwf_ifs025",), rajada=[40.0, 55.0], direcao=[90.0, 180.0])
+    segunda = horas["hora_prevista_utc"].iloc[1]
+
+    tabela = previsao.nas_estacoes_na_hora(horas, ESTACOES, previsao.MAPAS_DA_HORA["Rajada"], segunda)
+
+    assert tabela.loc[0, ["Estação", "Rajada", "Direção (°)"]].tolist() == ["Campo Grande", 55.0, 180.0]
+
+
+def test_no_risco_da_hora_a_estacao_leva_o_nivel_da_regra():
+    horas = horaria("2026-10-08 01:00", 1, modelos=("ecmwf_ifs025",), temperatura=[35.0], umidade=[20.0],
+                    rajada=[10.0])
+
+    tabela = previsao.nas_estacoes_na_hora(horas, ESTACOES, previsao.MAPAS_DA_HORA["Risco de fogo"],
+                                           horas["hora_prevista_utc"].iloc[0])
+
+    assert tabela.loc[0, "Risco de fogo"] == 2
+
+
+def test_a_hora_no_ponto_e_a_mesma_bilinear_do_mapa():
+    pontos = rede()
+    horas = horaria_na_rede(pontos, quantas=3)
+    largo = previsao.por_hora_e_ponto(horas, "temperatura")
+
+    serie = previsao.horario_no_ponto(largo, pontos, -55.4, -21.0)
+
+    assert len(serie) == 3 and np.allclose(serie, 33.0)          # entre 35 °C a -55,5 e 25 °C a -55,0
+
+
+def test_o_risco_da_hora_na_grade_sai_das_tres_medidas_interpoladas():
+    pontos = rede()
+    horas = horaria_na_rede(pontos, quantas=2)
+    lons, lats = np.array([[-55.9, -55.2]]), np.array([[-21.0, -21.0]])
+
+    campos = previsao.risco_da_hora(horas, pontos, horas["hora_prevista_utc"].iloc[0], lons, lats)
+
+    assert np.allclose(campos[0], [[35.0, 29.0]])
+    assert risco_fogo.contar_condicoes(*campos).tolist() == [[3, 2]]
+
+
+def semanal_na_rede(pontos: pd.DataFrame, semanas: dict) -> pd.DataFrame:
+    # A anomalia é um campo plano; a previsão, a anomalia somada a uma normal de 25 °C
+    return pd.DataFrame([{"modelo": "ecmwf_ec46_ensemble_mean", "rodada_utc": RODADA_EC46, "ponto": ponto.ponto,
+                          "semana": semana, "anom_temperatura": base + 0.5 * (ponto.longitude + 55.0),
+                          "temperatura": 25.0 + base + 0.5 * (ponto.longitude + 55.0)}
+                         for semana, base in semanas.items() for ponto in pontos.itertuples()])
+
+
+def test_a_semana_no_ponto_traz_a_previsao_a_normal_e_a_anomalia_do_balao():
+    pontos = rede()
+    tabela = semanal_na_rede(pontos, {date(2026, 10, 5): 9.0, date(2026, 10, 12): 1.0, date(2026, 10, 19): -1.0})
+
+    semana = previsao.semana_no_ponto(tabela, pontos, -54.6, -21.0, previsao.MAPAS_SEMANAIS[
+        "Anomalia da temperatura média"], RODADA_EC46)
+
+    assert list(semana["semana"]) == [date(2026, 10, 12), date(2026, 10, 19)]     # a da rodada fica de fora
+    assert np.allclose(semana["anomalia"], [1.2, -0.8]) and np.allclose(semana["normal"], 25.0)
+    assert semana.loc[0, "rotulo"] == "12/10 a 18/10"
+
+
+def test_na_estacao_cada_anomalia_vai_com_a_previsao_dela():
+    tabela = semanal({date(2026, 10, 12): 1.5}).assign(temperatura=26.5)
+
+    semana = previsao.semana_na_estacao(tabela, "A", previsao.MAPAS_SEMANAIS["Anomalia da temperatura média"],
+                                        RODADA_EC46)
+
+    assert semana.loc[0, ["prevista", "normal", "anomalia"]].tolist() == [26.5, 25.0, 1.5]
