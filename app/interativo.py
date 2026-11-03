@@ -57,14 +57,18 @@ def _como_uri(imagem: np.ndarray) -> str:
     return superficie.como_uri(arquivo.getvalue())
 
 
+def na_malha_fina(grade: np.ndarray, forma: tuple[int, int]) -> np.ndarray:
+    # A grade do cálculo (a dos produtos) levada à malha fina do mapa pelo vizinho mais próximo
+    grade = np.asarray(grade, dtype=float)
+    linhas = np.rint(np.linspace(0, grade.shape[0] - 1, forma[0])).astype(int)
+    colunas = np.rint(np.linspace(0, grade.shape[1] - 1, forma[1])).astype(int)
+    return grade[np.ix_(linhas, colunas)]
+
+
 def imagem_de_classes(grade: np.ndarray, dentro_fino: np.ndarray, cores: list[str] = config.CORES_RISCO,
                       opacidade: float = OPACIDADE) -> str:
-    # A grade do cálculo (a dos produtos) levada à malha fina do mapa pelo vizinho mais próximo, sem
-    # inventar nível entre as classes; o recorte pelo estado é o da malha fina, sem degraus na divisa
-    grade = np.asarray(grade, dtype=float)
-    linhas = np.rint(np.linspace(0, grade.shape[0] - 1, dentro_fino.shape[0])).astype(int)
-    colunas = np.rint(np.linspace(0, grade.shape[1] - 1, dentro_fino.shape[1])).astype(int)
-    fina = grade[np.ix_(linhas, colunas)]
+    # Sem inventar nível entre as classes; o recorte pelo estado é o da malha fina, sem degraus na divisa
+    fina = na_malha_fina(grade, dentro_fino.shape)
     validos = dentro_fino & ~np.isnan(fina)
     paleta = np.array([rgba(cor, int(255 * opacidade)) for cor in cores], dtype=np.uint8)
     imagem = paleta[np.where(validos, fina, 0).astype(int).clip(0, len(cores) - 1)]
@@ -235,6 +239,44 @@ def celulas_do_ponto(grade: GradeDoPonto, entrada: pd.DataFrame, coluna: str, un
                     for valor, grau, nome, km in zip(valores, graus, nomes, distancias)],
         "valor": valores, "graus": graus, "mais_proxima": nomes, "km": distancias,
     })
+
+
+def _no_estado(grade: GradeDoPonto, matriz) -> np.ndarray:
+    return np.ravel(matriz)[np.flatnonzero(grade.dentro)]
+
+
+def _celulas(grade: GradeDoPonto, detalhes: list[str], **colunas) -> pd.DataFrame:
+    return pd.DataFrame({
+        "celula": np.flatnonzero(grade.dentro),
+        "Longitude": np.round(_no_estado(grade, grade.lon), 4),
+        "Latitude": np.round(_no_estado(grade, grade.lat), 4),
+        "titulo": [municipio or "Ponto no mapa" for municipio in _no_estado(grade, grade.municipio)],
+        "detalhe": detalhes, **colunas,
+    })
+
+
+def celulas_da_grade(grade: GradeDoPonto, campo: np.ndarray, nome: str, unidade: str, casas: int, origem: str,
+                     graus: np.ndarray | None = None) -> pd.DataFrame:
+    # Na previsão o valor de cada célula já vem pronto, da superfície do modelo (a mesma que pinta o
+    # mapa), e não do IDW das estações. `origem` diz de onde ele vem: o modelo e a grade dele
+    valores = _no_estado(grade, campo)
+    graus = _no_estado(grade, graus) if graus is not None else np.full(len(valores), np.nan)
+    detalhes = []
+    for valor, grau in zip(valores, graus):
+        texto = f"{nome}: {_numero(valor, casas)} {unidade}" if pd.notna(valor) else f"{nome}: sem valor"
+        if pd.notna(grau):
+            texto += f"{QUEBRA}de {grau:.0f}° ({rumo(grau)})"
+        detalhes.append(texto + QUEBRA + origem)
+    return _celulas(grade, detalhes, valor=valores, graus=graus)
+
+
+def celulas_do_risco_na_grade(grade: GradeDoPonto, nivel: np.ndarray, horas_alto: np.ndarray, legenda: str,
+                              origem: str) -> pd.DataFrame:
+    # O risco previsto de cada célula: o pior nível do dia e as horas em risco alto, os dois mapas
+    niveis, horas = _no_estado(grade, nivel).astype(int), _no_estado(grade, horas_alto)
+    detalhes = [f"{legenda}: {config.ROTULOS_RISCO[valor]} ({valor} de 3){QUEBRA}Horas em risco alto: "
+                f"{int(quantas)}{QUEBRA}{origem}" for valor, quantas in zip(niveis, horas)]
+    return _celulas(grade, detalhes, nivel=niveis, valor=horas.astype(float))
 
 
 # O relevo (o mapa em 3D): cada célula da grade do ponto vira um bloco com a altura do valor,

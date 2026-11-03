@@ -416,3 +416,49 @@ def test_a_serie_do_risco_no_ponto_na_hora_do_mapa_e_o_balao():
         na_hora = serie[serie["dt_local"] == hora.tz_convert(config.FUSO_MS).tz_localize(None)]
         assert len(na_hora) == 3 and set(serie["Medida"]) == set(na_hora["Medida"])
         assert (na_hora["Condição"] == "atendida").sum() == celula["nivel"]   # o clique e o balão dizem o mesmo
+
+
+# =====================================================
+# A PREVISÃO NOS MAPAS INTERATIVOS
+# =====================================================
+def grade_pequena() -> interativo.GradeDoPonto:
+    lon, lat = np.meshgrid(np.linspace(-55.0, -54.0, 3), np.linspace(-21.0, -20.0, 2))
+    dentro = np.array([[True, True, False], [True, False, True]])
+    municipio = np.array([["Campo Grande", "", "Terenos"], ["Sidrolândia", "Jaraguari", ""]], dtype=object)
+    return interativo.GradeDoPonto(lon, lat, dentro, municipio, (0.25, 0.5))
+
+
+def test_na_previsao_a_celula_leva_o_valor_do_modelo_e_de_onde_ele_vem():
+    campo = np.arange(6, dtype=float).reshape(2, 3) + 0.3
+
+    celulas = interativo.celulas_da_grade(grade_pequena(), campo, "Rajada máxima", "km/h", 1,
+                                          "ECMWF, grade de 0,25° (~28 km)", np.full((2, 3), 135.0))
+
+    assert list(celulas["celula"]) == [0, 1, 3, 5]
+    assert np.allclose(celulas["valor"], [0.3, 1.3, 3.3, 5.3])
+    assert list(celulas["titulo"]) == ["Campo Grande", "Ponto no mapa", "Sidrolândia", "Ponto no mapa"]
+    assert celulas.loc[0, "detalhe"] == "Rajada máxima: 0,3 km/h\nde 135° (SE)\nECMWF, grade de 0,25° (~28 km)"
+
+
+def test_na_previsao_a_celula_sem_valor_diz_isso_no_balao():
+    celulas = interativo.celulas_da_grade(grade_pequena(), np.full((2, 3), np.nan), "Chuva do dia", "mm", 1, "GFS")
+
+    assert celulas.loc[0, "detalhe"] == "Chuva do dia: sem valor\nGFS"
+
+
+def test_no_risco_previsto_o_balao_traz_o_nivel_e_as_horas_em_risco_alto():
+    nivel = np.array([[3, 2, 0], [1, 0, 0]])
+    horas = np.array([[5, 0, 0], [0, 0, 0]])
+
+    celulas = interativo.celulas_do_risco_na_grade(grade_pequena(), nivel, horas, "Pior nível do dia", "ICON")
+
+    assert list(celulas["nivel"]) == [3, 2, 1, 0]
+    assert list(celulas["valor"]) == [5.0, 0.0, 0.0, 0.0]
+    assert celulas.loc[0, "detalhe"] == (f"Pior nível do dia: {config.ROTULOS_RISCO[3]} (3 de 3)\n"
+                                         "Horas em risco alto: 5\nICON")
+
+
+def test_a_grade_vai_a_malha_fina_pelo_vizinho_mais_proximo():
+    fina = interativo.na_malha_fina(np.array([[1.0, 2.0], [3.0, 4.0]]), (4, 4))
+
+    assert fina.tolist() == [[1, 1, 2, 2], [1, 1, 2, 2], [3, 3, 4, 4], [3, 3, 4, 4]]

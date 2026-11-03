@@ -127,3 +127,14 @@ def test_valor_acima_do_teto_fica_na_cor_do_extremo(grade):
 
     dentro = np.flipud(grade.dentro)
     assert (png[:, :, 3][dentro] > 0).all()
+
+
+def test_uma_superficie_pronta_vira_imagem_sem_pintar_fora_do_estado_nem_o_que_falta(grade):
+    # A da previsão já vem do modelo: a imagem só pinta, sem IDW
+    pronta = 20.0 + (grade.lat - grade.lat.min())
+    pronta[0, :] = np.nan
+    png = imagem(superficie.png_da_grade(pronta, grade, "RdYlBu_r", medidas=pd.Series([20.0, 23.0])))
+
+    alfa = np.flipud(png[:, :, 3])          # de volta à ordem da grade, que começa no sul
+    assert (alfa[~grade.dentro] == 0).all() and (alfa[0, :] == 0).all()
+    assert (alfa[1:][grade.dentro[1:]] > 0).all()

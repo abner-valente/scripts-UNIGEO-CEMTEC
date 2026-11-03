@@ -98,7 +98,8 @@ ACIMA_DO_BLOCO = 1500           # metros: no 3D, o topo das células do imóvel 
 LADO_MINIMO_DO_IMOVEL = 0.15    # graus: um imóvel pequeno (ou um ponto) abre com as células em volta
 FOLGA_DO_IMOVEL = 2.5
 ZOOM_DO_IMOVEL_EM_3D = 7.0
-ESCOLHAS_INTERATIVAS = ("escolha_mapa_interativo", "escolha_chuva_interativa", "escolha_risco_interativo")
+ESCOLHAS_INTERATIVAS = ("escolha_mapa_interativo", "escolha_chuva_interativa", "escolha_risco_interativo",
+                        "escolha_previsao_interativa")
 # Dois ajustes no balão dos gráficos. Ele é um elemento só, pendurado no corpo da página fora
 # do gráfico, então as regras valem para todos eles; os seletores repetem o caminho inteiro do
 # estilo do Streamlit porque um mais curto perde na especificidade e não pega.
@@ -948,25 +949,26 @@ def _obter_previsao(conjunto: str, modelo: str, rodada: datetime | None, falha: 
     return obtida.tabela
 
 
-def barras_da_chuva_prevista(longo: pd.DataFrame) -> alt.Chart:
+def barras_da_chuva_prevista(longo: pd.DataFrame, titulo: str = "Chuva (mm)", formato: str = ".1f") -> alt.Chart:
+    # Também as horas em risco alto, nos mapas interativos da previsão
     base = alt.Chart(longo).encode(
         x=alt.X("yearmonthdate(dt_local):O", title=None,
                 axis=alt.Axis(format="%d/%m", formatType="time", labelAngle=0,
                               labelFontSize=FONTE_DOS_EIXOS)),
         xOffset=alt.XOffset("Modelo:N", sort=list(previsao.CORES)),
-        y=alt.Y("valor:Q", title="Chuva (mm)",
+        y=alt.Y("valor:Q", title=titulo,
                 axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS)))
     barras = base.mark_bar().encode(
         color=alt.Color("Modelo:N", title=None, legend=alt.Legend(orient="bottom"),
                         scale=_escala_das_cores(previsao.CORES, longo["Modelo"])),
         tooltip=[alt.Tooltip("yearmonthdate(dt_local):T", title="Dia", format="%d/%m"),
                  alt.Tooltip("Modelo:N"),
-                 alt.Tooltip("valor:Q", title="Chuva (mm)", format=".1f")])
+                 alt.Tooltip("valor:Q", title=titulo, format=formato)])
     # O número em cima de cada barra, e só onde choveu: os dias secos são a maioria, e um "0.0"
     # em cada um cobriria as barras que interessam
     numeros = (base.transform_filter(alt.datum.valor > 0)
                .mark_text(baseline="bottom", dy=-4, fontSize=FONTE_DOS_ROTULOS, color="#d0d0d0")
-               .encode(text=alt.Text("valor:Q", format=".1f")))
+               .encode(text=alt.Text("valor:Q", format=formato)))
     return (barras + numeros).properties(height=ALTURA_GRAFICO)
 
 
@@ -2089,9 +2091,11 @@ def cabecalho_do_imovel(imovel: car.Imovel, dele: pd.DataFrame, linha_do_valor: 
     st.markdown(linha_do_valor)
     quantas = f"{len(dele)} {'célula' if len(dele) == 1 else 'células'} da grade de ~{lado:.0f} km"
     de_onde = "do ponto" if imovel.ponto else "do centro do imóvel"
+    # Na previsão a célula não sai das estações, e a mais próxima não entra
+    estacao = (f" Estação mais próxima {de_onde}: **{perto['mais_proxima']}**, a {perto['km']:.0f} km."
+               if "mais_proxima" in perto else "")
     st.caption(" · ".join(parte for parte in (imovel.detalhe, quantas) if parte)
-               + f", em magenta no mapa. Estação mais próxima {de_onde}: **{perto['mais_proxima']}**, a "
-                 f"{perto['km']:.0f} km. {conta}")
+               + f", em magenta no mapa.{estacao} {conta}")
 
 
 def painel_do_imovel(produto: variaveis.Produto, celulas: pd.DataFrame, imovel: car.Imovel, leituras: pd.DataFrame,
@@ -2555,6 +2559,415 @@ def pagina_mapas_interativos() -> None:
         risco_interativo(uf, recorte, intervalo, estacoes, inicio, fim, imovel)
 
 
+# =====================================================
+# MAPAS INTERATIVOS DA PREVISÃO
+# =====================================================
+# Os mapas interativos do observado sobre a previsão: um mapa por vez, de um modelo e um dia. A
+# superfície é a do modelo (a mesma bilinear da página Mapas), e não o IDW das estações: o número de
+# qualquer ponto é o do modelo ali. No clique, o ponto, a estação ou o imóvel do CAR mostram os três
+# modelos lado a lado, dia a dia
+ESCOLHA_PREVISTA = "escolha_previsao_interativa"
+GRANDEZAS_EM_RELEVO = ("Chuva", "Risco")   # as que ganham o 3D, como no observado
+PADRAO_PREVISTO = "Temperatura máxima"
+LEGENDA_DO_RISCO_PREVISTO = "Pior nível do dia"
+
+
+def origem_da_grade(modelo: str, pontos_grade: pd.DataFrame) -> str:
+    passo = previsao.espacamento(pontos_grade)
+    km = passo * interativo.METROS_POR_GRAU / 1000
+    return f"{openmeteo.NOMES[modelo]}, grade de {passo:g}° (~{km:.0f} km)".replace(".", ",")
+
+
+@st.cache_data(show_spinner=False, max_entries=20)
+def superficies_previstas(modelo: str, rodada: datetime, nome: str, dia: date, hoje: date, _diaria: pd.DataFrame,
+                          _pontos: pd.DataFrame) -> tuple[pd.Series, np.ndarray, np.ndarray, np.ndarray | None] | None:
+    # A superfície do mapa em duas malhas, da mesma bilinear: a fina vira a imagem, e a do ponto dá o
+    # número de cada célula (e o rumo, nos mapas com seta)
+    mapa = previsao.MAPAS[nome]
+    valores = previsao.valores_do_dia(_diaria, mapa, dia, hoje)
+    malha, grade = malha_fina(previsao.UF), grade_do_ponto(previsao.UF)
+    fina = previsao.superficie(valores, _pontos, malha.lon, malha.lat)
+    na_grade = previsao.superficie(valores, _pontos, grade.lon, grade.lat)
+    if fina is None or na_grade is None:
+        return None
+    graus = (previsao.rumo_na_grade(valores, previsao.direcoes_do_dia(_diaria, dia), _pontos, grade.lon, grade.lat)
+             if mapa.setas else None)
+    return valores.dropna(), fina, na_grade, graus
+
+
+@st.cache_data(show_spinner=False, max_entries=20)
+def imagem_prevista(modelo: str, rodada: datetime, nome: str, dia: date, hoje: date, niveis: tuple | None,
+                    _fina: np.ndarray, _medidas: pd.Series) -> str:
+    paleta = previsao.MAPAS[nome].paleta
+    return superficie.como_uri(superficie.png_da_grade(_fina, malha_fina(previsao.UF), paleta, niveis, _medidas))
+
+
+@st.cache_data(show_spinner=False, max_entries=20)
+def celulas_previstas(modelo: str, rodada: datetime, nome: str, dia: date, hoje: date, origem: str,
+                      _campo: np.ndarray, _graus: np.ndarray | None) -> pd.DataFrame:
+    mapa = previsao.MAPAS[nome]
+    return interativo.celulas_da_grade(grade_do_ponto(previsao.UF), _campo, mapa.nome, mapa.unidade, mapa.decimais,
+                                       origem, _graus)
+
+
+@st.cache_data(show_spinner=False, max_entries=20)
+def celulas_do_risco_previsto(modelo: str, rodada: datetime, dia: date, origem: str, _nivel: np.ndarray,
+                              _horas: np.ndarray) -> pd.DataFrame:
+    return interativo.celulas_do_risco_na_grade(grade_do_ponto(previsao.UF), _nivel, _horas,
+                                                LEGENDA_DO_RISCO_PREVISTO, origem)
+
+
+@st.cache_data(show_spinner=False, max_entries=6)
+def largos_do_risco_previsto(modelo: str, rodada: datetime, _horaria: pd.DataFrame) -> tuple[pd.DataFrame, ...]:
+    return previsao.largos_do_risco(_horaria)
+
+
+def previsoes_dos_tres(pontos_grade: pd.DataFrame) -> list[pd.DataFrame]:
+    # A grade dos três modelos, só quando alguém clica: o mapa pede um modelo só
+    tabelas, avisos = previsao_dos_pontos("grade", pontos_grade, config.MODELOS_PREVISAO)
+    for texto in avisos:
+        st.warning(texto)
+    return tabelas
+
+
+def _com_o_valor(mapa: previsao.MapaPrevisto, pedacos: list[pd.DataFrame]) -> pd.DataFrame:
+    # Um dia por linha e modelo, com o número do mapa em "valor" (no risco, o nível ou as horas)
+    coluna = {"nivel": "risco_max", "horas": "horas_risco_alto"}.get(mapa.risco, mapa.coluna)
+    colunas = ["modelo", "dia_previsto", "valor", "risco_max", "horas_risco_alto"]
+    tabela = pd.concat(pedacos, ignore_index=True) if pedacos else pd.DataFrame()
+    if coluna not in tabela:
+        return pd.DataFrame(columns=colunas)
+    tabela = tabela.assign(valor=tabela[coluna]).dropna(subset=["valor"])
+    for falta in ("risco_max", "horas_risco_alto"):
+        if falta not in tabela:
+            tabela[falta] = np.nan
+    return tabela[colunas].sort_values(["modelo", "dia_previsto"], ignore_index=True)
+
+
+def dias_no_ponto(mapa: previsao.MapaPrevisto, tabelas: list[pd.DataFrame], pontos_grade: pd.DataFrame, lons, lats,
+                  hoje: date) -> pd.DataFrame:
+    # Os três modelos no ponto (ou nas células do imóvel), pela mesma bilinear que pinta o mapa
+    pedacos = []
+    for horaria in tabelas:
+        modelo, rodada = horaria["modelo"].iloc[0], previsao.rodada_da(horaria)
+        if mapa.risco:
+            dias = previsao.risco_no_ponto(largos_do_risco_previsto(modelo, rodada, horaria), pontos_grade, lons,
+                                           lats, hoje)
+        else:
+            serie = previsao.diario_no_ponto(diario_previsto("grade", modelo, rodada, horaria), pontos_grade, lons,
+                                             lats, mapa.coluna, hoje)
+            dias = pd.DataFrame({"dia_previsto": serie.index, mapa.coluna: serie.to_numpy()})
+        pedacos.append(dias.assign(modelo=modelo))
+    return _com_o_valor(mapa, pedacos)
+
+
+def dias_na_estacao(mapa: previsao.MapaPrevisto, tabelas: list[pd.DataFrame], codigo: str, hoje: date) -> pd.DataFrame:
+    # A previsão de cada modelo no ponto da estação, a mesma da página Estações
+    pedacos = []
+    for horaria in tabelas:
+        diaria = diario_previsto("estações", horaria["modelo"].iloc[0], previsao.rodada_da(horaria), horaria)
+        pedacos.append(diaria[(diaria["ponto"] == codigo) & (diaria["horas"] == 24) & (diaria["dia_previsto"] >= hoje)])
+    return _com_o_valor(mapa, pedacos)
+
+
+def graficos_previstos(mapa: previsao.MapaPrevisto, dias: pd.DataFrame) -> None:
+    # Os gráficos da página Estações: barras na chuva e nas horas em risco alto, o calendário no
+    # nível do risco e linhas nas outras
+    if mapa.risco == "nivel":
+        st.altair_chart(calendario_do_risco_previsto(dias), width="stretch")
+        return
+    longo = dias.assign(dt_local=pd.to_datetime(dias["dia_previsto"]).dt.tz_localize(config.FUSO_MS),
+                        Modelo=dias["modelo"].map(openmeteo.NOMES))
+    if mapa.risco == "horas":
+        grafico = barras_da_chuva_prevista(longo, "Horas em risco alto", ".0f")
+    elif mapa.grandeza == "Chuva":
+        grafico = barras_da_chuva_prevista(longo)
+    else:
+        grandeza = previsao.GRANDEZAS.get(mapa.grandeza)
+        linhas = longo.assign(Série=mapa.nome).rename(columns={"Modelo": "Estação"})[["dt_local", "Estação", "valor",
+                                                                                    "Série"]]
+        grafico = desenhar(linhas, f"{mapa.nome} ({mapa.unidade})", grandeza.zero_na_base if grandeza else False,
+                           variaveis.DIA, mapa.decimais, cores=previsao.CORES)
+    st.altair_chart(grafico, width="stretch")
+
+
+def no_dia_escolhido(mapa: previsao.MapaPrevisto, dias: pd.DataFrame, dia: date, hoje: date) -> str:
+    # O número de cada modelo no dia do mapa (na chuva acumulada, a soma até ele), na ordem das cores
+    partes = []
+    for modelo in config.MODELOS_PREVISAO:
+        dele = dias[dias["modelo"] == modelo]
+        if mapa.acumulado:
+            janela = dele[dele["dia_previsto"] <= dia]
+            if len(janela) != previsao.dias_somados(mapa, dia, hoje):
+                continue
+            valor = janela["valor"].sum()
+        elif (dele["dia_previsto"] == dia).any():
+            valor = dele.loc[dele["dia_previsto"] == dia, "valor"].iloc[0]
+        else:
+            continue
+        if mapa.risco == "nivel":
+            texto = config.ROTULOS_RISCO[int(valor)].lower()
+        else:
+            texto = f"{valor:.{mapa.decimais}f} {mapa.unidade}".replace(".", ",").strip()
+        partes.append(f"{openmeteo.NOMES[modelo]} {texto}")
+    if not partes:
+        return ""
+    quando = f"de hoje até {previsao.nome_do_dia(dia)}" if mapa.acumulado else f"em {previsao.nome_do_dia(dia)}"
+    return f"**{mapa.nome} {quando}:** " + " · ".join(partes) + "."
+
+
+def valor_da_celula(mapa: previsao.MapaPrevisto, ponto: pd.Series) -> str:
+    if mapa.risco == "nivel":
+        return f"{config.ROTULOS_RISCO[int(ponto['nivel'])]} ({int(ponto['nivel'])} de 3)"
+    if mapa.risco == "horas":
+        return f"{int(ponto['valor'])} h"
+    texto = f"{ponto['valor']:.{mapa.decimais}f} {mapa.unidade}".replace(".", ",")
+    if pd.notna(ponto.get("graus")):
+        texto += f", de {ponto['graus']:.0f}° ({interativo.rumo(ponto['graus'])})"
+    return texto
+
+
+CONTA_DO_PONTO = ("Cada modelo pela interpolação bilinear dos quatro pontos da grade dele em volta, a mesma conta que "
+                  "pinta o mapa; o ICON vai só até o dia 7.")
+
+
+def painel_previsto_no_ponto(mapa: previsao.MapaPrevisto, celulas: pd.DataFrame, celula: int,
+                             pontos_grade: pd.DataFrame, modelo: str, dia: date, hoje: date) -> None:
+    clicado = ponto_clicado(celulas, celula, previsao.UF)
+    if clicado is None:
+        return
+    ponto, lon, lat = clicado
+    st.subheader(f"{ponto['titulo']} · {abs(lat):.2f}° S, {abs(lon):.2f}° O".replace(".", ","))
+    st.markdown(f"**No mapa ({openmeteo.NOMES[modelo]}, {previsao.nome_do_dia(dia)}):** {valor_da_celula(mapa, ponto)}")
+    dias = dias_no_ponto(mapa, previsoes_dos_tres(pontos_grade), pontos_grade, lon, lat, hoje)
+    if dias.empty:
+        st.info(f"Nenhum modelo traz {mapa.nome.lower()} para esse ponto.")
+        return
+    graficos_previstos(mapa, dias)
+    st.caption(" ".join(parte for parte in (no_dia_escolhido(mapa, dias, dia, hoje),
+                                            f"Os três modelos no ponto, dia a dia. {CONTA_DO_PONTO}") if parte))
+
+
+def painel_previsto_na_estacao(mapa: previsao.MapaPrevisto, nome: str, estacoes: pd.DataFrame, dia: date,
+                               hoje: date) -> None:
+    codigo = str(estacoes.set_index("Estação").loc[nome, "CD_ESTACAO"])
+    tabelas, avisos = previsao_dos_pontos("estações", openmeteo.pontos_das_estacoes(estacoes), config.MODELOS_PREVISAO)
+    for texto in avisos:
+        st.warning(texto)
+    st.subheader(nome)
+    dias = dias_na_estacao(mapa, tabelas, codigo, hoje)
+    if dias.empty:
+        st.info(f"Nenhum modelo traz {mapa.nome.lower()} para {nome}.")
+        return
+    graficos_previstos(mapa, dias)
+    st.caption(" ".join(parte for parte in (no_dia_escolhido(mapa, dias, dia, hoje),
+                                            "Os três modelos no ponto da estação, dia a dia, como na página Estações.")
+                        if parte))
+
+
+def painel_previsto_no_imovel(mapa: previsao.MapaPrevisto, celulas: pd.DataFrame, imovel: car.Imovel,
+                              pontos_grade: pd.DataFrame, modelo: str, dia: date, hoje: date) -> None:
+    # Nas variáveis e na chuva, a média das células do imóvel; no risco, o pior delas, como no observado
+    dele = celulas_dele(celulas, imovel, previsao.UF)
+    if dele is None:
+        return
+    quando = f"{openmeteo.NOMES[modelo]}, {previsao.nome_do_dia(dia)}"
+    if mapa.risco == "nivel":
+        pior = int(dele["nivel"].max())
+        linha = f"**{imovel.onde.capitalize()} ({quando}):** {config.ROTULOS_RISCO[pior]} ({pior} de 3)"
+    elif mapa.risco == "horas":
+        linha = f"**Horas em risco alto {imovel.onde} ({quando}):** {int(dele['valor'].max())} h"
+    else:
+        linha = f"**{mapa.nome} {imovel.onde} ({quando}):** {car.resumo(dele['valor'], mapa.decimais, mapa.unidade)}"
+    pior_ou_media = "o pior" if mapa.risco else "a média"
+    cabecalho_do_imovel(imovel, dele, linha, previsao.UF,
+                        conta="Cada célula leva o valor do modelo, a mesma bilinear que pinta o mapa"
+                              + (f"; o imóvel leva {pior_ou_media} delas." if len(dele) > 1 else "."))
+    lons, lats = coordenadas_das_celulas(dele, previsao.UF)
+    dias = dias_no_ponto(mapa, previsoes_dos_tres(pontos_grade), pontos_grade, lons, lats, hoje)
+    if dias.empty:
+        st.info(f"Nenhum modelo traz {mapa.nome.lower()} para o imóvel.")
+        return
+    graficos_previstos(mapa, dias)
+    celulas_no_texto = f" ({pior_ou_media} das {len(dele)} células)" if len(dele) > 1 else ""
+    st.caption(" ".join(parte for parte in (no_dia_escolhido(mapa, dias, dia, hoje),
+                                            f"Os três modelos {imovel.onde}{celulas_no_texto}, dia a dia. "
+                                            f"{CONTA_DO_PONTO}") if parte))
+
+
+def pagina_previsao_interativa() -> None:
+    st.title("Mapas interativos da previsão — Mato Grosso do Sul")
+    aviso = st.container()
+    if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
+        st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
+        st.stop()
+    with st.sidebar:
+        st.header("Filtros")
+        st.session_state.setdefault("mapas_previstos_modelo", config.MODELOS_PREVISAO[0])
+        modelo = st.radio("Modelo", list(config.MODELOS_PREVISAO), format_func=openmeteo.NOMES.get,
+                          key="mapas_previstos_modelo",
+                          help="O do mapa. No clique, os três aparecem lado a lado. O ECMWF e o GFS vão até o dia 14; "
+                               "o ICON, até o dia 7.")
+        st.checkbox("Mapa de fundo", value=True, key="fundo_interativo",
+                    help="Países, cidades, estradas e rios, para ver além do estado. Vem da internet: sem rede, o "
+                         "fundo some e o resto do mapa continua. Desligado, ficam só os limites do estado e dos "
+                         "municípios.")
+        imovel = imovel_da_barra()
+    try:
+        estacoes = carregar_estacoes(previsao.UF).sort_values("Estação")
+    except fonte.ErroFonte:
+        sem_lista_de_estacoes(aviso, previsao.UF)
+
+    pontos_grade = fonte.pontos_da_grade()
+    grades, avisos = previsao_dos_pontos("grade", pontos_grade, (modelo,))
+    nas_estacoes, avisos_estacoes = previsao_dos_pontos("estações", openmeteo.pontos_das_estacoes(estacoes),
+                                                        (modelo,))
+    for texto in avisos + avisos_estacoes:
+        aviso.warning(texto)
+    if not grades:
+        st.stop()
+    horaria = grades[0]
+    rodada = previsao.rodada_da(horaria)
+    diaria_grade = diario_previsto("grade", modelo, rodada, horaria)
+    diaria_estacoes = (diario_previsto("estações", modelo, previsao.rodada_da(nas_estacoes[0]), nas_estacoes[0])
+                       if nas_estacoes else pd.DataFrame())
+    hoje = pd.Timestamp.now(tz=config.FUSO_MS).date()
+    dias = previsao.dias_inteiros(diaria_grade, hoje)
+    if not dias:
+        st.warning(f"O {openmeteo.NOMES[modelo]} não trouxe nenhum dia inteiro de hoje em diante.")
+        st.stop()
+    origem = origem_da_grade(modelo, pontos_grade)
+    da_grade = f"{len(pontos_grade)} pontos da {origem.split(', ', 1)[1]}"   # "607 pontos da grade de 0,25° (~28 km)"
+    st.caption("Os mapas do boletim (PNG) continuam na página Mapas. Aqui um mapa por vez se aproxima, se arrasta e "
+               f"responde ao clique. **Aproximar não deixa a previsão mais precisa:** o modelo vê o estado em "
+               f"{da_grade}, e o que acontece entre eles fica de fora.")
+
+    nomes = list(previsao.MAPAS)
+    mapa_tela, dia_tela = st.columns([1, 2])
+    with mapa_tela:
+        mapa = previsao.MAPAS[st.selectbox("Mapa", nomes, index=nomes.index(PADRAO_PREVISTO),
+                                           key="previsao_interativa_mapa",
+                                           help="Um mapa por vez. A chuva acumulada soma de hoje até o dia escolhido.")]
+    with dia_tela:
+        # Trocando de modelo, o dia escolhido pode não existir no outro (o ICON para no dia 7): fica o
+        # último que o modelo tem até ele, como na página Mapas
+        escolhido = st.session_state.get("previsao_interativa_dia")
+        if escolhido not in dias:
+            st.session_state["previsao_interativa_dia"] = max((um for um in dias if escolhido and um <= escolhido),
+                                                              default=dias[0])
+        dia = st.select_slider("Dia", options=dias, format_func=previsao.nome_do_dia, key="previsao_interativa_dia")
+    com_relevo = mapa.grandeza in GRANDEZAS_EM_RELEVO
+    caixas = iter(st.columns(1 + (not mapa.risco) + com_relevo))
+    with next(caixas):
+        escritos = st.checkbox("Mostrar o valor de cada estação", value=True, key="previsao_interativa_valores",
+                               help="A previsão do mesmo modelo no ponto de cada estação.")
+    ajustar = em_3d = False
+    if not mapa.risco:
+        with next(caixas):
+            ajustar = st.checkbox("Ajustar a escala ao dado", value=False, key="previsao_interativa_ajustar",
+                                  help="Desligada, a escala é a mesma dos mapas do observado: a mesma cor quer dizer "
+                                       "o mesmo valor, previsto ou medido.")
+    if com_relevo:
+        with next(caixas):
+            em_3d = st.checkbox("Relevo 3D", value=False, key="previsao_interativa_3d",
+                                help="O valor vira altura (o topo da escala sobe 100 km; no risco, um degrau por "
+                                     "nível), e o mapa abre inclinado. Arraste com o botão direito para inclinar e "
+                                     "girar.")
+    st.caption(f"**{openmeteo.NOMES[modelo]}**, rodada de {rodada:%d/%m %H} UTC. "
+               "Previsão: [Open-Meteo.com](https://open-meteo.com/), com dados do ECMWF, da NOAA e do "
+               "DWD ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)).")
+    st.markdown(ESTILO_BALAO, unsafe_allow_html=True)
+
+    grade, malha = grade_do_ponto(previsao.UF), malha_fina(previsao.UF)
+    tabela_estacoes = previsao.nas_estacoes(diaria_estacoes, estacoes, mapa, dia, hoje)
+    da_estacao = tabela_estacoes.set_index("Estação")[mapa.nome]
+    relevo = altura = None
+    if mapa.risco:
+        calculado = risco_na_grade_prevista(modelo, rodada, dia, _horaria=horaria, _pontos=pontos_grade)
+        if calculado is None:
+            st.info(f"O {openmeteo.NOMES[modelo]} não traz as três variáveis da regra para {previsao.nome_do_dia(dia)}.")
+            return
+        nivel, horas_alto = calculado
+        celulas = celulas_do_risco_previsto(modelo, rodada, dia, origem, _nivel=nivel, _horas=horas_alto)
+        no_estado = (nivel if mapa.risco == "nivel" else horas_alto)[grade.dentro]
+        if mapa.risco == "nivel":
+            pontos = interativo.pontos_de_risco(tabela_estacoes, mapa.nome, LEGENDA_DO_RISCO_PREVISTO)
+            imagem, niveis = interativo.imagem_de_classes(nivel, malha.dentro), None
+            if em_3d:
+                relevo, altura = interativo.relevo_de_classes(celulas), interativo.metros_por_nivel()
+            partes = [f"{config.ROTULOS_RISCO[classe].replace('Risco ', '').capitalize()} em "
+                      f"{(no_estado == classe).mean():.0%}" for classe in range(len(config.CORES_RISCO) - 1, -1, -1)
+                      if (no_estado == classe).any()]
+            resumo = f"{' · '.join(partes)} do estado"
+        else:
+            pontos = interativo.pontos_de_valores(tabela_estacoes, mapa.nome, mapa.nome, "h", 0)
+            escala = niveis_das_horas(horas_alto)
+            niveis = tuple(float(valor) for valor in escala) if np.ndim(escala) else None
+            medidas = pd.Series(no_estado.astype(float))
+            imagem = superficie.como_uri(superficie.png_da_grade(interativo.na_malha_fina(horas_alto, malha.dentro.shape),
+                                                                 malha, mapa.paleta, niveis, medidas))
+            if em_3d:
+                altura = interativo.metros_por_unidade(niveis, medidas)
+                relevo = interativo.relevo(celulas, mapa.paleta, niveis, medidas, altura)
+            resumo = f"0 a {int(no_estado.max())} h"
+        conta = (f"sai das três medidas de cada hora nos {da_grade}, levadas a cada célula pela interpolação "
+                 "bilinear, com a regra 30-30-30 aplicada célula a célula")
+    else:
+        calculadas = superficies_previstas(modelo, rodada, mapa.nome, dia, hoje, _diaria=diaria_grade,
+                                           _pontos=pontos_grade)
+        if calculadas is None:
+            st.info(f"O {openmeteo.NOMES[modelo]} não traz {mapa.nome.lower()} para {previsao.nome_do_dia(dia)}.")
+            return
+        valores, fina, na_grade, graus = calculadas
+        escala = previsao.niveis(mapa, previsao.dias_somados(mapa, dia, hoje), ajustar)
+        niveis = None if escala is None else tuple(float(nivel) for nivel in escala)
+        celulas = celulas_previstas(modelo, rodada, mapa.nome, dia, hoje, origem, _campo=na_grade, _graus=graus)
+        pontos = interativo.pontos_de_valores(tabela_estacoes, mapa.nome, mapa.nome, mapa.unidade, mapa.decimais)
+        if mapa.setas and "Direção (°)" in tabela_estacoes:
+            pontos = interativo.com_direcao(pontos, tabela_estacoes.set_index("Estação")["Direção (°)"])
+        imagem = imagem_prevista(modelo, rodada, mapa.nome, dia, hoje, niveis, _fina=fina, _medidas=valores)
+        if em_3d:
+            altura = interativo.metros_por_unidade(niveis, valores)
+            relevo = interativo.relevo(celulas, mapa.paleta, niveis, valores, altura)
+        no_estado = na_grade[grade.dentro]
+        resumo = (f"{np.nanmin(no_estado):.{mapa.decimais}f} a {np.nanmax(no_estado):.{mapa.decimais}f} "
+                  f"{mapa.unidade} no estado").replace(".", ",")
+        conta = (f"é a do próprio modelo, nos {da_grade} que cobrem o estado, levada ao mapa por interpolação "
+                 "bilinear: não é IDW de estação")
+    if em_3d:
+        imagem = None
+        pontos = pontos.assign(altura=pontos["Estação"].map(da_estacao).fillna(0).to_numpy(dtype=float) * altura)
+
+    # No risco, a célula clicada em ciano, como no observado: vermelho se confundiria com o risco alto
+    escolhido = interativo.COR_DO_PONTO_ESCOLHIDO_NO_RISCO if mapa.risco else interativo.COR_DO_PONTO_ESCOLHIDO
+    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, previsao.UF, escritos, celulas, escolhido, relevo, imovel),
+                             on_select="rerun", selection_mode="single-object",
+                             key=chave_do_mapa("mapa_previsto_interativo", em_3d, imovel), height=ALTURA_MAPA)
+    if mapa.risco == "nivel":
+        escala_no_mapa("escala_previsao_interativa", legenda_do_risco(vertical=True))
+    elif niveis is not None:
+        barra_no_mapa("escala_previsao_interativa", mapa.paleta, niveis, "horas" if mapa.risco else mapa.unidade)
+    st.caption(f"{mapa.nome}, {previsao.nome_do_dia(dia)}: {resumo} · {mapa.regra}. A superfície {conta}. "
+               "**Passe o mouse** em qualquer ponto para ler o valor do modelo ali, e **clique** para ver os três "
+               "modelos no ponto, ou numa estação."
+               + (" No relevo, **arraste com o botão direito** para inclinar e girar." if em_3d else ""))
+
+    if imovel is not None:
+        painel_previsto_no_imovel(mapa, celulas, imovel, pontos_grade, modelo, dia, hoje)
+    # O ponto ou a estação clicada fica escolhida enquanto o dia, o mapa e o modelo mudam, até outro clique
+    objetos = evento.selection.get("objects", {}) if evento is not None else {}
+    celula_clicada = objetos.get("pontos") or objetos.get(PONTOS_NO_RELEVO)
+    if objetos.get("estacoes"):
+        st.session_state[ESCOLHA_PREVISTA] = ("estacao", objetos["estacoes"][0]["titulo"])
+    elif celula_clicada:
+        st.session_state[ESCOLHA_PREVISTA] = ("ponto", int(celula_clicada[0]["celula"]))
+    tipo, escolhida = st.session_state.get(ESCOLHA_PREVISTA, (None, None))
+    if tipo == "ponto":
+        painel_previsto_no_ponto(mapa, celulas, escolhida, pontos_grade, modelo, dia, hoje)
+    elif tipo == "estacao" and escolhida in set(estacoes["Estação"]):
+        painel_previsto_na_estacao(mapa, escolhida, estacoes, dia, hoje)
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def tabela_das_estacoes(uf: str) -> pd.DataFrame:
     # As estações do estado, numeradas, com o município, a altitude e desde quando operam.
@@ -2664,6 +3077,8 @@ pagina = st.navigation({
     "Previsão (MS)": [
         st.Page(pagina_previsao, title="Estações", icon=":material/show_chart:", url_path="previsao"),
         st.Page(pagina_mapas_previstos, title="Mapas", icon=":material/map:", url_path="previsao-mapas"),
+        st.Page(pagina_previsao_interativa, title="Mapas interativos", icon=":material/travel_explore:",
+                url_path="previsao-interativos"),
         st.Page(pagina_semanas, title="Semanas", icon=":material/date_range:", url_path="previsao-semanas"),
     ],
 })

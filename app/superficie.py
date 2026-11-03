@@ -47,8 +47,14 @@ def superficie_png(pontos: pd.DataFrame, coluna: str, grade_fina: Malha, paleta:
     grade = calculos.interpolar_idw(entrada["Longitude"], entrada["Latitude"], entrada[coluna],
                                     grade_fina.lon, grade_fina.lat,
                                     config.IDW_VIZINHOS, config.IDW_POTENCIA)
-    pintura, vazio = cores(grade, paleta, niveis, pontos[coluna], opacidade)
-    pintura[~grade_fina.dentro] = 0  # transparente fora do estado
+    return png_da_grade(grade, grade_fina, paleta, niveis, pontos[coluna], opacidade)
+
+
+def png_da_grade(grade: np.ndarray, grade_fina: Malha, paleta: str, niveis=None, medidas: pd.Series | None = None,
+                 opacidade: float = OPACIDADE) -> bytes:
+    # Uma superfície já calculada na malha fina: a do IDW das estações, ou a do modelo na previsão
+    pintura, vazio = cores(grade, paleta, niveis, medidas, opacidade)
+    pintura[~grade_fina.dentro | np.isnan(grade)] = 0  # transparente fora do estado
     if vazio is not None:
         pintura[vazio] = 0  # abaixo da primeira classe (chuva) não se pinta: ali não choveu
 

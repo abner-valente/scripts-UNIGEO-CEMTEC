@@ -558,3 +558,111 @@ def test_sem_as_medias_da_semana_o_grafico_fica_vazio():
     tabela = semanal({date(2026, 10, 12): -1.8})          # só as anomalias, como antes de 08/10
 
     assert previsao.semana_contra_o_normal(tabela, "A", "Chuva", RODADA_EC46).empty
+
+
+# =====================================================
+# O PONTO NO MAPA INTERATIVO
+# =====================================================
+def test_o_ponto_tem_a_mesma_bilinear_que_pinta_o_mapa():
+    pontos = rede(passo=0.25)
+    valores = pd.Series(np.random.default_rng(3).normal(25, 5, len(pontos)), index=pontos["ponto"].to_numpy())
+    lons, lats = np.array([-55.83, -55.1, -54.37]), np.array([-21.61, -20.9, -20.12])
+
+    no_ponto = previsao.no_ponto(valores.to_frame().T, previsao.vizinhos(pontos, lons, lats))
+
+    assert np.allclose(no_ponto.iloc[0], previsao.superficie(valores, pontos, lons, lats))
+
+
+def test_um_vizinho_sem_valor_deixa_o_peso_para_os_outros():
+    pontos = rede()
+    largo = pd.DataFrame([dict.fromkeys(pontos["ponto"], 10.0)])
+    largo.loc[0, "-21.00;-55.00"] = np.nan
+
+    assert previsao.no_ponto(largo, previsao.vizinhos(pontos, [-55.2], [-21.2])).iloc[0, 0] == pytest.approx(10.0)
+
+
+def test_fora_da_grade_o_ponto_fica_sem_valor():
+    pontos = rede()
+    largo = pd.DataFrame([dict.fromkeys(pontos["ponto"], 10.0)])
+
+    assert np.isnan(previsao.no_ponto(largo, previsao.vizinhos(pontos, [-60.0], [-21.0])).iloc[0, 0])
+
+
+def diaria_na_rede(pontos: pd.DataFrame, dias: dict, horas: dict | None = None) -> pd.DataFrame:
+    # Um campo plano por dia, somado a uma base que muda de dia para dia
+    return pd.DataFrame([{"modelo": "ecmwf_ifs025", "ponto": ponto.ponto, "dia_previsto": dia,
+                          "temp_max": base + 2.0 * ponto.longitude + 3.0 * ponto.latitude,
+                          "horas": (horas or {}).get(dia, 24)}
+                         for dia, base in dias.items() for ponto in pontos.itertuples()])
+
+
+def test_o_dia_no_ponto_sai_dos_dias_inteiros_de_hoje_em_diante():
+    tabela = diaria_na_rede(rede(), {date(2026, 10, 7): 0.0, HOJE: 100.0, date(2026, 10, 9): 200.0,
+                                     date(2026, 10, 10): 300.0}, horas={date(2026, 10, 10): 20})
+
+    serie = previsao.diario_no_ponto(tabela, rede(), -55.2, -21.3, "temp_max", HOJE)
+
+    plano = 2.0 * -55.2 + 3.0 * -21.3
+    assert list(serie.index) == [HOJE, date(2026, 10, 9)]
+    assert np.allclose(serie.to_numpy(), [100.0 + plano, 200.0 + plano])
+
+
+def test_no_imovel_o_dia_e_a_media_das_celulas():
+    tabela = diaria_na_rede(rede(), {HOJE: 100.0})
+
+    serie = previsao.diario_no_ponto(tabela, rede(), [-55.5, -54.5], [-21.0, -21.0], "temp_max", HOJE)
+
+    assert serie.loc[HOJE] == pytest.approx(100.0 + 2.0 * -55.0 + 3.0 * -21.0)
+
+
+def horaria_na_rede(pontos: pd.DataFrame, quantas: int = 24) -> pd.DataFrame:
+    # O oeste (longitude abaixo de -55) quente, e o leste ameno; a umidade e a rajada valem em toda parte
+    return pd.DataFrame([{"modelo": "ecmwf_ifs025", "rodada_utc": RODADA_00, "ponto": ponto.ponto,
+                          "latitude": ponto.latitude, "longitude": ponto.longitude,
+                          "hora_prevista_utc": hora.tz_convert("UTC"),
+                          "temperatura": 35.0 if ponto.longitude < -55 else 25.0, "umidade": 20.0, "rajada": 40.0}
+                         for hora in pd.date_range("2026-10-08 01:00", periods=quantas, freq="h", tz=config.FUSO_MS)
+                         for ponto in pontos.itertuples()])
+
+
+def test_o_risco_no_ponto_e_o_da_celula_no_mapa():
+    pontos = rede()
+    horas = horaria_na_rede(pontos)
+    # Entre -55,5 (35 °C) e -55,0 (25 °C): a -55,4 a bilinear dá 33 °C, e a -55,2, 29 °C
+    lons, lats = np.array([-55.9, -55.4, -55.2, -54.1]), np.full(4, -21.0)
+    nivel, horas_alto = previsao.risco_na_grade(horas, pontos, date(2026, 10, 8), lons.reshape(1, -1),
+                                                lats.reshape(1, -1))
+
+    no_ponto = [previsao.risco_no_ponto(previsao.largos_do_risco(horas), pontos, lon, lat, date(2026, 10, 8))
+                for lon, lat in zip(lons, lats)]
+
+    assert [int(dia.loc[0, "risco_max"]) for dia in no_ponto] == list(nivel[0]) == [3, 3, 2, 2]
+    assert [int(dia.loc[0, "horas_risco_alto"]) for dia in no_ponto] == list(horas_alto[0]) == [24, 24, 0, 0]
+
+
+def test_no_imovel_o_risco_e_o_pior_das_celulas():
+    pontos = rede()
+
+    dia = previsao.risco_no_ponto(previsao.largos_do_risco(horaria_na_rede(pontos)), pontos, [-55.9, -54.1],
+                                  [-21.0, -21.0], date(2026, 10, 8))
+
+    assert (dia.loc[0, "risco_max"], dia.loc[0, "horas_risco_alto"]) == (3, 24)
+
+
+def test_dia_incompleto_nao_entra_no_risco_do_ponto():
+    pontos = rede()
+
+    dias = previsao.risco_no_ponto(previsao.largos_do_risco(horaria_na_rede(pontos, quantas=12)), pontos, -55.9,
+                                   -21.0, date(2026, 10, 8))
+
+    assert dias.empty
+
+
+def test_o_rumo_no_mapa_sai_das_componentes_e_nao_da_media_dos_graus():
+    pontos = rede()
+    valores = pd.Series(20.0, index=pontos["ponto"].to_numpy())
+    direcoes = pd.Series(np.where(pontos["longitude"] < -55.2, 350.0, 10.0), index=pontos["ponto"].to_numpy())
+
+    graus = previsao.rumo_na_grade(valores, direcoes, pontos, np.array([-55.25]), np.array([-21.0]))[0]
+
+    assert min(graus, 360 - graus) < 1e-6           # o norte, e não os 180° da média de 350° e 10°

@@ -471,6 +471,109 @@ def subtitulo_do_risco(dia: date) -> str:
     return f"Previsão para {dia:%d/%m/%Y}"
 
 
+# =====================================================
+# O PONTO NO MAPA INTERATIVO
+# =====================================================
+# O valor de um ponto qualquer é a mesma bilinear que pinta o mapa (`superficie`): os quatro pontos
+# da grade em volta, cada um pesado pela distância nos dois eixos. Os pesos saem uma vez por ponto
+# e valem para todos os dias e todas as horas de uma vez, em vez de uma superfície por instante
+@dataclass(frozen=True)
+class Vizinhos:
+    nomes: np.ndarray   # (alvos, 4): os pontos da grade em volta de cada alvo; "" onde a grade acaba
+    pesos: np.ndarray   # (alvos, 4)
+
+
+def vizinhos(pontos: pd.DataFrame, lons, lats, passo: float | None = None) -> Vizinhos:
+    passo = espacamento(pontos) if passo is None else passo
+    oeste, sul = float(pontos["longitude"].min()), float(pontos["latitude"].min())
+    na_rede = {(int(round((lat - sul) / passo)), int(round((lon - oeste) / passo))): nome
+               for nome, lat, lon in zip(pontos["ponto"], pontos["latitude"], pontos["longitude"])}
+    x = (np.atleast_1d(np.asarray(lons, dtype=float)) - oeste) / passo
+    y = (np.atleast_1d(np.asarray(lats, dtype=float)) - sul) / passo
+    coluna, linha = np.floor(x).astype(int), np.floor(y).astype(int)
+    fx, fy = x - coluna, y - linha
+    cantos = ((0, 0), (0, 1), (1, 0), (1, 1))
+    nomes = np.array([[na_rede.get((i + di, j + dj), "") for di, dj in cantos] for i, j in zip(linha, coluna)],
+                     dtype=object).reshape(len(x), 4)
+    return Vizinhos(nomes, np.column_stack([(1 - fy) * (1 - fx), (1 - fy) * fx, fy * (1 - fx), fy * fx]))
+
+
+def no_ponto(largo: pd.DataFrame, perto: Vizinhos) -> pd.DataFrame:
+    # `largo` tem um instante por linha e um ponto da grade por coluna; sai uma coluna por alvo. Um
+    # vizinho sem valor sai da conta, e os outros dividem o peso dele
+    colunas = []
+    for nomes, pesos in zip(perto.nomes, perto.pesos):
+        tem = np.array([nome in largo.columns for nome in nomes])
+        if not tem.any():
+            colunas.append(np.full(len(largo), np.nan))
+            continue
+        valores = largo[list(nomes[tem])].to_numpy(dtype=float)
+        pesos = np.broadcast_to(pesos[tem], valores.shape) * ~np.isnan(valores)
+        soma = pesos.sum(axis=1)
+        with np.errstate(invalid="ignore"):
+            colunas.append(np.where(soma > 0, np.nansum(valores * pesos, axis=1) / soma, np.nan))
+    return pd.DataFrame(np.column_stack(colunas), index=largo.index)
+
+
+def diario_no_ponto(diaria: pd.DataFrame, pontos: pd.DataFrame, lons, lats, coluna: str, hoje: date) -> pd.Series:
+    # O valor de cada dia inteiro, de hoje em diante, no ponto; com vários pontos (as células de um
+    # imóvel do CAR), a média deles. É a bilinear do mapa sobre o valor do dia de cada ponto da
+    # grade, então o número do dia escolhido é o do balão
+    inteiros = diaria[(diaria["horas"] == 24) & (diaria["dia_previsto"] >= hoje)]
+    if inteiros.empty or coluna not in inteiros:
+        return pd.Series(dtype=float, name=coluna)
+    largo = inteiros.pivot(index="dia_previsto", columns="ponto", values=coluna)
+    return no_ponto(largo, vizinhos(pontos, lons, lats)).mean(axis=1).rename(coluna)
+
+
+def largos_do_risco(horaria: pd.DataFrame) -> tuple[pd.DataFrame, ...]:
+    # As três medidas da regra, uma hora por linha e um ponto da grade por coluna
+    completas = horaria.dropna(subset=list(VARIAVEIS_DO_RISCO))
+    return tuple(completas.pivot(index="hora_prevista_utc", columns="ponto", values=coluna)
+                 for coluna in VARIAVEIS_DO_RISCO)
+
+
+def risco_no_ponto(largos: tuple[pd.DataFrame, ...], pontos: pd.DataFrame, lons, lats, hoje: date,
+                   fuso=config.FUSO_MS) -> pd.DataFrame:
+    # O risco de cada dia inteiro no ponto: as três medidas de cada hora levadas a ele pela bilinear
+    # do mapa e a regra aplicada a elas, como `risco_na_grade` faz em cada célula. Com vários pontos
+    # (um imóvel), o pior nível e o máximo de horas em risco alto entre eles
+    colunas = ["dia_previsto", "risco_max", "horas_risco_alto"]
+    if any(largo.empty for largo in largos):
+        return pd.DataFrame(columns=colunas)
+    perto = vizinhos(pontos, lons, lats)
+    horas = largos[0].index.intersection(largos[1].index).intersection(largos[2].index)
+    campos = [no_ponto(largo.loc[horas], perto).to_numpy() for largo in largos]
+    nivel = pd.DataFrame(risco_fogo.contar_condicoes(*campos), index=horas)
+    # A hora em que algum dos três ficou sem valor no ponto não conta, como na grade
+    nivel = nivel.where(~np.any([np.isnan(campo) for campo in campos], axis=0))
+    dia = pd.Index(risco_fogo.dia_da_leitura(pd.DatetimeIndex(horas), fuso), name="dia_previsto")
+    por_dia = nivel.groupby(dia)
+    inteiros = por_dia.size() == 24
+    dias = pd.DataFrame({"risco_max": por_dia.max().max(axis=1),
+                         "horas_risco_alto": (nivel == risco_fogo.NIVEL_ALTO).groupby(dia).sum().max(axis=1)})
+    dias = dias[inteiros & (dias.index >= hoje)]
+    return dias.reset_index()[colunas]
+
+
+def direcoes_do_dia(diaria: pd.DataFrame, dia: date) -> pd.Series:
+    inteiros = diaria[(diaria["horas"] == 24) & (diaria["dia_previsto"] == dia)]
+    return inteiros.set_index("ponto")["direcao_dominante"]
+
+
+def rumo_na_grade(valores: pd.Series, direcoes: pd.Series, pontos: pd.DataFrame, lon_grade: np.ndarray,
+                  lat_grade: np.ndarray) -> np.ndarray | None:
+    # O rumo não se interpola como número: entre 350° e 10° a média daria 180°, o rumo oposto. Vão
+    # para a superfície as componentes leste e norte do vento, e o rumo sai delas, como no observado
+    radianos = np.deg2rad(direcoes.reindex(valores.index))
+    leste, norte = (superficie(valores * componente(radianos), pontos, lon_grade, lat_grade)
+                    for componente in (np.sin, np.cos))
+    if leste is None or norte is None:
+        return None
+    graus = np.degrees(np.arctan2(leste, norte)) % 360
+    return np.where(np.hypot(leste, norte) < 1e-9, np.nan, graus)
+
+
 # A previsão da semana contra a normal da época, numa estação: é o gráfico que explica a anomalia.
 # A normal não vem pronta: é a previsão menos a anomalia, que o Open-Meteo devolve as duas.
 SERIES_SEMANAIS = {
