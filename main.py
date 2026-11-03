@@ -16,6 +16,12 @@ COMO USAR
         python main.py --tempo-real                                # monitoramento
         python main.py --produto relatorio_inmet --tempo-real
 
+    Uma estação com dado errado (o sensor com defeito, à espera da correção do INMET) pode sair
+    dos mapas de uma variável, em RETIRAR logo abaixo ou na linha de comando:
+        python main.py --tempo-real --retirar "Chuva: Campo Grande; Dourados"
+        python main.py --produto risco_fogo --tempo-real --retirar "Risco: A702"
+    Ela sai do ponto, do ranking e da interpolação daquela variável, e continua na planilha.
+
 Os resultados ficam em saida/<produto>/<modo>/<datas>/.
 """
 import argparse
@@ -23,7 +29,7 @@ import sys
 from datetime import date, datetime
 from types import ModuleType
 
-from modulos import config
+from modulos import config, retiradas
 from modulos.config import Periodo
 from modulos.produtos import relatorio_inmet, risco_fogo
 
@@ -45,6 +51,11 @@ DATA_INICIAL = date(2026, 8, 1)
 DATA_FINAL = date(2026, 8, 31)
 HORA_INICIAL = None  # hora de início (0 a 24, horário de MS); None = 00 h da data inicial
 HORA_FINAL = None    # hora de fim (0 a 24, horário de MS); None = 24 h da data final
+# Estações que saem dos mapas de uma variável, por nome ou código do INMET. Variáveis: Temperatura,
+# Umidade, Vento e Chuva (relatorio_inmet) e Risco de Fogo (risco_fogo). Exemplo:
+#   RETIRAR = {"Chuva": ["Campo Grande", "Dourados"], "Temperatura": ["A702"]}
+# O --retirar da linha de comando, quando vier, vale no lugar desta lista.
+RETIRAR: dict[str, list[str]] = {}
 
 
 def ler_data(texto: str) -> date:
@@ -75,6 +86,10 @@ def ler_consulta(argumentos: list[str] | None = None) -> tuple[ModuleType, Perio
     parser.add_argument("--tempo-real", action="store_true", help="monitoramento das últimas 24 h")
     parser.add_argument("--hrtodas", action="store_true",
                         help="risco_fogo: gera o mapa de todas as horas, e não só as de risco alto")
+    parser.add_argument("--retirar", action="append", metavar='"VARIÁVEL: ESTAÇÕES"',
+                        help="tira estações dos mapas de uma variável, por nome ou código, separadas por "
+                             'vírgula ou ponto e vírgula (ex.: --retirar "Chuva: Campo Grande; A702"); '
+                             "repita para outra variável. Vale no lugar de RETIRAR")
     args = parser.parse_args(argumentos)
 
     nome_produto = args.produto or PRODUTO
@@ -86,7 +101,12 @@ def ler_consulta(argumentos: list[str] | None = None) -> tuple[ModuleType, Perio
     # dele vai no período: é o fuso que decide onde o dia começa, e um dia de MT não começa na
     # mesma hora que um do Paraná.
     recorte = config.recorte_de(args.uf)
-    opcoes = {"hrtodas": args.hrtodas, "recorte": recorte}
+    try:
+        pedidos = (retiradas.ler_pedidos(args.retirar) if args.retirar
+                   else {retiradas.variavel(nome): list(estacoes) for nome, estacoes in RETIRAR.items()})
+    except ValueError as erro:
+        parser.error(f"--retirar: {erro}")
+    opcoes = {"hrtodas": args.hrtodas, "recorte": recorte, "retirar": pedidos}
 
     inicio, fim = (args.dataini, args.datafim) if (args.dataini or args.datafim) else (DATA_INICIAL, DATA_FINAL)
     if args.tempo_real or (inicio is None and fim is None):

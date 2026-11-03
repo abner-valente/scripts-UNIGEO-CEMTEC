@@ -122,3 +122,23 @@ def test_saida_sem_reconfigure_nao_quebra(monkeypatch):
     monkeypatch.setattr(sys, "stdout", object())
     monkeypatch.setattr(sys, "stderr", object())
     main._saida_em_utf8()  # não levanta
+
+
+def test_retirar_pela_linha_de_comando_chega_ao_produto():
+    _, _, opcoes = main.ler_consulta(["--tempo-real", "--retirar", "Chuva: Campo Grande; Dourados",
+                                      "--retirar", "risco: A702"])
+    assert opcoes["retirar"] == {"Chuva": ["Campo Grande", "Dourados"], "Risco de Fogo": ["A702"]}
+    assert main.ler_consulta(["--tempo-real"])[2]["retirar"] == {}
+
+
+def test_retirar_pela_variavel_do_main_e_a_linha_de_comando_vale_no_lugar(monkeypatch):
+    monkeypatch.setattr(main, "RETIRAR", {"chuva": ["Coxim"], "Temperatura": ["A703"]})
+    assert main.ler_consulta(["--tempo-real"])[2]["retirar"] == {"Chuva": ["Coxim"], "Temperatura": ["A703"]}
+    assert main.ler_consulta(["--tempo-real", "--retirar", "Umidade: Coxim"])[2]["retirar"] == {"Umidade": ["Coxim"]}
+
+
+@pytest.mark.parametrize("pedido", ["Campo Grande", "Granizo: Campo Grande"])
+def test_retirar_mal_escrito_para_com_a_mensagem(pedido, capsys):
+    with pytest.raises(SystemExit):
+        main.ler_consulta(["--tempo-real", "--retirar", pedido])
+    assert "--retirar:" in capsys.readouterr().err
