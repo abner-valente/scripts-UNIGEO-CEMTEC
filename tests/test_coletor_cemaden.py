@@ -186,6 +186,16 @@ def test_o_historico_nao_pede_o_futuro(limpa, ped):
     assert ped["dias"] == [hoje - timedelta(days=1), hoje]
 
 
+def test_o_historico_pede_sempre_os_ultimos_dias_que_ainda_mudam(limpa, ped):
+    hoje = datetime.now(timezone.utc).date()
+    coletor_cemaden.carregar_historico(limpa, hoje - timedelta(days=5), hoje)
+    ped["dias"].clear()
+
+    coletor_cemaden.carregar_historico(limpa, hoje - timedelta(days=5), hoje)
+
+    assert ped["dias"] == [hoje - timedelta(days=2), hoje - timedelta(days=1), hoje]
+
+
 def test_o_historico_para_quando_a_ped_sai_do_ar(limpa, ped, monkeypatch, capsys):
     monkeypatch.setattr(coletor_cemaden, "DIAS_POR_LOTE", 3)
     monkeypatch.setattr(coletor_cemaden, "FALHAS_SEGUIDAS", 2)

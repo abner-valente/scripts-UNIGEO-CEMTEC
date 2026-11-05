@@ -115,8 +115,11 @@ def carregar_historico(conexao: psycopg.Connection, desde: date = INICIO_DO_HIST
     if mudadas is not None:
         print(f"🗂️ Cadastro: {mudadas} estações novas ou mudadas na PED")
     guardados = banco.dias_cemaden_guardados(conexao, desde, ate) if desde <= ate else set()
+    # Os últimos dias são pedidos sempre, como de hora em hora: o de hoje entrou pela metade, e os
+    # anteriores ainda recebem a leitura atrasada. Assim, rodar a carga de novo fecha o buraco
+    recentes = set(ultimos_dias())
     faltam = [desde + timedelta(days=n) for n in range((ate - desde).days + 1)]
-    faltam = [dia for dia in faltam if dia not in guardados]
+    faltam = [dia for dia in faltam if dia not in guardados or dia in recentes]
     print(f"📚 Carregando os dias de {_rotulo(desde)} a {_rotulo(ate)} UTC: {len(faltam)} faltam no banco "
           f"(os que já estão ficam)...")
     total = Coleta()
