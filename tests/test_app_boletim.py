@@ -8,7 +8,7 @@ import pytest
 from PIL import Image
 
 from app import boletim, chuva, variaveis
-from modulos import config, mapas
+from modulos import cemaden, config, fonte, mapas
 from modulos.produtos import risco_fogo
 
 ESTACOES = pd.DataFrame({
@@ -110,6 +110,27 @@ def test_o_mapa_do_boletim_sai_com_titulo_logos_ranking_e_a_escala_da_tela(base)
     assert any(texto.startswith("5 MAIORES TEMPERATURAS:\nCorumba: 36.2") for texto in textos)
     assert np.allclose(superficie.levels, escala_da_tela)             # a escala fixa da tela
     assert len(figura.axes) == 2                                      # o mapa e a barra de cores
+
+
+def test_so_o_mapa_com_estacao_do_cemaden_leva_a_citacao_dele():
+    assert boletim.rodape(["Campo Grande", "Dourados"]) == ""
+    assert boletim.rodape(pd.Index(["Campo Grande", f"{fonte.PREFIXO_CEMADEN}Bonito (Centro)"])) == cemaden.CITACAO
+
+
+def test_o_pluviometro_do_cemaden_entra_no_ranking_e_a_citacao_vai_embaixo(base):
+    nome = "Chuva acumulada em 24 h"
+    jardim_panama = f"{fonte.PREFIXO_CEMADEN}Campo Grande (Jardim Panamá)"
+    pontos = pd.concat([ESTACOES, pd.DataFrame({"Estação": [jardim_panama], "Latitude": [-20.48],
+                                                "Longitude": [-54.58]})], ignore_index=True)
+    gdf = mapas.preparar_pontos(pontos.assign(**{nome: [0.0, 5.0, 12.0, 3.0, 8.0, 20.4]}), nome)
+    espec = boletim.espec(nome, "Chuva", "mm", "Blues", 1, "MS", "03/11/2026", rodape=boletim.rodape(gdf["Estação"]))
+
+    mapa = mapas.mapa_interpolado(gdf, espec, base).axes[0]
+    textos = [texto.get_text() for texto in mapa.texts]
+
+    assert mapa.get_title() == "Chuva acumulada em 24 h em MS\n03/11/2026 — INMET/SEMADESC"
+    assert any(texto.startswith(f"5 MAIORES ACUMULADOS:\n{jardim_panama}: 20.4\nCorumba: 12.0") for texto in textos)
+    assert cemaden.CITACAO in textos
 
 
 @pytest.mark.parametrize("teto, esperadas", [

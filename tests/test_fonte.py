@@ -256,6 +256,13 @@ def test_com_a_fonte_apis_nao_ha_cemaden_e_o_banco_nem_e_aberto(monkeypatch):
     assert fonte.chuva_cemaden(CADASTRO_CEMADEN.rename(columns={"codigo": "CD_ESTACAO"}), DIA, DIA) == []
 
 
+def test_os_nomes_do_cemaden_se_separam_dos_do_inmet_numa_lista_que_junta_as_duas_redes():
+    nomes = ["Campo Grande", "CEMADEN · Bonito (Centro)", float("nan"), "Cemaden sem o prefixo"]
+
+    assert fonte.do_cemaden(nomes) == ["CEMADEN · Bonito (Centro)"]
+    assert fonte.do_cemaden(pd.Index(["Campo Grande", "Dourados"])) == []
+
+
 # =====================================================
 # A PREVISÃO PELA FONTE "BANCO"
 # =====================================================

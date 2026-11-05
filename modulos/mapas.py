@@ -46,6 +46,7 @@ class EspecMapa:
     credito_no_rodape: bool = False  # o crédito numa linha embaixo do mapa, e não no subtítulo
     ranking_absoluto: bool = False  # ranqueia pelo tamanho do valor, para cima ou para baixo (anomalias)
     com_sinal: bool = False         # escreve o + dos positivos: nas anomalias, o número é um desvio
+    rodape: str = ""                # uma linha miúda embaixo do mapa (a citação que o CEMADEN pede)
 
 
 @dataclass(frozen=True)
@@ -465,11 +466,14 @@ def _finalizar(fig, ax, espec, base: BaseCartografica, caminho: Path | None,
                tela: "Tela | None" = None) -> Figure:
     if tela is None:
         # O crédito vai no fim do subtítulo ou, quando o subtítulo deve ficar só com a data (os
-        # mapas da previsão), numa linha miúda embaixo do mapa, à direita
+        # mapas da previsão), numa linha miúda embaixo do mapa, à direita. O rodapé (a citação do
+        # CEMADEN) vai nessa mesma linha miúda
         subtitulo = espec.subtitulo if espec.credito_no_rodape else f"{espec.subtitulo} — {espec.credito}"
         ax.set_title(f"{espec.titulo}\n{subtitulo}", fontsize=16, weight="bold", pad=20)
-        if espec.credito_no_rodape:
-            ax.annotate(f"Dados: {espec.credito}", xy=(1, 0), xycoords="axes fraction", xytext=(0, -30),
+        linhas = ([f"Dados: {espec.credito}"] if espec.credito_no_rodape else []) + \
+            ([espec.rodape] if getattr(espec, "rodape", "") else [])
+        if linhas:
+            ax.annotate("\n".join(linhas), xy=(1, 0), xycoords="axes fraction", xytext=(0, -30),
                         textcoords="offset points", ha="right", va="top", fontsize=9, color="#555555")
     # O enquadramento vem da base, e não do módulo: é a base que sabe de que recorte ela é
     oeste, leste, sul, norte = base.recorte.limites

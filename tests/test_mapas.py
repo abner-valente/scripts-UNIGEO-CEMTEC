@@ -107,6 +107,23 @@ def test_na_tela_o_mapa_sai_sem_titulo_nem_logos(base, monkeypatch, tmp_path):
     assert (tmp_path / "relatorio.png").exists()  # o relatório continua saindo com tudo
 
 
+def test_o_rodape_vai_embaixo_do_mapa_do_relatorio_e_nao_no_da_tela(base):
+    tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
+    gdf = mapas._preparar_dados(tabela, CHUVA)
+    com_rodape = replace(CHUVA, rodape="Citação da rede")
+
+    relatorio = mapas.mapa_interpolado(gdf, com_rodape, base)
+    na_tela = mapas.mapa_interpolado(gdf, com_rodape, base, tela=mapas.Tela())
+    com_o_credito = mapas.mapa_interpolado(gdf, replace(com_rodape, credito_no_rodape=True), base)
+    sem_rodape = mapas.mapa_interpolado(gdf, CHUVA, base)
+
+    assert "Citação da rede" in [texto.get_text() for texto in relatorio.axes[0].texts]
+    assert relatorio.axes[0].get_title().endswith("subtítulo — INMET/SEMADESC")   # o crédito continua lá
+    assert "Citação da rede" not in [texto.get_text() for texto in na_tela.axes[0].texts]
+    assert "Dados: INMET/SEMADESC\nCitação da rede" in [texto.get_text() for texto in com_o_credito.axes[0].texts]
+    assert len(sem_rodape.axes[0].texts) == len(relatorio.axes[0].texts) - 1
+
+
 def test_na_tela_o_mapa_sai_sem_barra_de_cores_e_sem_valores(base):
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)

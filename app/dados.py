@@ -86,11 +86,21 @@ def varias(codigos: tuple[str, ...], nomes: tuple[str, ...], inicio: datetime, f
 
     series = [chegaram[nome].assign(Estação=nome) for nome in nomes if nome in chegaram]
     if not series:
-        return _sem_leituras(fuso), sorted(falharam)
+        return sem_leituras(fuso), sorted(falharam)
     return pd.concat(series, ignore_index=True), sorted(falharam)
 
 
-def _sem_leituras(fuso: ZoneInfo) -> pd.DataFrame:
+def juntar_cemaden(coletados: list[tuple[pd.Series, pd.DataFrame]], inicio: datetime, fim: datetime,
+                   fuso: ZoneInfo = config.FUSO_MS) -> pd.DataFrame:
+    # As tabelas de fonte.chuva_cemaden numa só, como a de varias: com a coluna "Estação", e só as
+    # horas de (inicio, fim], porque a do CEMADEN vem com os dias UTC inteiros
+    if not coletados:
+        return sem_leituras(fuso)
+    juntas = pd.concat([dados.assign(Estação=estacao["Estação"]) for estacao, dados in coletados], ignore_index=True)
+    return juntas[(juntas["dt_utc"] > inicio) & (juntas["dt_utc"] <= fim)].reset_index(drop=True)
+
+
+def sem_leituras(fuso: ZoneInfo) -> pd.DataFrame:
     return pd.DataFrame({"Estação": pd.Series(dtype=object),
                          "dt_utc": pd.Series(dtype=pd.DatetimeTZDtype(tz="UTC")),
                          "dt_local": pd.Series(dtype=pd.DatetimeTZDtype(tz=fuso))})

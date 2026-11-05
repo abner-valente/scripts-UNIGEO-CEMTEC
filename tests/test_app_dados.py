@@ -5,8 +5,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from app import chuva
 from app import dados as coleta
-from modulos import inmet
+from app import variaveis
+from modulos import config, inmet
 from modulos.config import Periodo
 
 DIA = Periodo.de_datas(date(2026, 9, 15), date(2026, 9, 15))
@@ -194,3 +196,58 @@ def test_sem_nenhuma_estacao_a_tabela_vazia_ainda_tem_as_horas(cache_temporario,
     assert tabela[tabela["dt_local"] > momento].empty
     assert variaveis.recorte(tabela, variaveis.HORA, momento).empty
     assert variaveis.recorte(tabela, variaveis.DIA, momento.normalize()).empty
+
+
+# =====================================================
+# A CHUVA DO CEMADEN JUNTO DA DO INMET
+# =====================================================
+INICIO_UTC = pd.Timestamp("2026-11-02 04:00", tz="UTC")   # a meia-noite de 02/11 em MS
+FIM_UTC = pd.Timestamp("2026-11-03 04:00", tz="UTC")
+
+
+def horas_de_chuva(chuvas: dict[str, float], desde="2026-11-02 00:00", ate="2026-11-03 23:00") -> pd.DataFrame:
+    # Uma tabela por hora cheia em UTC, como as de fonte.chuva_cemaden e as do INMET; as horas fora de
+    # `chuvas` ficam secas
+    horas = pd.date_range(desde, ate, freq="h", tz="UTC")
+    tabela = pd.DataFrame({"dt_utc": horas,
+                           "CHUVA": [chuvas.get(f"{hora:%Y-%m-%d %H:%M}", 0.0) for hora in horas]})
+    return tabela.assign(dt_local=tabela["dt_utc"].dt.tz_convert(config.FUSO_MS))
+
+
+def test_a_chuva_do_cemaden_vira_uma_tabela_so_com_as_horas_do_periodo_e_o_nome_da_estacao():
+    coletados = [(pd.Series({"Estação": "CEMADEN · Bonito (Centro)"}), horas_de_chuva({})),
+                 (pd.Series({"Estação": "CEMADEN · Campo Grande (Jardim Panamá)"}), horas_de_chuva({}))]
+
+    tabela = coleta.juntar_cemaden(coletados, INICIO_UTC, FIM_UTC)
+
+    assert tabela.groupby("Estação").size().to_dict() == {"CEMADEN · Bonito (Centro)": 24,
+                                                          "CEMADEN · Campo Grande (Jardim Panamá)": 24}
+    assert tabela["dt_utc"].min() == INICIO_UTC + pd.Timedelta(hours=1)   # (início, fim], como o INMET
+    assert tabela["dt_utc"].max() == FIM_UTC
+
+
+def test_sem_estacao_do_cemaden_a_tabela_sai_vazia_mas_com_as_colunas_do_inmet():
+    tabela = coleta.juntar_cemaden([], INICIO_UTC, FIM_UTC)
+
+    assert tabela.empty and {"Estação", "dt_utc", "dt_local"} <= set(tabela.columns)
+
+
+def test_o_pluviometro_do_cemaden_entra_nos_acumulados_e_no_mapa_do_dia_com_o_mesmo_peso_do_inmet():
+    # Campo Grande (INMET) choveu 6 mm no dia de MS; o Jardim Panamá (CEMADEN), 18,4 mm, um deles na
+    # hora das 04:00 UTC, que ainda é o dia 02/11 em MS
+    inmet_cg = horas_de_chuva({"2026-11-02 18:00": 6.0}).assign(Estação="Campo Grande")
+    panama = horas_de_chuva({"2026-11-02 04:00": 0.4, "2026-11-02 05:00": 3.0, "2026-11-02 20:00": 15.0,
+                             "2026-11-03 04:00": 0.4})
+    juntas = pd.concat([inmet_cg[(inmet_cg["dt_utc"] > INICIO_UTC) & (inmet_cg["dt_utc"] <= FIM_UTC)],
+                        coleta.juntar_cemaden([(pd.Series({"Estação": "CEMADEN · Jardim Panamá"}), panama)],
+                                              INICIO_UTC, FIM_UTC)], ignore_index=True)
+    fim_ms = FIM_UTC.tz_convert(config.FUSO_MS).to_pydatetime()
+
+    acumulado = chuva.acumulado(juntas, fim_ms, "24 h")
+    produto = variaveis.por_nome("Chuva acumulada")
+    no_dia = variaveis.por_estacao(produto, variaveis.recorte(juntas, variaveis.DIA,
+                                                              pd.Timestamp("2026-11-02", tz=config.FUSO_MS)))
+
+    assert acumulado.sort_values(ascending=False).round(1).to_dict() == {"CEMADEN · Jardim Panamá": 18.4,
+                                                                        "Campo Grande": 6.0}
+    assert no_dia.round(1).to_dict() == {"Campo Grande": 6.0, "CEMADEN · Jardim Panamá": 18.4}

@@ -39,7 +39,7 @@ from app import referencia
 from app import risco
 from app import superficie
 from app import variaveis
-from modulos import config, fonte, mapas, openmeteo, retiradas
+from modulos import cemaden, config, fonte, mapas, openmeteo, retiradas
 from modulos.produtos import risco_fogo
 
 # A API manda o vento em m/s; os produtos trabalham em km/h, e aqui seguimos a mesma unidade
@@ -196,6 +196,36 @@ def carregar_leituras(codigos: tuple[str, ...], nomes: tuple[str, ...],
     return tabela, falharam
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cadastro_cemaden(uf: str) -> pd.DataFrame:
+    return fonte.estacoes_cemaden(uf)
+
+
+def estacoes_do_cemaden(uf: str) -> pd.DataFrame:
+    # Os pluviômetros do CEMADEN do estado, para a gaveta dos mapas de chuva. Vazio com a fonte
+    # "apis" (o Streamlit Cloud), e também com o banco fora do ar: aí os mapas saem só com o INMET
+    try:
+        return _cadastro_cemaden(uf)
+    except fonte.ErroFonte:
+        return pd.DataFrame(columns=fonte.COLUNAS_ESTACOES_CEMADEN)
+
+
+# Dez minutos, e não uma hora como as do INMET: o coletor do CEMADEN grava a cada hora, aos 5
+# minutos, e a leitura do banco não custa nada à PED
+@st.cache_data(ttl=600, show_spinner=False)
+def carregar_chuva_cemaden(nomes: tuple[str, ...], inicio: datetime, fim: datetime, uf: str) -> pd.DataFrame:
+    # A chuva das estações do CEMADEN escolhidas, como as leituras de carregar_leituras: uma linha
+    # por estação e hora cheia de (inicio, fim], com a coluna "Estação"
+    cadastro = estacoes_do_cemaden(uf)
+    escolhidas = cadastro[cadastro["Estação"].isin(nomes)]
+    fuso = config.recorte_de(uf).fuso
+    try:
+        coletados = fonte.chuva_cemaden(escolhidas, inicio, fim, fuso)
+    except fonte.ErroFonte:
+        coletados = []
+    return coleta.juntar_cemaden(coletados, inicio, fim, fuso)
+
+
 def series_da_grandeza(tabela: pd.DataFrame, grandeza: str, modo: str):
     pedacos, usados = [], []
     for produto in variaveis.disponiveis(modo, variaveis.GRAFICO):
@@ -306,8 +336,9 @@ def barras_do_acumulado(valores: pd.Series, unidade: str, quantas: int | None) -
     base = alt.Chart(tabela)
     # labelOverlap=False obriga o eixo a escrever todos os nomes. Com pouca altura ele descarta
     # um sim, um não — e aí uma lista de 15 estações parece uma de 8.
+    # labelLimit de 340 px cabe "CEMADEN · Campo Grande (Jardim Panamá)" inteiro, sem reticências
     eixo_estacao = alt.Y("Estação:N", sort="-x", title=None,
-                         axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS, labelOverlap=False, labelLimit=230))
+                         axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS, labelOverlap=False, labelLimit=340))
     # size, e não height: em barra deitada é ele que define a espessura. Com height a barra
     # engorda até preencher a faixa, e os nomes das estações ficam espremidos entre elas.
     barras = base.mark_bar(color="#2171b5", size=20).encode(
@@ -492,21 +523,36 @@ def retiradas_da_variavel(grandeza: str) -> set[str]:
     return set(st.session_state.get("retiradas", {}).get(grandeza, []))
 
 
+def cemaden_escolhidas(cadastro: pd.DataFrame) -> tuple[str, ...]:
+    # As estações do CEMADEN que a equipe pôs nos mapas de chuva nesta sessão (a gaveta). Mora no
+    # dicionário da sessão pelo mesmo motivo das retiradas: vale nas abas e nos Mapas interativos
+    return tuple(nome for nome in st.session_state.get("cemaden", []) if nome in set(cadastro["Estação"]))
+
+
 def gaveta_das_retiradas(onde: str, grandezas: list[str], estacoes: pd.DataFrame,
-                         vizinhas: pd.DataFrame) -> None:
+                         vizinhas: pd.DataFrame, cadastro_cemaden: pd.DataFrame | None = None) -> None:
     # A gaveta à direita dos mapas: uma lista de estações a retirar para cada variável na tela.
     # Flutua por cima da aba (ESTILO_DA_GAVETA) e abre e fecha sem refazer os mapas; fechada, mostra
     # quantas estações estão fora, para ninguém esquecer delas. `onde` separa as gavetas das abas,
     # que o Streamlit desenha todas de uma vez. As do estado vêm primeiro, e as vizinhas (que seguram
     # a borda da interpolação) depois, marcadas.
+    # Nos mapas de chuva, com o cadastro do CEMADEN em `cadastro_cemaden`, a gaveta traz também a
+    # lista dos pluviômetros dele que entram nos mapas. Nenhum entra sem ser escolhido.
     guardadas = st.session_state.setdefault("retiradas", {})
     de_fora = set(vizinhas["Estação"]) - set(estacoes["Estação"])
     opcoes = list(estacoes["Estação"]) + sorted(de_fora)
     fora = sum(nome in opcoes for grandeza in grandezas for nome in guardadas.get(grandeza, []))
+    com_cemaden = cadastro_cemaden is not None and not cadastro_cemaden.empty
+    if com_cemaden:
+        escolhidas = list(cemaden_escolhidas(cadastro_cemaden))
+        contas = ([f"{fora} fora"] if fora else []) + ([f"{len(escolhidas)} do CEMADEN"] if escolhidas else [])
+        titulo = "Estações dos mapas" + (f" ({' · '.join(contas)})" if contas else "")
+    else:
+        titulo = f"Estações retiradas ({fora})" if fora else "Estações retiradas"
     with st.container(key=f"gaveta_retiradas_{onde}"):
         st.html(ESTILO_DA_GAVETA)
-        with st.expander(f"Estações retiradas ({fora})" if fora else "Estações retiradas",
-                         icon=":material/location_off:", key=f"expansor_retiradas_{onde}"):
+        with st.expander(titulo, icon=":material/edit_location_alt:" if com_cemaden else ":material/location_off:",
+                         key=f"expansor_retiradas_{onde}"):
             for grandeza in grandezas:
                 chave = f"retiradas_{grandeza}"
                 # O valor sai do dicionário a cada execução; trocando o estado, as do anterior ficam
@@ -520,6 +566,22 @@ def gaveta_das_retiradas(onde: str, grandezas: list[str], estacoes: pd.DataFrame
                        "ela sai do mapa, do ranking e da interpolação da variável, e continua nos gráficos "
                        "e nas tabelas. A lista vale para os mapas da variável em todas as abas e nos Mapas "
                        "interativos, enquanto o painel estiver aberto.")
+            if com_cemaden:
+                st.divider()
+                chave = f"cemaden_{onde}"
+                st.session_state[chave] = escolhidas
+                paradas = set(cadastro_cemaden.loc[cadastro_cemaden["CD_SITUACAO"] == "Parada", "Estação"])
+                st.multiselect("Do CEMADEN, nos mapas de chuva", list(cadastro_cemaden["Estação"]), key=chave,
+                               placeholder="Nenhuma",
+                               format_func=lambda nome: nome.removeprefix(fonte.PREFIXO_CEMADEN)
+                               + (" (parada)" if nome in paradas else ""),
+                               on_change=lambda chave=chave: st.session_state.__setitem__(
+                                   "cemaden", list(st.session_state[chave])))
+                st.caption("Os pluviômetros do CEMADEN escolhidos aqui entram nos mapas de chuva com o mesmo "
+                           "peso das estações do INMET: na interpolação, no ranking e nas barras dos "
+                           "acumulados. A rede dele se concentra em poucas cidades (Campo Grande tem quatro), "
+                           "e por isso nenhum entra sem ser escolhido. A parada só tem leitura de antes da "
+                           f"parada. O mapa do boletim leva a citação que o CEMADEN pede: {cemaden.CITACAO}.")
 
 
 def nota_das_retiradas(fora: set[str]) -> str:
@@ -535,7 +597,8 @@ def sem_lista_de_estacoes(onde, uf: str) -> None:
 
 
 def _com_coordenadas(valores: pd.Series, nome_variavel: str, uf: str) -> pd.DataFrame:
-    cadastro = pd.concat([carregar_estacoes(uf), estacoes_vizinhas(uf, avisar=False)], ignore_index=True)
+    cadastro = pd.concat([carregar_estacoes(uf), estacoes_vizinhas(uf, avisar=False), estacoes_do_cemaden(uf)],
+                         ignore_index=True)
     coordenadas = (cadastro.set_index("Estação")[["VL_LATITUDE", "VL_LONGITUDE"]]
                    .rename(columns={"VL_LATITUDE": "Latitude", "VL_LONGITUDE": "Longitude"}))
     return coordenadas.join(valores.rename(nome_variavel), how="inner").reset_index().dropna()
@@ -574,7 +637,8 @@ def desenho_do_boletim(valores: pd.Series, nome: str, grandeza: str, unidade: st
                        decimais: int, subtitulo: str, uf: str, niveis=None, direcoes=None, apoio=None):
     gdf = _pontos_do_mapa(valores, nome, uf, subtitulo, direcoes)
     vizinhas = _vizinhas_do_mapa(apoio, nome, uf, subtitulo)
-    espec = boletim.espec(nome, grandeza, unidade, paleta, decimais, uf, subtitulo, direcoes is not None)
+    espec = boletim.espec(nome, grandeza, unidade, paleta, decimais, uf, subtitulo, direcoes is not None,
+                          rodape=boletim.rodape(valores.dropna().index))
     base = base_cartografica(uf)
     return lambda: mapas.mapa_interpolado(gdf, espec, base, niveis=niveis, apoio=vizinhas)
 
@@ -595,6 +659,18 @@ def desenho_das_horas(grade, pontos: pd.DataFrame, espec: mapas.EspecMapa, uf: s
 def niveis_das_horas(grade):
     maximo = int(grade.max())
     return np.arange(0, max(maximo, 1) + 1) if maximo < 12 else 12
+
+
+def estacoes_no_mapa(valores: pd.Series) -> str:
+    # Sob o mapa da tela: "23 estações", e quantas delas são do CEMADEN, com a citação que ele pede
+    medidas = valores.dropna()
+    do_cemaden = len(fonte.do_cemaden(medidas.index))
+    return f"{len(medidas)} estações" + (f" ({do_cemaden} do CEMADEN)" if do_cemaden else "")
+
+
+def citacao_do_cemaden(valores: pd.Series) -> str:
+    citacao = boletim.rodape(valores.dropna().index)
+    return f" {citacao}." if citacao else ""
 
 
 def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, subtitulo: str,
@@ -618,7 +694,7 @@ def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, 
     # A regra do produto vai junto, para ninguém precisar adivinhar que conta é aquela
     casas = produto.decimais
     st.caption(f"{valores.min():.{casas}f} a {valores.max():.{casas}f} {produto.unidade} · "
-               f"{valores.notna().sum()} estações · {produto.regra}.")
+               f"{estacoes_no_mapa(valores)} · {produto.regra}.{citacao_do_cemaden(valores)}")
     arquivo = produto.nome.lower().replace("/", "").replace(" ", "_")
     st.download_button(f"Baixar PNG — {medida}", png, mime="image/png", key=f"baixar_{produto.nome}",
                        file_name=f"Mapa_{arquivo}_{carimbo}.png")
@@ -705,8 +781,8 @@ def painel_da_chuva(rotulo: str, valores: pd.Series, janela: str, subtitulo: str
     st.image(png, width="stretch")
     if niveis is not None:
         st.image(barra_de_escala("Blues", tuple(niveis), "mm"), width="stretch")
-    st.caption(f"{valores.min():.1f} a {valores.max():.1f} mm · {valores.notna().sum()} estações · "
-               f"soma das horas de {janela}.")
+    st.caption(f"{valores.min():.1f} a {valores.max():.1f} mm · {estacoes_no_mapa(valores)} · "
+               f"soma das horas de {janela}.{citacao_do_cemaden(valores)}")
     st.download_button(f"Baixar PNG — chuva {rotulo}", png, mime="image/png",
                        key=f"baixar_chuva_{rotulo}",
                        file_name=f"Mapa_chuva_{rotulo.replace(' ', '')}.png")
@@ -3865,6 +3941,20 @@ with aba_chuva:
         if leituras_chuva.empty or chuva_calc.COLUNA not in leituras_chuva:
             st.warning("A API não devolveu chuva no período.")
         else:
+            # À direita, flutuando, a gaveta dos mapas de chuva: as estações retiradas deles e, com o
+            # banco, os pluviômetros do CEMADEN que entram neles. Ela abre assim que a chuva chega, e
+            # não só com os mapas, porque o CEMADEN escolhido entra também nas barras dos acumulados
+            cadastro_cemaden = estacoes_do_cemaden(uf)
+            gaveta_das_retiradas("chuva", ["Chuva"], estacoes, vizinhas_chuva, cadastro_cemaden)
+            fora_chuva = retiradas_da_variavel("Chuva")
+            chuva_cemaden = carregar_chuva_cemaden(cemaden_escolhidas(cadastro_cemaden),
+                                                   inicio_chuva.astimezone(config.FUSO_UTC),
+                                                   ate.astimezone(config.FUSO_UTC), uf)
+            # As do INMET e as escolhidas do CEMADEN, com o mesmo peso: daqui saem os acumulados, as
+            # barras e os mapas. A cascata do estado e o alcance dos acumulados ficam com as do INMET
+            chuva_dos_mapas = (pd.concat([leituras_chuva, chuva_cemaden], ignore_index=True)
+                               if not chuva_cemaden.empty else leituras_chuva)
+            nas_contas = len(estacoes) + chuva_cemaden["Estação"].nunique()
             # Sai do mesmo dado dos acumulados, então não custa consulta nenhuma: só reagrupa o
             # que já veio. Vem antes dos mapas porque responde outra pergunta — quando choveu no
             # período, e não onde —, e porque não depende de escolha nenhuma na barra lateral.
@@ -3901,18 +3991,20 @@ with aba_chuva:
                                "Esses acumulados mostrariam menos chuva do que caiu.")
                 mostrar = [rotulo for rotulo in escolhidos if rotulo not in curtas]
 
-                somas = {rotulo: chuva_calc.acumulado(leituras_chuva, ate, rotulo) for rotulo in mostrar}
+                somas = {rotulo: chuva_calc.acumulado(chuva_dos_mapas, ate, rotulo) for rotulo in mostrar}
                 chovidas = {rotulo: valores for rotulo, valores in somas.items()
                             if not valores.dropna().empty and valores.max() > 0}
                 secas = [rotulo for rotulo in mostrar if rotulo not in chovidas]
 
                 st.caption(f"Acumulados até **{ate:%d/%m %H:%M}**, somando a chuva de cada hora para "
-                           "trás. A barra diz quanto choveu em cada estação; o mapa, onde choveu.")
+                           "trás. A barra diz quanto choveu em cada estação; o mapa, onde choveu." +
+                           (f" Com {chuva_cemaden['Estação'].nunique()} pluviômetros do CEMADEN, escolhidos "
+                            f"na gaveta à direita. {cemaden.CITACAO}." if not chuva_cemaden.empty else ""))
                 if secas:
                     st.info(f"Sem chuva em nenhuma estação em: {', '.join(secas)}.")
 
                 if chovidas:
-                    todas_estacoes = st.checkbox(f"Listar as {len(estacoes)} estações", value=False,
+                    todas_estacoes = st.checkbox(f"Listar as {nas_contas} estações", value=False,
                                                  key="todas_chuva",
                                                  help="Desligada, a lista traz as 15 que mais choveram.")
                     # As barras vêm primeiro porque são a leitura mais usada — quanto choveu em
@@ -3926,18 +4018,16 @@ with aba_chuva:
                         for coluna_tela, rotulo in zip(st.columns(por_linha_barras), linha):
                             with coluna_tela:
                                 quantas = (chovidas[rotulo] > 0).sum()
-                                st.markdown(f"**Chuva {rotulo}** — {quantas} de {len(estacoes)} "
+                                st.markdown(f"**Chuva {rotulo}** — {quantas} de {nas_contas} "
                                             "estações com registro")
                                 st.altair_chart(barras_do_acumulado(chovidas[rotulo], "mm",
                                                                     None if todas_estacoes else 15),
                                                 width="stretch")
 
+                    # As estações retiradas saem só dos mapas: as barras continuam com todas, que é
+                    # onde o valor errado aparece
                     if st.checkbox("Gerar também os mapas destas janelas", value=False,
                                    key="mapas_chuva"):
-                        # À direita, flutuando, a lista das estações retiradas dos mapas de chuva; as
-                        # barras acima continuam com todas, que é onde o valor errado aparece
-                        gaveta_das_retiradas("chuva", ["Chuva"], estacoes, vizinhas_chuva)
-                        fora_chuva = retiradas_da_variavel("Chuva")
                         marcar, ajustar_escala = st.columns([1, 1])
                         with marcar:
                             rotulos_chuva = st.checkbox("Mostrar o valor de cada estação", value=True,
@@ -3968,7 +4058,7 @@ with aba_chuva:
             else:
                 # Hora a hora e por dia respeitam o período escolhido, como as outras abas
                 modo = variaveis.HORA if modo_chuva == "Hora a hora" else variaveis.DIA
-                do_periodo = leituras_chuva[leituras_chuva["dt_local"] > inicio.astimezone(recorte.fuso)]
+                do_periodo = chuva_dos_mapas[chuva_dos_mapas["dt_local"] > inicio.astimezone(recorte.fuso)]
                 paradas = variaveis.momentos(do_periodo, modo)
                 produto = variaveis.por_nome("Chuva na hora" if modo == variaveis.HORA else "Chuva acumulada")
                 if not paradas:
@@ -3982,9 +4072,6 @@ with aba_chuva:
                                                 key="valores_chuva_momento")
                     niveis_chuva = niveis_da_escala(produto, 1.0 if modo == variaveis.HORA else 24.0)
                     carimbo = (f"{momento:%Y%m%d}" if modo == variaveis.DIA else f"{momento:%Y%m%d_%H}h")
-                    # À direita, flutuando, a lista das estações retiradas dos mapas de chuva
-                    gaveta_das_retiradas("chuva", ["Chuva"], estacoes, vizinhas_chuva)
-                    fora_chuva = retiradas_da_variavel("Chuva")
                     fatia = retiradas.retirar(variaveis.recorte(do_periodo, modo, momento), fora_chuva)
                     apoio_periodo = chuva_apoio[chuva_apoio["dt_local"] > inicio.astimezone(recorte.fuso)]
                     fatia_apoio = retiradas.retirar(variaveis.recorte(apoio_periodo, modo, momento), fora_chuva)

@@ -29,6 +29,8 @@ CABECALHO_DA_REDE = "cod.estacao"   # a linha dos nomes das colunas no CSV, depo
 # O dia sem leitura nenhuma no estado (antes da rede existir, em 2014) vem com HTTP 202 e só este
 # aviso: "Info", e na linha de baixo "Nenhum resultado foi encontrado para essa requisição!"
 SEM_RESULTADO = "Nenhum resultado"
+# A citação que os termos de uso da PED pedem em todo produto feito com os dados dela, como está lá
+CITACAO = "DATA FROM THE CEMADEN/MCTIC OBSERVATIONAL NETWORK"
 
 # Uma sessão só, e o token dela, para o processo inteiro: o coletor é um só e consulta em fila
 _ESTADO = {"sessao": None, "token": "", "obtido_em": 0.0, "ultima_consulta": float("-inf")}

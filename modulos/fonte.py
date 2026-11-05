@@ -110,6 +110,11 @@ def tem_cemaden() -> bool:
     return _do_banco()
 
 
+def do_cemaden(nomes) -> list[str]:
+    # As estações do CEMADEN numa lista que junta as duas redes, como a dos mapas de chuva
+    return [nome for nome in nomes if isinstance(nome, str) and nome.startswith(PREFIXO_CEMADEN)]
+
+
 def _nome_cemaden(municipio, nome: str) -> str:
     # O nome sozinho não diz onde a estação fica ("Centro", "Escola"), e Campo Grande tem quatro
     return f"{PREFIXO_CEMADEN}{municipio} ({nome})" if isinstance(municipio, str) and municipio else \

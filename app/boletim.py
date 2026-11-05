@@ -5,7 +5,8 @@ desenho. Para o boletim a equipe quer o mapa como o `main.py` entrega — títul
 crédito INMET/SEMADESC, os logos do CEMTEC e da SEMADESC, o ranking das cinco estações e a barra
 de cores —, mas com **as cores da tela** (decisão de 01/10/2026): a mesma paleta e a mesma
 escala, fixa ou ajustada ao dado, que a pessoa estava vendo quando clicou. O que se baixa é o
-que se vê, pronto para ir ao boletim.
+que se vê, pronto para ir ao boletim. O mapa de chuva com pluviômetros do CEMADEN leva embaixo a
+citação que os termos de uso da PED pedem.
 
 O desenho não é refeito aqui: é o de `modulos/mapas.py` chamado sem `Tela`, que é o caminho do
 relatório — o mesmo código, com os mesmos logos no mesmo lugar. Este módulo só escreve o texto
@@ -15,7 +16,7 @@ import io
 from datetime import datetime
 
 from app import chuva, variaveis
-from modulos import config, mapas
+from modulos import cemaden, config, fonte, mapas
 
 # Como o ranking chama os valores de cada grandeza — "5 MAIORES TEMPERATURAS", como no main.py.
 # A radiação vai com a chuva porque as duas são acumuladas.
@@ -51,12 +52,17 @@ def nome_da_chuva(rotulo: str) -> str:
 
 def espec(nome: str, grandeza: str, unidade: str, paleta: str, decimais: int, uf: str,
           subtitulo: str, direcao_vento: bool = False, credito: str = mapas.CREDITO,
-          coluna: str | None = None, credito_no_rodape: bool = False) -> mapas.EspecMapa:
+          coluna: str | None = None, credito_no_rodape: bool = False, rodape: str = "") -> mapas.EspecMapa:
     texto, maiores = ranking(nome, grandeza)
     return mapas.EspecMapa(tabela="", coluna=coluna or nome, titulo=titulo(nome, uf), subtitulo=subtitulo,
                            arquivo="", cmap=paleta, unidade=f"{grandeza} ({unidade})", ranking=texto,
                            maiores=maiores, direcao_vento=direcao_vento, decimais=decimais,
-                           credito=credito, credito_no_rodape=credito_no_rodape)
+                           credito=credito, credito_no_rodape=credito_no_rodape, rodape=rodape)
+
+
+def rodape(estacoes) -> str:
+    # O mapa com estação do CEMADEN leva, embaixo, a citação que a PED pede
+    return cemaden.CITACAO if fonte.do_cemaden(estacoes) else ""
 
 
 def nome_do_arquivo(nome: str, uf: str, carimbo: str) -> str:
