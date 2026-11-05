@@ -81,6 +81,18 @@ def test_o_esquema_pode_rodar_de_novo_sem_erro(conexao):
                        "cemaden_estacao": "BASE TABLE", "cemaden_chuva": "BASE TABLE"}
 
 
+def test_o_esquema_roda_de_novo_com_uma_coluna_a_mais_numa_tabela(conexao):
+    # Como no banco da UNIGEO desde 05/11/2026: uma objectid na previsao_horaria_estacao, para o ArcGIS
+    conexao.execute("ALTER TABLE previsao_horaria_estacao ADD COLUMN objectid serial NOT NULL")
+    conexao.commit()
+    try:
+        banco.criar_esquema(conexao)
+    finally:
+        conexao.rollback()
+        conexao.execute("ALTER TABLE previsao_horaria_estacao DROP COLUMN objectid")
+        conexao.commit()
+
+
 # =====================================================
 # PARTIÇÕES
 # =====================================================

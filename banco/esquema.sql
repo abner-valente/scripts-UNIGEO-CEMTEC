@@ -170,10 +170,16 @@ COMMENT ON TABLE previsao_horaria_estacao IS
     'A previsão hora a hora no ponto de cada estação de MS (o ponto é o código do INMET), por modelo '
     'e rodada. Uma partição por mês da rodada (UTC), para sempre: é a base do previsto contra o observado.';
 
+-- As colunas uma a uma, e não *: quem usa o banco pode acrescentar coluna numa tabela só (a UNIGEO
+-- pôs uma objectid na das estações, para o ArcGIS, visto em 05/11/2026), e o * desencontraria o UNION
 CREATE OR REPLACE VIEW previsao_horaria AS
-    SELECT 'grade'::text AS conjunto, * FROM previsao_horaria_grade
+    SELECT 'grade'::text AS conjunto, modelo, rodada_utc, ponto, latitude, longitude, hora_prevista_utc,
+           temperatura, umidade, orvalho, chuva, vento, rajada, direcao
+    FROM previsao_horaria_grade
     UNION ALL
-    SELECT 'estacao'::text AS conjunto, * FROM previsao_horaria_estacao;
+    SELECT 'estacao'::text AS conjunto, modelo, rodada_utc, ponto, latitude, longitude, hora_prevista_utc,
+           temperatura, umidade, orvalho, chuva, vento, rajada, direcao
+    FROM previsao_horaria_estacao;
 COMMENT ON VIEW previsao_horaria IS 'As duas tabelas da previsão horária juntas, para consultar.';
 
 -- =====================================================
