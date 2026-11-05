@@ -1,7 +1,7 @@
 """Fonte dos dados: a costura entre quem usa as leituras e de onde elas vêm."""
 import ast
 from contextlib import nullcontext
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -9,7 +9,7 @@ import pandas as pd
 import psycopg
 import pytest
 
-from modulos import banco, coletor_inmet, config, fonte, inmet, openmeteo
+from modulos import banco, calculos, coletor_inmet, config, fonte, inmet, openmeteo
 
 RAIZ = Path(__file__).resolve().parent.parent
 
@@ -164,6 +164,96 @@ def test_o_banco_fora_do_ar_e_um_erro_da_fonte(monkeypatch, capsys):
         fonte.estacoes("MS")
     assert fonte.leituras_de_apoio(config.RECORTE, [], [], DIA, DIA) == []
     assert "a borda sai só com as do estado" in capsys.readouterr().out
+
+
+# =====================================================
+# O CEMADEN PELA FONTE "BANCO"
+# =====================================================
+CADASTRO_CEMADEN = pd.DataFrame({
+    "codigo": ["500270402A", "500270403A", "500830502A", "411069001A"],
+    "id_estacao": [7931, 7932, 7929, 1],
+    "nome": ["UPA Aparecida", "Centro", "São Carlos", "Escola"],
+    "municipio": ["Campo Grande", "Campo Grande", "Três Lagoas", "Curitiba"],
+    "codibge": [5002704, 5002704, 5008305, 4106902], "uf": ["MS", "MS", "MS", "PR"],
+    "latitude": [-20.52545, -20.46, -20.80873, -25.43], "longitude": [-54.59831, -54.62, -51.71331, -49.27],
+    "tipo": "Pluviométrica", "instalada_em": pd.Timestamp("2015-04-01"),
+    # A de Três Lagoas parou em 21/10 e não mandou mais nada
+    "ultima_parada": pd.to_datetime(["2026-01-22 12:59", "2026-03-01 10:00", "2026-10-21 16:46", "2025-01-01 08:00"]),
+    "ultima_remessa": pd.to_datetime(["2026-11-03 17:00", "2026-11-03 17:10", "2026-10-21 14:45", "2026-11-03 17:00"]),
+})
+# Leituras da UPA, em UTC: a das 23:10 da véspera cai na hora das 00:00; a das 03:40 (seca) e a das
+# 04:00 na das 04:00, que fecha o dia de MS anterior; a das 04:10 já é do dia 13 em MS; chovendo, de
+# 10 em 10 minutos
+LEITURAS_CEMADEN = [("2026-10-12 23:10", 1.0), ("2026-10-13 03:40", 0.0), ("2026-10-13 04:00", 0.4),
+                    ("2026-10-13 04:10", 0.2), ("2026-10-13 13:10", 2.4), ("2026-10-13 13:20", 0.6),
+                    ("2026-10-13 14:00", 0.2)]
+
+
+@pytest.fixture
+def cemaden_no_banco(limpa, monkeypatch):
+    monkeypatch.setattr(config, "FONTE_DADOS", "banco")
+    monkeypatch.setattr(fonte, "_conectar", lambda: nullcontext(limpa))
+    banco.gravar_cemaden_estacoes(limpa, CADASTRO_CEMADEN)
+    banco.gravar_cemaden_chuva(limpa, pd.DataFrame({
+        "codigo": "500270402A", "leitura_utc": pd.to_datetime([quando for quando, _ in LEITURAS_CEMADEN], utc=True),
+        "chuva": [mm for _, mm in LEITURAS_CEMADEN]}))
+    # A parada mandou antes do período
+    banco.gravar_cemaden_chuva(limpa, pd.DataFrame({"codigo": ["500830502A"], "chuva": [5.0],
+                                                    "leitura_utc": [pd.Timestamp("2026-10-01 12:00", tz="UTC")]}))
+    return limpa
+
+
+def test_as_estacoes_do_cemaden_tem_as_colunas_do_inmet_e_o_municipio_no_nome(cemaden_no_banco):
+    estacoes = fonte.estacoes_cemaden("MS")
+
+    assert list(estacoes.columns) == fonte.COLUNAS_ESTACOES_CEMADEN
+    assert estacoes["Estação"].tolist() == ["CEMADEN · Campo Grande (Centro)", "CEMADEN · Campo Grande (UPA Aparecida)",
+                                            "CEMADEN · Três Lagoas (São Carlos)"]
+    assert estacoes["CD_SITUACAO"].tolist() == ["Operante", "Operante", "Parada"]   # a parada fica na lista
+    assert estacoes.at[1, "VL_LATITUDE"] == -20.52545
+
+
+def test_cada_leitura_do_cemaden_entra_na_hora_que_termina_na_hora_cheia_seguinte(cemaden_no_banco):
+    estacoes = fonte.estacoes_cemaden("MS")
+
+    coletados = fonte.chuva_cemaden(estacoes[estacoes["CD_ESTACAO"] == "500270402A"], DIA, DIA)
+
+    (estacao, dados), = coletados
+    assert estacao["Estação"] == "CEMADEN · Campo Grande (UPA Aparecida)"
+    assert len(dados) == 24 and dados["dt_utc"].iloc[0] == pd.Timestamp("2026-10-13 00:00", tz="UTC")
+    chuva = dados.set_index(dados["dt_utc"].dt.hour)["CHUVA"]
+    assert chuva[0] == 1.0                     # a das 23:10 da véspera
+    assert chuva[4] == 0.4 and chuva[5] == 0.2
+    assert chuva[14] == 3.2                    # 13:10 + 13:20 + 14:00
+    assert np.isnan(chuva[6])                  # sem leitura é sem dado, e não 0 mm
+    assert {"CD_ESTACAO", "DC_NOME", "UF", "VL_LATITUDE", "VL_LONGITUDE", "DT_MEDICAO", "HR_MEDICAO",
+            "dt_local"} <= set(dados.columns)
+
+
+def test_o_dia_de_ms_soma_a_chuva_do_cemaden_como_a_do_inmet(cemaden_no_banco):
+    estacoes = fonte.estacoes_cemaden("MS")
+    (_, dados), = fonte.chuva_cemaden(estacoes[estacoes["CD_ESTACAO"] == "500270402A"], DIA, DIA)
+    dia_em_ms = datetime(2026, 10, 13, 4, tzinfo=timezone.utc)   # 00:00 de 13/10 em MS
+
+    # A hora das 04:00 UTC (as leituras das 03:40 e das 04:00) é do dia 12 em MS
+    assert calculos.acumulado_chuva(dados, dia_em_ms, dia_em_ms + timedelta(days=1)) == 3.4
+
+
+def test_a_estacao_do_cemaden_sem_leitura_no_periodo_fica_de_fora_com_aviso(cemaden_no_banco, capsys):
+    coletados = fonte.chuva_cemaden(fonte.estacoes_cemaden("MS"), DIA, DIA)
+
+    assert [estacao["CD_ESTACAO"] for estacao, _ in coletados] == ["500270402A"]
+    assert ("CEMADEN: 1 de 3 estações com leitura no período; sem leitura (2): CEMADEN · Campo Grande (Centro), "
+            "CEMADEN · Três Lagoas (São Carlos)") in capsys.readouterr().out
+
+
+def test_com_a_fonte_apis_nao_ha_cemaden_e_o_banco_nem_e_aberto(monkeypatch):
+    monkeypatch.setattr(fonte, "_conectar", lambda: pytest.fail("não devia abrir o banco"))
+
+    assert not fonte.tem_cemaden()
+    assert fonte.estacoes_cemaden("MS").empty
+    assert list(fonte.estacoes_cemaden("MS").columns) == fonte.COLUNAS_ESTACOES_CEMADEN
+    assert fonte.chuva_cemaden(CADASTRO_CEMADEN.rename(columns={"codigo": "CD_ESTACAO"}), DIA, DIA) == []
 
 
 # =====================================================

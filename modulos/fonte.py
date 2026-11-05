@@ -11,6 +11,10 @@ docs/plano_arquitetura.md (passo 7).
   devolve as mesmas tabelas que o `inmet.py` e o `openmeteo.py` devolveriam, coluna por coluna. A
   grade da previsão é a do coletor (0,25°), e não a da busca sob demanda (0,5°).
 
+Os pluviômetros do CEMADEN só vêm do banco (`estacoes_cemaden`, `chuva_cemaden`): com a fonte
+"apis", a PED teria de ser consultada na hora, e o limite de 12 consultas por minuto é da conta,
+dividido com o coletor. As tabelas deles têm as colunas das do INMET, só com a chuva.
+
 As funções procuram o `inmet` na hora de cada chamada, sem guardar referência às funções dele.
 É o que deixa os testes trocarem a API do INMET por dados sintéticos, como sempre fizeram.
 """
@@ -22,10 +26,16 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import psycopg
 
-from . import banco, config, inmet, openmeteo
+from . import banco, cemaden, config, inmet, openmeteo
 
 # As fontes que esta versão sabe usar
 FONTES = ("apis", "banco")
+
+# O CEMADEN nas listas e nas tabelas, ao lado do INMET: o nome da estação começa por aqui
+PREFIXO_CEMADEN = "CEMADEN · "
+COLUNAS_ESTACOES_CEMADEN = ["CD_ESTACAO", "DC_NOME", "SG_ESTADO", "VL_LATITUDE", "VL_LONGITUDE", "CD_SITUACAO",
+                            "Estação"]
+SITUACOES_CEMADEN = {False: "Operante", True: "Parada"}
 
 # O erro que os produtos e o painel tratam, venha de qual fonte vier
 ErroFonte = (inmet.ErroINMET, banco.ErroBanco)
@@ -91,6 +101,73 @@ def leituras_de_apoio(recorte: config.Recorte, lon_celulas, lat_celulas, inicio:
               + (f", {len(sem_dados)} sem" if sem_dados else ""))
         return coletados
     return inmet.baixar_apoio(recorte, lon_celulas, lat_celulas, inicio, fim, fuso=fuso)
+
+
+# =====================================================
+# O CEMADEN
+# =====================================================
+def tem_cemaden() -> bool:
+    return _do_banco()
+
+
+def _nome_cemaden(municipio, nome: str) -> str:
+    # O nome sozinho não diz onde a estação fica ("Centro", "Escola"), e Campo Grande tem quatro
+    return f"{PREFIXO_CEMADEN}{municipio} ({nome})" if isinstance(municipio, str) and municipio else \
+        f"{PREFIXO_CEMADEN}{nome}"
+
+
+def estacoes_cemaden(uf: str = config.UF) -> pd.DataFrame:
+    if not _do_banco():
+        return pd.DataFrame(columns=COLUNAS_ESTACOES_CEMADEN)
+    with _conexao() as conexao:
+        cadastro = banco.ler_cemaden_estacoes(conexao, uf)
+    cadastro = cadastro.sort_values(["municipio", "nome", "codigo"], kind="stable", na_position="last")
+    tabela = pd.DataFrame({
+        "CD_ESTACAO": cadastro["codigo"], "DC_NOME": cadastro["nome"], "SG_ESTADO": cadastro["uf"],
+        "VL_LATITUDE": cadastro["latitude"], "VL_LONGITUDE": cadastro["longitude"],
+        # A parada fica na lista: num período de antes da parada, ela tem leitura
+        "CD_SITUACAO": cemaden.esta_parada(cadastro).map(SITUACOES_CEMADEN),
+        "Estação": [_nome_cemaden(municipio, nome) for municipio, nome in zip(cadastro["municipio"], cadastro["nome"])],
+    })
+    return tabela.reset_index(drop=True)
+
+
+def chuva_cemaden(estacoes: pd.DataFrame, inicio: datetime, fim: datetime,
+                  fuso: ZoneInfo = config.FUSO_MS) -> list[tuple[pd.Series, pd.DataFrame]]:
+    # Como leituras_do_estado, para as estações pedidas (de estacoes_cemaden): uma tabela por
+    # estação, com uma linha por hora cheia dos dias UTC de inicio a fim. A leitura entra na hora
+    # que termina na hora cheia seguinte: a das 13:40 na das 14:00, como a leitura do INMET das 14:00
+    # é a chuva das 13:00 às 14:00. A hora sem leitura fica sem dado, e não seca: a estação parada
+    # não manda nada. A estação sem leitura nenhuma no período fica de fora
+    if estacoes.empty or not _do_banco():
+        return []
+    primeiro = pd.Timestamp(inicio.astimezone(config.FUSO_UTC).date(), tz="UTC")
+    ultimo = pd.Timestamp(fim.astimezone(config.FUSO_UTC).date(), tz="UTC") + pd.Timedelta(hours=23)
+    with _conexao() as conexao:
+        # (primeiro − 1 h, último]: as leituras que caem nas horas de primeiro a último
+        lidas = banco.ler_cemaden_chuva(conexao, primeiro - timedelta(hours=1), ultimo, list(estacoes["CD_ESTACAO"]))
+    por_hora = {}
+    if not lidas.empty:
+        lidas = lidas.assign(dt_utc=lidas["leitura_utc"].dt.ceil("h"))
+        somas = lidas.groupby(["estacao", "dt_utc"])["chuva"].sum(min_count=1).round(cemaden.CASAS_DA_CHUVA)
+        por_hora = {codigo: serie.droplevel("estacao") for codigo, serie in somas.groupby(level="estacao")}
+    horas = pd.DataFrame({"dt_utc": pd.date_range(primeiro, ultimo, freq="h")})
+    coletados, sem_dados = [], []
+    for _, estacao in estacoes.iterrows():
+        dela = por_hora.get(estacao["CD_ESTACAO"])
+        if dela is None:
+            sem_dados.append(estacao["Estação"])
+            continue
+        dados = horas.merge(dela.rename("CHUVA").reset_index(), on="dt_utc", how="left")
+        dados = dados.assign(CD_ESTACAO=estacao["CD_ESTACAO"], DC_NOME=estacao["DC_NOME"], UF=estacao["SG_ESTADO"],
+                             VL_LATITUDE=estacao["VL_LATITUDE"], VL_LONGITUDE=estacao["VL_LONGITUDE"],
+                             DT_MEDICAO=dados["dt_utc"].dt.strftime("%Y-%m-%d"),
+                             HR_MEDICAO=dados["dt_utc"].dt.strftime("%H%M"),
+                             dt_local=dados["dt_utc"].dt.tz_convert(fuso))
+        coletados.append((estacao, dados))
+    print(f"🌧️ CEMADEN: {len(coletados)} de {len(estacoes)} estações com leitura no período"
+          + (f"; sem leitura ({len(sem_dados)}): {', '.join(sem_dados)}" if sem_dados else ""))
+    return coletados
 
 
 # =====================================================
