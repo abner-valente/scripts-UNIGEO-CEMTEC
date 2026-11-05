@@ -379,7 +379,7 @@ def test_o_coletar_no_banco_de_teste(conexao, limpa, inmet_simulado, monkeypatch
 def historico_simulado(monkeypatch):
     monkeypatch.setattr(config, "TOKEN_INMET", "token-de-teste")
     monkeypatch.setattr(coletar, "ESPERA_PARA_RECONECTAR", 0)
-    monkeypatch.setattr(coletar, "ESPERA_COM_O_INMET_FORA", 0)
+    monkeypatch.setattr(coletar, "ESPERA_COM_A_API_FORA", 0)
     monkeypatch.setattr(banco, "conectar", lambda *args, **kwargs: nullcontext("conexão"))
     chamadas = {"datas": [], "quedas": 0, "fora_do_ar": 0}
 
@@ -441,7 +441,7 @@ def test_o_historico_espera_o_inmet_voltar_e_retoma(historico_simulado, capsys):
 
 
 def test_o_historico_desiste_se_o_inmet_nao_volta(historico_simulado, monkeypatch, capsys):
-    monkeypatch.setattr(coletar, "ESPERAS_COM_O_INMET_FORA", 2)
+    monkeypatch.setattr(coletar, "ESPERAS_COM_A_API_FORA", 2)
     historico_simulado["fora_do_ar"] = 99
 
     assert coletar.main(["inmet", "--historico", "2025-01-01"]) == 1

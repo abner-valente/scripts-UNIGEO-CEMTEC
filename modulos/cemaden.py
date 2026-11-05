@@ -19,11 +19,16 @@ import requests
 
 from . import config, inmet
 
-COLUNAS_DA_CHUVA = ["codigo", "leitura_utc", "chuva"]
+# A leitura, e a estação como a própria leitura a descreve: a que saiu do cadastro da PED entra no
+# banco por aí
+COLUNAS_DA_CHUVA = ["codigo", "leitura_utc", "chuva", "nome", "municipio", "uf", "latitude", "longitude"]
 COLUNAS_DO_CADASTRO = ["codigo", "id_estacao", "nome", "municipio", "codibge", "uf", "latitude", "longitude", "tipo",
                        "instalada_em", "ultima_parada", "ultima_remessa"]
 CASAS_DA_CHUVA = 2   # o pluviômetro mede de 0,2 em 0,2 mm, e a PED manda 0.6000000000000001
 CABECALHO_DA_REDE = "cod.estacao"   # a linha dos nomes das colunas no CSV, depois do aviso do UTC
+# O dia sem leitura nenhuma no estado (antes da rede existir, em 2014) vem com HTTP 202 e só este
+# aviso: "Info", e na linha de baixo "Nenhum resultado foi encontrado para essa requisição!"
+SEM_RESULTADO = "Nenhum resultado"
 
 # Uma sessão só, e o token dela, para o processo inteiro: o coletor é um só e consulta em fila
 _ESTADO = {"sessao": None, "token": "", "obtido_em": 0.0, "ultima_consulta": float("-inf")}
@@ -155,16 +160,19 @@ def ler_chuva(texto: str) -> pd.DataFrame:
     linhas = texto.splitlines()
     inicio = next((indice for indice, linha in enumerate(linhas) if linha.startswith(CABECALHO_DA_REDE)), None)
     if inicio is None:
-        if texto.strip() and not texto.lstrip().startswith("OBS"):
+        if texto.strip() and not texto.lstrip().startswith("OBS") and SEM_RESULTADO not in texto:
             raise ErroCEMADEN("a chuva veio em formato inesperado")
         return pd.DataFrame(columns=COLUNAS_DA_CHUVA)
     try:
-        tabela = pd.read_csv(io.StringIO("\n".join(linhas[inicio:])), sep=";", dtype={"cod.estacao": str})
+        tabela = pd.read_csv(io.StringIO("\n".join(linhas[inicio:])), sep=";",
+                             dtype={coluna: str for coluna in ("cod.estacao", "nome", "municipio", "uf")})
         chuva = tabela[tabela["sensor"] == config.SENSOR_CHUVA_CEMADEN]
         leituras = pd.DataFrame({
             "codigo": chuva["cod.estacao"].str.strip(),
             "leitura_utc": pd.to_datetime(chuva["datahora"], errors="coerce", utc=True),
             "chuva": pd.to_numeric(chuva["valor"], errors="coerce").round(CASAS_DA_CHUVA),
+            **{coluna: chuva[coluna].str.strip() for coluna in ("nome", "municipio", "uf")},
+            **{coluna: pd.to_numeric(chuva[coluna], errors="coerce") for coluna in ("latitude", "longitude")},
         })
     except (KeyError, ValueError) as erro:
         raise ErroCEMADEN(f"a chuva veio em formato inesperado ({erro})") from None

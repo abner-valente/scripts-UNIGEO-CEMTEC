@@ -288,18 +288,19 @@ def _atribuicoes(colunas: list[str], tabela: str) -> tuple[sql.Composed, sql.Com
             sql.SQL(", ").join(sql.SQL("EXCLUDED.{}").format(sql.Identifier(c)) for c in colunas))
 
 
-def gravar_cemaden_estacoes(conexao: psycopg.Connection, cadastro: pd.DataFrame) -> int:
+def gravar_cemaden_estacoes(conexao: psycopg.Connection, cadastro: pd.DataFrame, so_as_novas: bool = False) -> int:
     # O cadastro da PED vale como vem, sem guardar o que ela deixou vazio. Só a estação que mudou é
-    # reescrita
+    # reescrita. Com so_as_novas (a estação descrita pelas leituras), a que já está fica como está
     if cadastro.empty:
         return 0
     colunas = list(cemaden.COLUNAS_DO_CADASTRO)
     _carregar(conexao, "cemaden_estacao", colunas, _linhas(cadastro.drop_duplicates("codigo"), colunas))
     novos, antes, depois = _atribuicoes(colunas[1:], "cemaden_estacao")
+    conflito = sql.SQL("DO NOTHING") if so_as_novas else sql.SQL(
+        "DO UPDATE SET {}, atualizada_em = now() WHERE ({}) IS DISTINCT FROM ({})").format(novos, antes, depois)
     gravadas = conexao.execute(
-        sql.SQL("INSERT INTO cemaden_estacao ({}) SELECT {} FROM carga ON CONFLICT (codigo) DO UPDATE SET {}, "
-                "atualizada_em = now() WHERE ({}) IS DISTINCT FROM ({})")
-        .format(_lista(colunas), _lista(colunas), novos, antes, depois)).rowcount
+        sql.SQL("INSERT INTO cemaden_estacao ({}) SELECT {} FROM carga ON CONFLICT (codigo) {}")
+        .format(_lista(colunas), _lista(colunas), conflito)).rowcount
     conexao.commit()
     return gravadas
 
@@ -468,6 +469,15 @@ def estacoes_com_leituras(conexao: psycopg.Connection, inicio, fim) -> list[str]
     linhas = conexao.execute("SELECT DISTINCT estacao FROM inmet_horaria WHERE hora_utc > %s AND hora_utc <= %s "
                              "ORDER BY estacao", (_em_utc(inicio), _em_utc(fim))).fetchall()
     return [estacao for (estacao,) in linhas]
+
+
+@_sem_deixar_transacao
+def dias_cemaden_guardados(conexao: psycopg.Connection, desde: date, ate: date) -> set[date]:
+    # Os dias UTC, de desde a ate inclusive, com alguma leitura no banco: a consulta à PED é por dia
+    linhas = conexao.execute("SELECT DISTINCT (leitura_utc AT TIME ZONE 'UTC')::date FROM cemaden_chuva "
+                             "WHERE leitura_utc >= %s AND leitura_utc < %s",
+                             (_meia_noite_utc(desde), _meia_noite_utc(ate + timedelta(days=1)))).fetchall()
+    return {dia for (dia,) in linhas}
 
 
 @_sem_deixar_transacao

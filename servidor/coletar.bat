@@ -6,7 +6,8 @@ REM   coletar.bat inmet               de hora em hora, aos 50 minutos (leva ~75 
 REM                                   mandam a leitura da hora ao longo de uns 40 minutos
 REM   coletar.bat inmet --extras      todo dia, as 03:00 (leva ~10 min)
 REM   coletar.bat inmet --revisar 30  todo domingo, a 01:05 (leva ~13 min): as correcoes do INMET
-REM   coletar.bat previsao            todo dia, as 04:45 e as 16:45 (leva ate ~11 min)
+REM   coletar.bat previsao            de hora em hora, aos 15 minutos (leva ate ~11 min)
+REM   coletar.bat cemaden             de hora em hora, aos 5 minutos (leva ~20 s): os pluviometros
 REM As do INMET nunca devem rodar juntas: somadas, passariam das 100 consultas por minuto que o
 REM INMET aceita de cada endereco. Os extras (03:00) e a revisao (01:05) terminam antes da execucao
 REM de hora em hora seguinte, aos 50 minutos. O servidor\criar_tarefas.ps1 cria todas.
@@ -15,9 +16,11 @@ REM (o padrao), para uma execucao demorada nao se sobrepor a seguinte. Tambem ro
 REM cliques, para testar.
 REM
 REM A saida vai para logs\coletor_<trabalho>.log (logs\coletor_inmet.log,
-REM logs\coletor_inmet_extras.log, logs\coletor_inmet_revisao.log e logs\coletor_previsao.log),
-REM porque pelo Agendador ninguem ve a janela. A carga do historico, que roda uma vez so, e melhor rodar a mao, num terminal:
+REM logs\coletor_inmet_extras.log, logs\coletor_inmet_revisao.log, logs\coletor_previsao.log e
+REM logs\coletor_cemaden.log), porque pelo Agendador ninguem ve a janela. As cargas do historico,
+REM que rodam uma vez so, e melhor rodar a mao, num terminal:
 REM python coletar.py inmet --historico 2018-01-01
+REM python coletar.py cemaden --historico 2015-03-01
 
 setlocal
 cd /d "%~dp0.."
@@ -30,7 +33,7 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 if "%~1"=="" (
-    echo Diga o trabalho: coletar.bat inmet, ou coletar.bat previsao
+    echo Diga o trabalho: coletar.bat inmet, coletar.bat previsao ou coletar.bat cemaden
     exit /b 1
 )
 if not exist "logs" mkdir "logs"

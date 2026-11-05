@@ -76,6 +76,9 @@ def test_o_dia_vem_do_estado_inteiro_numa_consulta_so_e_fica_so_a_chuva(monkeypa
     assert chuva["codigo"].tolist() == ["500110201A", "500568101A", "500568101A"]   # sem o nível nem a intensidade
     assert chuva["chuva"].tolist() == [0.0, 2.4, 0.6]                                # o zero escrito fica zero
     assert chuva.loc[0, "leitura_utc"] == pd.Timestamp("2026-11-02 00:40", tz="UTC")
+    # E a estação, como a leitura a descreve: é por aí que entra a que saiu do cadastro
+    assert chuva.loc[1, ["nome", "municipio", "uf"]].tolist() == ["Escola", "MUNDO NOVO", "MS"]
+    assert chuva.loc[1, ["latitude", "longitude"]].tolist() == [-23.9401, -54.2713]
 
 
 def test_o_login_leva_a_conta_e_o_token_vale_para_as_consultas_seguintes(monkeypatch):
@@ -162,6 +165,7 @@ def test_o_ritmo_espaca_as_consultas(monkeypatch, esperas):
     "OBS.: Rede com horario UTC!\ncod.estacao;nome;municipio;uf;latitude;longitude;datahora;sensor;valor;"
     "qualificacao;offset\n",
     "",
+    "Info\nNenhum resultado foi encontrado para essa requisição!\n",   # o dia antes da rede (HTTP 202)
 ])
 def test_dia_sem_leitura_devolve_tabela_vazia(texto):
     chuva = cemaden.ler_chuva(texto)

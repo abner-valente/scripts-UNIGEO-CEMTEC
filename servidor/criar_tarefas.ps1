@@ -1,11 +1,14 @@
-# Cria (ou recria) no Agendador de Tarefas do Windows as quatro tarefas dos coletores do banco:
+# Cria (ou recria) no Agendador de Tarefas do Windows as cinco tarefas dos coletores do banco:
 #   UNIGEO - coletor INMET           de hora em hora, aos 50 minutos   coletar.bat inmet
 #   UNIGEO - coletor INMET extras    todo dia, as 03:00                coletar.bat inmet --extras
 #   UNIGEO - coletor INMET revisao   todo domingo, a 01:05             coletar.bat inmet --revisar 30
 #   UNIGEO - coletor previsao        de hora em hora, aos 15 minutos   coletar.bat previsao
+#   UNIGEO - coletor CEMADEN         de hora em hora, aos 5 minutos    coletar.bat cemaden
 #
 # O INMET aos 50 minutos: as estacoes mandam a leitura da hora ao longo de uns 40 minutos. A
 # revisao rebusca 30 dias, para o banco receber os valores que o INMET corrigiu depois.
+# O CEMADEN aos 5 minutos, logo depois da hora cheia: os pluviometros mandam a leitura assim que
+# medem, e cada execucao rebusca os ultimos 3 dias (~20 s, em outra API: nao divide limite com o INMET).
 # A previsao guarda as rodadas das 00Z e das 12Z. A busca normal so alcanca cada uma enquanto e a
 # mais recente do modelo, e cada modelo publica numa hora: em 21/10/2026, a das 00Z do ECMWF ficou
 # pronta as 05:00 de MS, e a do ICON deixou de ser a mais recente as 05:30. Por isso a conferencia
@@ -45,7 +48,9 @@ $tarefas = @(
     @{ Nome = "UNIGEO - coletor INMET revisao"; Argumentos = "inmet --revisar 30"
        Gatilho = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At $hoje.AddHours(1).AddMinutes(5) },
     @{ Nome = "UNIGEO - coletor previsao"; Argumentos = "previsao"
-       Gatilho = New-ScheduledTaskTrigger -Once -At $hoje.AddMinutes(15) -RepetitionInterval $umaHora }
+       Gatilho = New-ScheduledTaskTrigger -Once -At $hoje.AddMinutes(15) -RepetitionInterval $umaHora },
+    @{ Nome = "UNIGEO - coletor CEMADEN"; Argumentos = "cemaden"
+       Gatilho = New-ScheduledTaskTrigger -Once -At $hoje.AddMinutes(5) -RepetitionInterval $umaHora }
 )
 # Uma execucao por vez (a seguinte nao comeca se a anterior ainda roda), recupera a que a maquina
 # perdeu desligada, roda na bateria, e para a que passar de uma hora (a mais longa, a revisao,
