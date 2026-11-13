@@ -109,6 +109,33 @@ def test_o_token_recusado_e_renovado_uma_vez(monkeypatch):
     assert len(ped.logins) == 2
 
 
+@pytest.mark.parametrize("texto", ["Alerta\nO Token informado é inválido!\n",
+                                   '{"Alerta": "O Token informado é inválido!"}'])
+def test_o_token_que_a_ped_recusa_com_http_400_tambem_e_renovado(monkeypatch, texto):
+    # Assim ela recusou o token antes das 4 horas na carga do histórico (05/11/2026), em CSV e em JSON
+    ped = PED(monkeypatch, RespostaFalsa(status_code=400, texto=texto), RespostaFalsa(texto=CSV_DO_DIA))
+
+    assert len(cemaden.chuva_do_dia(date(2026, 11, 2))) == 3
+    assert len(ped.logins) == 2
+
+
+def test_o_token_recusado_de_novo_depois_do_login_novo_vira_erro_do_dia(monkeypatch):
+    recusa = "Alerta\nO Token informado é inválido!\n"
+    ped = PED(monkeypatch, RespostaFalsa(status_code=400, texto=recusa), RespostaFalsa(status_code=400, texto=recusa))
+
+    with pytest.raises(cemaden.ErroCEMADEN, match="HTTP 400"):
+        cemaden.chuva_do_dia(date(2026, 11, 2))
+    assert len(ped.logins) == 2 and len(ped.consultas) == 2
+
+
+def test_outro_erro_400_nao_gasta_um_login(monkeypatch):
+    ped = PED(monkeypatch, RespostaFalsa(status_code=400, texto="Alerta\nData inicial maior que a final"))
+
+    with pytest.raises(cemaden.ErroCEMADEN, match="Data inicial"):
+        cemaden.chuva_do_dia(date(2026, 11, 2))
+    assert len(ped.logins) == 1
+
+
 def test_o_login_recusado_vira_erro_sem_mostrar_a_conta(monkeypatch):
     PED(monkeypatch, login=RespostaFalsa(status_code=401, texto=f"usuario {EMAIL} com a senha {SENHA} invalido"))
 
@@ -214,12 +241,13 @@ def test_o_cadastro_traz_as_estacoes_com_o_municipio_e_quem_parou(monkeypatch):
 
 def test_parada_e_a_estacao_que_nao_mandou_nada_depois_da_ultima_parada():
     # Toda estação tem a data da última parada; a que mandou dado depois dela voltou
+    # A última, sem data nenhuma, saiu do cadastro da PED e entrou no banco pelas leituras antigas
     cadastro = pd.DataFrame({
-        "ultima_parada": pd.to_datetime(["2026-10-21 16:46", "2026-11-02 22:32", None]),
-        "ultima_remessa": pd.to_datetime(["2026-10-21 14:45", "2026-11-03 11:50", "2026-11-03 11:00"]),
+        "ultima_parada": pd.to_datetime(["2026-10-21 16:46", "2026-11-02 22:32", None, None]),
+        "ultima_remessa": pd.to_datetime(["2026-10-21 14:45", "2026-11-03 11:50", "2026-11-03 11:00", None]),
     })
 
-    assert cemaden.esta_parada(cadastro).tolist() == [True, False, False]
+    assert cemaden.esta_parada(cadastro).tolist() == [True, False, False, True]
 
 
 def test_a_chuva_entra_sem_o_ruido_de_conta_da_ped():

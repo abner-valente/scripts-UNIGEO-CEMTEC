@@ -29,6 +29,9 @@ CABECALHO_DA_REDE = "cod.estacao"   # a linha dos nomes das colunas no CSV, depo
 # O dia sem leitura nenhuma no estado (antes da rede existir, em 2014) vem com HTTP 202 e só este
 # aviso: "Info", e na linha de baixo "Nenhum resultado foi encontrado para essa requisição!"
 SEM_RESULTADO = "Nenhum resultado"
+# O token que a PED deixa de aceitar antes das 4 horas vem com HTTP 400 e este aviso, em CSV ("Alerta"
+# e, na linha de baixo, "O Token informado é inválido!") ou em JSON: visto na carga do histórico de 05/11/2026
+TOKEN_RECUSADO = "token informado"
 # A citação que os termos de uso da PED pedem em todo produto feito com os dados dela, como está lá
 CITACAO = "DATA FROM THE CEMADEN/MCTIC OBSERVATIONAL NETWORK"
 
@@ -87,9 +90,14 @@ def _no_ritmo() -> None:
     _ESTADO["ultima_consulta"] = time.monotonic()
 
 
+def _token_recusado(resposta: requests.Response) -> bool:
+    return resposta.status_code in (401, 403) or (resposta.status_code == 400
+                                                   and TOKEN_RECUSADO in resposta.text.casefold())
+
+
 def _consultar(rota: str, parametros: dict) -> requests.Response:
     # Como no INMET: a falha passageira é repetida, com a espera dobrando; o erro do pedido (4xx), não.
-    # Token recusado é renovado uma vez; a recusa pelo limite espera o minuto virar
+    # Token recusado é renovado uma vez, com um login novo; a recusa pelo limite espera o minuto virar
     espera, tentativa, recusas, renovado = config.PAUSA_ENTRE_TENTATIVAS, 0, 0, False
     while True:
         _no_ritmo()
@@ -99,7 +107,7 @@ def _consultar(rota: str, parametros: dict) -> requests.Response:
         except requests.RequestException as erro:
             motivo = _sem_credenciais(erro)
         else:
-            if resposta.status_code in (401, 403) and not renovado:
+            if _token_recusado(resposta) and not renovado:
                 renovado, _ESTADO["token"] = True, ""
                 continue
             if resposta.status_code == 429:
@@ -145,8 +153,10 @@ def cadastro(uf: str = config.UF) -> pd.DataFrame:
 def esta_parada(cadastro: pd.DataFrame) -> pd.Series:
     # A PED preenche "dh_inicio_inativo" em toda estação: é o começo da última parada, e não quer
     # dizer que ela esteja parada agora. Parada é a que não mandou nada depois dele (conferido em
-    # 03/11/2026: dá as 6 de 28 que não mandavam dado havia mais de um dia)
-    return (cadastro["ultima_parada"] >= cadastro["ultima_remessa"]).fillna(False).astype(bool)
+    # 03/11/2026: dá as 6 de 28 que não mandavam dado havia mais de um dia). A que não tem a data da
+    # última remessa saiu do cadastro da PED e entrou no banco pelas leituras antigas: também parada
+    sem_remessa = cadastro["ultima_remessa"].isna()
+    return (sem_remessa | (cadastro["ultima_parada"] >= cadastro["ultima_remessa"]).fillna(False)).astype(bool)
 
 
 def chuva_do_dia(dia: date, uf: str = config.UF) -> pd.DataFrame:
