@@ -124,6 +124,65 @@ def test_o_rodape_vai_embaixo_do_mapa_do_relatorio_e_nao_no_da_tela(base):
     assert len(sem_rodape.axes[0].texts) == len(relatorio.axes[0].texts) - 1
 
 
+# Campo Grande e duas vizinhas a ~5 e ~10 km (0,045° e 0,09° de latitude), mais as outras longe
+PERTO = pd.concat([ESTACOES, pd.DataFrame({"Estação": ["CG 2", "CG 3"], "Latitude": [-20.495, -20.54],
+                                           "Longitude": [-54.62, -54.62]})], ignore_index=True)
+
+
+def test_do_grupo_fica_so_a_estacao_de_mais_chuva_na_ordem_em_que_veio():
+    tabela = PERTO.assign(**{"Chuva (mm)": [3.0, 5.0, 12.0, 0.0, 8.0, 9.5, 1.0]})
+
+    maiores = mapas.o_maior_de_cada_grupo(tabela, "Chuva (mm)", 15)
+
+    assert maiores["Estação"].tolist() == ["Dourados", "Corumba", "Tres Lagoas", "Coxim", "CG 2"]
+    assert mapas.o_maior_de_cada_grupo(tabela, "Chuva (mm)", 0) is tabela
+
+
+def test_no_mapa_agrupado_a_superficie_leva_todas_e_o_desenho_so_o_maior_de_cada_grupo(base, monkeypatch):
+    tabela = PERTO.assign(**{"Chuva (mm)": [3.0, 5.0, 12.0, 0.0, 8.0, 9.5, 1.0]})
+    gdf = mapas._preparar_dados(tabela, CHUVA)
+    entraram = []
+    idw = mapas.calculos.interpolar_idw
+    monkeypatch.setattr(mapas.calculos, "interpolar_idw",
+                        lambda lons, *args, **kwargs: entraram.append(len(lons)) or idw(lons, *args, **kwargs))
+
+    agrupado = mapas.mapa_interpolado(gdf, replace(CHUVA, agrupar_km=15), base)
+    textos = [texto.get_text() for texto in agrupado.axes[0].texts]
+
+    assert entraram[0] == 7                                     # a superfície, com todas
+    numeros = sorted(texto for texto in textos if texto[:1].isdigit() and not texto.startswith("5 MAIORES"))
+    assert numeros == ["0.0", "12.0", "5.0", "8.0", "9.5"]
+    ranking = next(texto for texto in textos if texto.startswith("5 MAIORES"))
+    assert "CG 2: 9.5" in ranking and "Campo Grande" not in ranking and "CG 3" not in ranking
+    assert mapas.AVISO_DO_GRUPO.format(km=15) in textos
+
+
+def test_sem_estacao_juntada_o_mapa_agrupado_nao_leva_o_aviso(base):
+    gdf = mapas._preparar_dados(ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]}), CHUVA)
+
+    agrupado = mapas.mapa_interpolado(gdf, replace(CHUVA, agrupar_km=15), base)
+    sem_agrupar = mapas.mapa_interpolado(gdf, CHUVA, base)
+
+    assert [texto.get_text() for texto in agrupado.axes[0].texts] == \
+        [texto.get_text() for texto in sem_agrupar.axes[0].texts]
+
+
+def test_o_aviso_do_grupo_vai_junto_da_citacao_no_rodape(base):
+    gdf = mapas._preparar_dados(PERTO.assign(**{"Chuva (mm)": [3.0, 5.0, 12.0, 0.0, 8.0, 9.5, 1.0]}), CHUVA)
+
+    figura = mapas.mapa_interpolado(gdf, replace(CHUVA, agrupar_km=15, rodape="Citação da rede"), base)
+
+    assert f"Citação da rede\n{mapas.AVISO_DO_GRUPO.format(km=15)}" in [t.get_text() for t in figura.axes[0].texts]
+
+
+def test_na_tela_o_mapa_agrupado_tambem_escreve_so_o_maior_de_cada_grupo(base):
+    gdf = mapas._preparar_dados(PERTO.assign(**{"Chuva (mm)": [3.0, 5.0, 12.0, 0.0, 8.0, 9.5, 1.0]}), CHUVA)
+
+    na_tela = mapas.mapa_interpolado(gdf, replace(CHUVA, agrupar_km=15), base, tela=mapas.Tela(rotulos=True))
+
+    assert len(na_tela.axes[0].texts) == 5
+
+
 def test_na_tela_o_mapa_sai_sem_barra_de_cores_e_sem_valores(base):
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)

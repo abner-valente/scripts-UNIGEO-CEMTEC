@@ -203,3 +203,21 @@ def test_a_poda_devolve_a_mascara_na_ordem_que_recebeu():
                                       lon, lat, vizinhos=config.IDW_VIZINHOS)
 
     assert entram.tolist() == [False, True, False]   # só a do meio encosta no estado
+
+
+# =====================================================
+# AS ESTAÇÕES VIZINHAS (o agrupamento dos mapas de chuva)
+# =====================================================
+# Um grau de latitude tem ~111 km: 0,09° são ~10 km
+def test_estacoes_a_ate_15_km_em_cadeia_viram_um_grupo_so():
+    # A, B e C em fila, a ~10 km uma da outra (A e C a ~20 km); D sozinha, longe
+    lats = [-20.00, -20.09, -20.18, -22.00]
+    lons = [-54.6, -54.6, -54.6, -54.6]
+
+    assert calculos.grupos_de_vizinhas(lons, lats, 15).tolist() == [0, 0, 0, 3]
+    assert calculos.grupos_de_vizinhas(lons, lats, 5).tolist() == [0, 1, 2, 3]
+
+
+def test_sem_raio_ou_com_uma_estacao_cada_uma_e_o_proprio_grupo():
+    assert calculos.grupos_de_vizinhas([-54.6, -54.6], [-20.0, -20.01], 0).tolist() == [0, 1]
+    assert calculos.grupos_de_vizinhas([-54.6], [-20.0], 15).tolist() == [0]

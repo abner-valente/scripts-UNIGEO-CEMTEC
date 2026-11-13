@@ -133,6 +133,23 @@ def test_o_pluviometro_do_cemaden_entra_no_ranking_e_a_citacao_vai_embaixo(base)
     assert cemaden.CITACAO in textos
 
 
+def test_no_boletim_da_chuva_a_cidade_com_varios_pluviometros_mostra_so_o_maior(base):
+    nome = "Chuva acumulada em 24 h"
+    jardim_panama = f"{fonte.PREFIXO_CEMADEN}Campo Grande (Jardim Panamá)"
+    pontos = pd.concat([ESTACOES, pd.DataFrame({"Estação": [jardim_panama], "Latitude": [-20.48],
+                                                "Longitude": [-54.58]})], ignore_index=True)
+    gdf = mapas.preparar_pontos(pontos.assign(**{nome: [9.0, 5.0, 12.0, 3.0, 8.0, 20.4]}), nome)
+    espec = boletim.espec(nome, "Chuva", "mm", "Blues", 1, "MS", "03/11/2026",
+                          rodape=boletim.rodape(gdf["Estação"]), agrupar_km=config.AGRUPAR_CHUVA_KM)
+
+    textos = [texto.get_text() for texto in mapas.mapa_interpolado(gdf, espec, base).axes[0].texts]
+
+    ranking = next(texto for texto in textos if texto.startswith("5 MAIORES ACUMULADOS"))
+    assert ranking.startswith(f"5 MAIORES ACUMULADOS:\n{jardim_panama}: 20.4\nCorumba: 12.0\nCoxim: 8.0")
+    assert "Campo Grande:" not in ranking and "9.0" not in textos                 # o INMET da cidade sai do desenho
+    assert f"{cemaden.CITACAO}\n{mapas.AVISO_DO_GRUPO.format(km=15)}" in textos
+
+
 @pytest.mark.parametrize("teto, esperadas", [
     (45, list(range(0, 50, 5))),     # temperatura: 21 níveis dariam marcas em 6,75, 13,50...
     (130, list(range(0, 140, 20))),  # vento: sem um 140 preso no topo da barra

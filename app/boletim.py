@@ -6,7 +6,8 @@ crédito INMET/SEMADESC, os logos do CEMTEC e da SEMADESC, o ranking das cinco e
 de cores —, mas com **as cores da tela** (decisão de 01/10/2026): a mesma paleta e a mesma
 escala, fixa ou ajustada ao dado, que a pessoa estava vendo quando clicou. O que se baixa é o
 que se vê, pronto para ir ao boletim. O mapa de chuva com pluviômetros do CEMADEN leva embaixo a
-citação que os termos de uso da PED pedem.
+citação que os termos de uso da PED pedem, e nele as estações a até 15 km umas das outras mostram só
+o maior valor (config.AGRUPAR_CHUVA_KM).
 
 O desenho não é refeito aqui: é o de `modulos/mapas.py` chamado sem `Tela`, que é o caminho do
 relatório — o mesmo código, com os mesmos logos no mesmo lugar. Este módulo só escreve o texto
@@ -52,12 +53,14 @@ def nome_da_chuva(rotulo: str) -> str:
 
 def espec(nome: str, grandeza: str, unidade: str, paleta: str, decimais: int, uf: str,
           subtitulo: str, direcao_vento: bool = False, credito: str = mapas.CREDITO,
-          coluna: str | None = None, credito_no_rodape: bool = False, rodape: str = "") -> mapas.EspecMapa:
+          coluna: str | None = None, credito_no_rodape: bool = False, rodape: str = "",
+          agrupar_km: float = 0.0) -> mapas.EspecMapa:
     texto, maiores = ranking(nome, grandeza)
     return mapas.EspecMapa(tabela="", coluna=coluna or nome, titulo=titulo(nome, uf), subtitulo=subtitulo,
                            arquivo="", cmap=paleta, unidade=f"{grandeza} ({unidade})", ranking=texto,
                            maiores=maiores, direcao_vento=direcao_vento, decimais=decimais,
-                           credito=credito, credito_no_rodape=credito_no_rodape, rodape=rodape)
+                           credito=credito, credito_no_rodape=credito_no_rodape, rodape=rodape,
+                           agrupar_km=agrupar_km)
 
 
 def rodape(estacoes) -> str:

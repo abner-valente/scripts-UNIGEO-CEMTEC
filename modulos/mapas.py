@@ -1,5 +1,5 @@
 """Mapas pontuais e interpolados (IDW) das variáveis meteorológicas."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import geopandas as gpd
@@ -22,6 +22,8 @@ from matplotlib.ticker import MaxNLocator
 
 from . import calculos, config
 
+# Embaixo do mapa do relatório, quando o agrupamento (EspecMapa.agrupar_km) tirou estações do desenho
+AVISO_DO_GRUPO = "Estações a até {km:g} km umas das outras mostram só o maior valor."
 # Acima disso a lista de níveis é uma faixa contínua, e não classes (como as da chuva)
 MAX_CLASSES = 12
 # De quem é o dado, no fim do subtítulo. A previsão troca pelo do Open-Meteo, cuja licença
@@ -47,6 +49,7 @@ class EspecMapa:
     ranking_absoluto: bool = False  # ranqueia pelo tamanho do valor, para cima ou para baixo (anomalias)
     com_sinal: bool = False         # escreve o + dos positivos: nas anomalias, o número é um desvio
     rodape: str = ""                # uma linha miúda embaixo do mapa (a citação que o CEMADEN pede)
+    agrupar_km: float = 0.0         # nos mapas de chuva: estações a até isso mostram só o maior valor
 
 
 @dataclass(frozen=True)
@@ -228,6 +231,13 @@ def mapa_de_grade(grade, gdf, espec: EspecMapa, base: BaseCartografica, caminho:
         barra.set_label(espec.unidade, size=_corpo(tela))
         barra.ax.tick_params(labelsize=_corpo(tela))
     _desenhar_limites(ax, base)
+    # Nos mapas de chuva, das estações muito perto umas das outras só a de mais chuva vai ao desenho:
+    # o ponto, o número e o ranking. A superfície, acima, já saiu de todas
+    agrupado = o_maior_de_cada_grupo(gdf, espec.coluna, espec.agrupar_km) if len(gdf) else gdf
+    if len(agrupado) < len(gdf):
+        aviso = AVISO_DO_GRUPO.format(km=espec.agrupar_km)
+        espec = replace(espec, rodape=f"{espec.rodape}\n{aviso}" if espec.rodape else aviso)
+    gdf = agrupado
     # A superfície da previsão vem do modelo, e não das estações: se a previsão delas falhar, o
     # mapa sai sem os pontos. O geopandas recusa desenhar uma tabela vazia.
     if len(gdf):
@@ -326,6 +336,16 @@ def mapa_classes_interpolado(grade, gdf, coluna: str, espec: EspecClasses, base:
 # =====================================================
 # ELEMENTOS COMUNS DOS MAPAS
 # =====================================================
+def o_maior_de_cada_grupo(pontos: pd.DataFrame, coluna: str, km: float) -> pd.DataFrame:
+    # Das estações a até `km` umas das outras (calculos.grupos_de_vizinhas), só a de maior valor, no
+    # lugar dela. As linhas ficam na ordem em que vieram
+    if km <= 0 or len(pontos) < 2:
+        return pontos
+    grupo = calculos.grupos_de_vizinhas(pontos["Longitude"], pontos["Latitude"], km)
+    maiores = pd.Series(pontos[coluna].to_numpy(dtype=float)).groupby(grupo).idxmax()
+    return pontos.iloc[sorted(maiores)]
+
+
 def preparar_pontos(tabela: pd.DataFrame | None, coluna: str, descricao: str = "") -> gpd.GeoDataFrame | None:
     if tabela is None or tabela.empty:
         print(f"⚠️ Sem dados para o mapa: {descricao}")

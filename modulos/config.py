@@ -255,6 +255,11 @@ RESOLUCAO_GRADE = 100          # pontos por eixo
 IDW_VIZINHOS = 8
 IDW_POTENCIA = 2
 MIN_ESTACOES_INTERPOLACAO = 3
+# Nos mapas de chuva em PNG do painel, as estações a até isso umas das outras (em cadeia) mostram só
+# o maior valor: o ponto, o número e o ranking. A superfície continua com todas. Pedido da equipe em
+# 13/11/2026, para os pluviômetros do CEMADEN, que se juntam nas cidades (Campo Grande tem cinco
+# estações num raio de 15 km), não se cobrirem no mapa
+AGRUPAR_CHUVA_KM = 15.0
 # Folga da poda das estações de apoio: quantas mais próximas olhar ao decidir se uma
 # estação de fora pode entrar na conta de alguma célula. O IDW usa 8; olhar o dobro
 # guarda a que só vira vizinha quando outra falta naquela hora — e falta: num dia comum

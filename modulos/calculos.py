@@ -93,6 +93,29 @@ def apoio_que_entra(lons_apoio, lats_apoio, lons_proprias, lats_proprias,
     return mascara
 
 
+def grupos_de_vizinhas(lons, lats, km: float) -> np.ndarray:
+    # O grupo de cada estação: as que ficam a até `km` umas das outras, em cadeia (A perto de B e B
+    # perto de C fazem um grupo só, mesmo com A longe de C). O número do grupo é o índice da primeira
+    # estação dele
+    lons, lats = np.ravel(np.asarray(lons, dtype=float)), np.ravel(np.asarray(lats, dtype=float))
+    grupo = np.arange(len(lons))
+    if len(lons) < 2 or km <= 0:
+        return grupo
+
+    def raiz(indice: int) -> int:
+        while grupo[indice] != indice:
+            grupo[indice] = grupo[grupo[indice]]
+            indice = grupo[indice]
+        return indice
+
+    pontos = _em_km(lons, lats, float(np.mean(lons)), float(np.mean(lats)))
+    for i, j in cKDTree(pontos).query_pairs(km):
+        a, b = raiz(i), raiz(j)
+        if a != b:
+            grupo[max(a, b)] = min(a, b)
+    return np.array([raiz(indice) for indice in range(len(lons))])
+
+
 def _em_km(lons, lats, lon_centro: float, lat_centro: float) -> np.ndarray:
     projecao = f"+proj=aeqd +lat_0={lat_centro} +lon_0={lon_centro} +datum=WGS84 +units=km"
     transformador = Transformer.from_crs("EPSG:4326", projecao, always_xy=True)
