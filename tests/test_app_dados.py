@@ -115,6 +115,84 @@ def test_a_reconferencia_nao_volta_alem_do_teto(cache_temporario, monkeypatch, s
     assert (fim - comeco).total_seconds() / 3600 <= coleta.HORAS_A_RECONFERIR
 
 
+@pytest.fixture
+def api_da_janela(monkeypatch, serie):
+    # A API que devolve as horas (início, fim] pedidas, como a do INMET, e conta os pedidos
+    chamadas = []
+
+    def baixar(codigo, inicio, fim, fuso=None):
+        chamadas.append((inicio, fim))
+        comeco, termino = (pd.Timestamp(momento).tz_convert("UTC") + pd.Timedelta(hours=1) for momento in (inicio, fim))
+        return serie(f"{comeco:%Y-%m-%d %H:%M}", f"{termino:%Y-%m-%d %H:%M}")
+
+    monkeypatch.setattr(inmet, "baixar_dados_estacao", baixar)
+    return chamadas
+
+
+def test_o_cache_que_ficou_dias_sem_uso_busca_o_trecho_do_meio(cache_temporario, api_da_janela):
+    # 13/11/2026: o painel de teste guardou as leituras até 05/11; em 13/11, o mensal pedia só as
+    # últimas 48 h, e a chuva de 05 a 11/11 ficava de fora (Fátima do Sul: 112,6 mm em vez de 164,4)
+    ate_dia_5 = Periodo.de_datas(date(2026, 11, 1), date(2026, 11, 5))
+    mes = Periodo.de_datas(date(2026, 11, 1), date(2026, 11, 12))
+    coleta.leituras("S708", *ate_dia_5.janela)
+
+    leituras = coleta.leituras("S708", *mes.janela)
+
+    assert len(leituras) == 12 * 24                                  # o mês inteiro, sem buraco
+    assert api_da_janela[1] == (ate_dia_5.janela[1], mes.janela[1])  # do fim do que havia ao fim pedido
+
+
+def test_o_buraco_que_ja_esta_no_cache_e_preenchido(cache_temporario, api_da_janela):
+    # Os caches da 0.3.6 que já ficaram furados se consertam na primeira consulta
+    coleta.leituras("S708", *Periodo.de_datas(date(2026, 11, 1), date(2026, 11, 5)).janela)
+    coleta.leituras("S708", *Periodo.de_datas(date(2026, 11, 11), date(2026, 11, 12)).janela)
+    mes = Periodo.de_datas(date(2026, 11, 1), date(2026, 11, 12))
+
+    leituras = coleta.leituras("S708", *mes.janela)
+
+    assert len(leituras) == 12 * 24
+    comeco, termino = api_da_janela[2]
+    assert comeco == pd.Timestamp("2026-11-06 04:00", tz="UTC")    # a primeira hora que faltava, menos 1 h
+    assert termino >= pd.Timestamp("2026-11-11 04:00", tz="UTC")
+
+
+def test_a_hora_que_a_estacao_nao_mandou_e_pedida_de_novo_so_ela(cache_temporario, monkeypatch, serie):
+    # Sem linha no meio (a estação ficou fora do ar das 10 às 14 h): o pedido seguinte é só desse
+    # trecho, e não a janela inteira
+    resposta = serie("2026-09-15", "2026-09-16 05:00")
+    resposta = resposta[~resposta["dt_utc"].between(pd.Timestamp("2026-09-15 10:00", tz="UTC"),
+                                                    pd.Timestamp("2026-09-15 14:00", tz="UTC"))]
+    monkeypatch.setattr(inmet, "baixar_dados_estacao", lambda codigo, inicio, fim, fuso=None: resposta)
+    coleta.leituras("A702", *DIA.janela)
+
+    faltando = coleta._faltando(coleta._ler("A702"), *DIA.janela)
+
+    assert faltando == [(pd.Timestamp("2026-09-15 09:00", tz="UTC"), pd.Timestamp("2026-09-15 14:00", tz="UTC"))]
+
+
+def test_as_horas_vazias_antes_do_buraco_tambem_sao_pedidas_de_novo(cache_temporario, monkeypatch, serie):
+    # Como o cache de Fátima do Sul em 13/11: guardado em 05/11 até as 23 h, mas com medida só até
+    # o meio-dia (o INMET ainda não tinha preenchido a tarde), e nada depois. O pedido começa no
+    # meio-dia, e não no fim das linhas vazias
+    resposta = serie("2026-11-01", "2026-11-06")
+    medidas = [coluna for coluna in resposta.columns if coluna not in coleta.IDENTIFICACAO]
+    resposta.loc[resposta["dt_utc"] > pd.Timestamp("2026-11-05 12:00", tz="UTC"), medidas] = np.nan
+    monkeypatch.setattr(inmet, "baixar_dados_estacao", lambda codigo, inicio, fim, fuso=None: resposta)
+    mes = Periodo.de_datas(date(2026, 11, 1), date(2026, 11, 12))
+    coleta.leituras("S708", *Periodo.de_datas(date(2026, 11, 1), date(2026, 11, 5)).janela)
+
+    faltando = coleta._faltando(coleta._ler("S708"), *mes.janela)
+
+    assert faltando == [(pd.Timestamp("2026-11-05 12:00", tz="UTC"), mes.janela[1])]
+
+
+def test_os_pedacos_que_se_cobrem_viram_um_pedido_so():
+    horas = [pd.Timestamp(f"2026-11-01 {hora:02d}:00", tz="UTC") for hora in range(24)]
+
+    assert coleta._unir([(horas[5], horas[9]), (horas[1], horas[3]), (horas[3], horas[4]), (horas[8], horas[12])]) \
+        == [(horas[1], horas[4]), (horas[5], horas[12])]
+
+
 def test_estacao_sem_dados_nao_deixa_arquivo(cache_temporario, monkeypatch):
     monkeypatch.setattr(inmet, "baixar_dados_estacao", lambda codigo, inicio, fim, fuso=None: None)
 
