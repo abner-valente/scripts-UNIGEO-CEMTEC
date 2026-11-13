@@ -19,6 +19,28 @@ Ainda não está na `main`. É o começo do banco da UNIGEO e dos coletores (fas
 - **O `.env.example` ganhou as conexões do banco** (`BANCO_GRAVACAO`, `BANCO_LEITURA` e `BANCO_TESTE`). Por enquanto, só quem programa usa a de teste.
 - **O coletor do INMET** (`python coletar.py inmet`), que grava no banco as leituras horárias de todas as estações automáticas do Brasil. De hora em hora, ele rebusca os últimos 3 dias, com uma consulta por hora que traz todas as estações, e o banco só reescreve o que o INMET mudou. Uma vez por dia (`--extras`), busca por estação a sensação térmica, a bateria e a temperatura do processador, que a consulta por hora não traz. A carga do histórico (`--historico 2018-01-01`) roda uma vez só: pode ser interrompida com Ctrl+C e retomada com o mesmo comando, e se a conexão com o banco cair no meio, reconecta e retoma sozinha. No servidor, o Agendador de Tarefas o chama pelo `servidor\coletar.bat`.
 
+### Novo: os pluviômetros do CEMADEN
+
+A rede de pluviômetros automáticos do CEMADEN em MS (29 estações, quatro só em Campo Grande) entra no banco e nos mapas de chuva do painel, ao lado das estações do INMET. Os dados vêm da PED, a plataforma de dados do CEMADEN. No painel, isso só vale quando ele lê do banco (`FONTE_DADOS=banco`, o painel do servidor); no Streamlit Cloud, que lê das APIs, nada muda.
+
+- **O coletor do CEMADEN** (`python coletar.py cemaden`). De hora em hora, ele atualiza o cadastro das estações e busca de novo os últimos 3 dias (UTC), e o banco só reescreve a leitura que a PED corrigiu. A carga do histórico (`--historico 2015-03-01`, desde a primeira estação de MS) roda uma vez só, em umas 8 horas, pula os dias que já estão no banco e busca sempre de novo os últimos 3 dias. Ela pode ser interrompida com Ctrl+C e retomada com o mesmo comando. Se a PED parar de responder, espera 15 minutos e tenta de novo, por até 2 horas.
+- **As tabelas `cemaden_estacao` e `cemaden_chuva`**, no `banco/esquema.sql`. A chuva fica uma linha por leitura, como a PED manda: sem chuva, uma por hora, com o zero escrito; chovendo, de 10 em 10 minutos. A estação que sumiu do cadastro da PED entra no banco pelas próprias leituras.
+- **No painel, todo pluviômetro do CEMADEN com dado entra nos mapas de chuva como uma estação do INMET.** Na aba **Chuva** e nos **Mapas interativos › Chuva**, ele entra na interpolação, nas barras dos acumulados, nos mapas (acumulados, hora a hora e por dia) e no ranking do PNG do boletim.
+  - O nome é "CEMADEN · Município (Nome)", porque o nome sozinho não diz onde a estação fica.
+  - Cada leitura entra na hora que termina na hora cheia seguinte: a das 13:40 conta na hora das 14:00, como a leitura do INMET das 14:00 é a chuva das 13:00 às 14:00. A hora sem leitura fica sem dado, e não seca.
+  - Nos **Mapas interativos**, os pluviômetros aparecem em laranja, menores que as estações do INMET, e o clique abre a chuva da estação.
+  - O PNG do boletim leva embaixo a citação que os termos da PED pedem ("DATA FROM THE CEMADEN/MCTIC OBSERVATIONAL NETWORK"), e as legendas da tela também.
+  - O pluviômetro que mandar dado errado sai pela gaveta **"Estações retiradas"**, como uma estação do INMET.
+- **Nos mapas de chuva em PNG do painel (o da tela e o do boletim), as estações a até 15 km umas das outras mostram só o maior valor**: o ponto, o número e o ranking. A superfície continua com todas. O rodapé do boletim avisa quando o agrupamento tirou estações do desenho. Hoje nenhuma dupla do INMET fica a menos de 15 km (as mais próximas, Dourados e Itaporã, estão a 16,1 km): quem se junta são as estações de uma mesma cidade, com o CEMADEN. Os mapas do `main.py` e os das outras variáveis não mudam.
+
+### Atenção ao atualizar o servidor
+
+- **A conta da PED vai no `.env` da máquina do coletor** (`CEMADEN_EMAIL` e `CEMADEN_SENHA`; modelo no `.env.example`). Sem ela, `coletar.py cemaden` para com uma mensagem, e o resto segue igual.
+- **Rode `python coletar.py esquema`** para criar as tabelas do CEMADEN, e depois, uma vez, **`python coletar.py cemaden --historico 2015-03-01`**.
+- **Rode de novo o `servidor\criar_tarefas.ps1`**, que agora cria também a tarefa "UNIGEO - coletor CEMADEN", de hora em hora aos 5 minutos (a saída vai para `logs\coletor_cemaden.log`).
+- **A PED aceita 12 consultas por minuto por conta**, e o coletor faz no máximo 10. Não rode outra coisa contra a PED com a mesma conta enquanto a carga do histórico estiver rodando.
+- **Os mapas de chuva do painel do servidor mudam**: entram os pluviômetros do CEMADEN. No histórico há 7 leituras impossíveis, de 100 a 235 mm em 10 minutos (Rochedo em 01/12/2016, Mundo Novo em 07/10/2021 e 04/05/2023, Rio Verde de Mato Grosso em 25/10/2021, Aquidauana em 02/02/2024, Corguinho em 29/12/2018 e Corumbá em 22/10/2018), que entram nos mapas desses dias. Se aparecerem, retire a estação pela gaveta.
+
 ## [0.3.7] — 13/11/2026
 
 Uma correção no painel: em alguns casos, a chuva somada saía menor do que a medida.

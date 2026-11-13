@@ -530,6 +530,17 @@ Sem o token configurado, o `main.py` para com uma mensagem de erro antes de cham
 
 > O `.env` contém credenciais e **nunca deve ser commitado** — ele já está no `.gitignore`. Em agendamentos ou servidores, o token também pode ser definido como variável de ambiente `TOKEN_INMET`, que tem prioridade sobre o `.env`.
 
+### Conta da PED do CEMADEN (só no servidor)
+
+O coletor dos pluviômetros do CEMADEN (`python coletar.py cemaden`) entra na PED, a plataforma de dados do CEMADEN, com a conta da equipe. Ela vai no `.env` só da máquina do coletor, a mesma conta do login no site [ped.cemaden.gov.br](https://ped.cemaden.gov.br):
+
+```
+CEMADEN_EMAIL=email_da_conta
+CEMADEN_SENHA=senha_da_conta
+```
+
+A PED aceita **12 consultas por minuto por conta**, e o coletor faz no máximo 10, uma a cada 6 segundos. O painel e o `main.py` não consultam a PED: o painel do servidor lê os pluviômetros do banco.
+
 ### Logos
 
 Os logos ficam em `img/`, em **PNG com fundo transparente** — uma imagem com fundo branco cobriria o mapa. A posição e o tamanho de cada um são definidos na lista `LOGOS`, em [`modulos/config.py`](modulos/config.py), como um retângulo `[x, y, largura, altura]` em fração da moldura do mapa: `(0, 0)` é o canto inferior esquerdo e `(1, 1)` o superior direito. O logo se ajusta ao retângulo mantendo a proporção e fica alinhado ao canto superior direito dele, no mesmo lugar em todos os mapas.
@@ -657,6 +668,8 @@ Todos os mapas de chuva ficam aqui, e não junto dos outros, por um motivo de fu
 | **A carga é maior** | Por isso a aba tem o seu próprio botão: a consulta vai até o começo do mês (ou 96 h atrás, o que for mais antigo) |
 | **Quando não fecha** | Se o dado carregado não alcança o começo de uma janela, a tela avisa e não desenha aquele mapa — um acumulado de 96 h feito com 48 h de dado mostraria metade da chuva como se fosse o total |
 | **Hora a hora e por dia** | Também estão aqui, e esses respeitam o período escolhido, como as outras abas |
+| **Os pluviômetros do CEMADEN** | No painel que lê do banco (o do servidor), todo pluviômetro do CEMADEN com dado entra nas barras, nos mapas e no ranking do boletim como uma estação do INMET, com o nome "CEMADEN · Município (Nome)". Cada leitura entra na hora que termina na hora cheia seguinte (a das 13:40 na das 14:00), e a hora sem leitura fica sem dado. O PNG do boletim leva embaixo a citação que os termos da PED pedem. No Streamlit Cloud não há CEMADEN |
+| **Estações perto umas das outras** | Nos mapas de chuva em PNG (o da tela e o do boletim), as estações a até 15 km umas das outras mostram só o maior valor: o ponto, o número e o ranking. A superfície continua com todas, e o rodapé do boletim avisa. Na prática, junta as estações de uma mesma cidade (Campo Grande tem a do INMET e quatro do CEMADEN). O raio fica em `config.AGRUPAR_CHUVA_KM` |
 
 ### Aba "Mapa Navegação"
 
@@ -680,6 +693,7 @@ A mesma retirada do `main.py` (veja [Estações retiradas dos mapas](#estações
 | **O que sai** | O ponto, o ranking e a interpolação dos mapas da variável, inclusive no PNG do boletim e no GIF, sem nota sobre a retirada (decisão da equipe). Os gráficos e as tabelas continuam com todas as estações, que é onde se vê o erro |
 | **Por variável** | Quem falha é um sensor: um pluviômetro entupido não estraga a temperatura da mesma estação. A lista de uma variável, escolhida numa aba, vale nos mapas dela em todas as abas, inclusive no **Mapa Navegação**, que diz embaixo do mapa quem ficou de fora |
 | **As vizinhas** | As estações de fora do estado que seguram a borda da interpolação também podem sair, no fim da lista, marcadas como "(vizinha)" |
+| **O CEMADEN** | Nos mapas de chuva do painel que lê do banco, os pluviômetros do CEMADEN vêm depois das vizinhas e saem do mesmo jeito |
 | **No risco de fogo** | A estação sai das três medidas da regra, e o risco dos mapas é avaliado de novo sem ela. A tabela por estação e os gráficos continuam com todas |
 | **Até quando vale** | Enquanto a página estiver aberta: recarregar a página, ou abrir em outra máquina, começa sem retirada nenhuma. Cada pessoa tem a sua lista |
 
@@ -752,6 +766,8 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │   ├── openmeteo.py      # Previsão do Open-Meteo (ECMWF, GFS e ICON), hora a hora, e o dia tirado das horas
 │   ├── banco.py          # O banco da UNIGEO (PostgreSQL): a única peça que fala SQL
 │   ├── coletor_inmet.py  # O coletor do INMET: as horas de todas as estações, do INMET para o banco
+│   ├── cemaden.py        # Acesso à PED do CEMADEN (os pluviômetros): cadastro e chuva de um dia do estado
+│   ├── coletor_cemaden.py # O coletor do CEMADEN: o cadastro e as leituras de chuva, da PED para o banco
 │   ├── calculos.py       # Recorte no tempo, extremos, acumulados e interpolação IDW
 │   ├── mapas.py          # Mapas pontuais, interpolados e de classes (níveis de risco)
 │   ├── graficos.py       # Gráficos de barras e calendário, com o estilo comum aos produtos
