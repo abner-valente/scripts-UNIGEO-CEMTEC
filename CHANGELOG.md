@@ -9,6 +9,19 @@ Cada versão separa as mudanças em até quatro grupos:
 
 Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
+## [0.3.7] — 13/11/2026
+
+Uma correção no painel: em alguns casos, a chuva somada saía menor do que a medida.
+
+### Atenção ao atualizar
+
+- **Os mapas e os acumulados do painel podem mudar para mais**, nos períodos em que o cache estava furado (veja abaixo). O número novo é o certo. Não é preciso limpar o cache: o buraco se fecha na primeira consulta depois de atualizar.
+- **Quem roda o painel na própria máquina precisa reiniciá-lo** (Ctrl+C e `streamlit run app/explorador.py` de novo), porque o Streamlit não relê o módulo do cache sozinho. No Streamlit Cloud, é o Reboot. As dependências não mudaram.
+
+### Corrigido
+
+- **Painel: o cache local não deixa mais um buraco no meio do período.** O painel guarda as leituras de cada estação na pasta `cache/` e, numa consulta nova, busca só o que falta. Ele olhava apenas antes da primeira hora guardada e as últimas 48 horas. Assim, quando o painel ficava dias sem consultar uma estação, as horas do meio nunca eram buscadas, e a chuva desses dias ficava de fora dos acumulados, das barras e dos mapas, sem aviso. Em 13/11/2026, a chuva do mês em Fátima do Sul saiu com 112,6 mm, e o certo era 164,4. Agora o painel busca toda hora do período que não está guardada, e também as horas vazias logo antes dela, que o INMET ainda não tinha preenchido quando foram guardadas. A hora que a estação não mandou volta a ser pedida a cada consulta, mas só esse trecho, e não o período inteiro.
+
 ## [0.3.6] — 03/11/2026
 
 Um pedido da equipe de meteorologia: tirar dos mapas a estação que manda dado errado enquanto a correção do INMET não chega.
