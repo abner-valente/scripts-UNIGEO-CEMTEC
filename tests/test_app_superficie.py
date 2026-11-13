@@ -110,13 +110,17 @@ def test_classes_agrupam_valores_da_mesma_faixa():
     assert dentro_da_faixa[0, 2] != dentro_da_faixa[0, 1]
 
 
-def test_abaixo_da_primeira_classe_de_chuva_nao_se_pinta(grade):
+def test_abaixo_da_primeira_classe_de_chuva_fica_branco_como_o_papel_do_boletim(grade):
+    # Transparente, mostrava o mapa de fundo: no tema escuro, o seco virava uma mancha preta
     classes = [0.2, 1, 5, 10, 20]
     seco = ESTACOES.assign(Chuva=[0.0, 0.0, 0.0, 0.0, 0.0])
 
     png = imagem(superficie.superficie_png(seco, "Chuva", grade, "Blues", classes))
 
-    assert (png[:, :, 3] == 0).all()  # imagem inteira transparente
+    dentro = np.flipud(grade.dentro)
+    assert (png[:, :, :3][dentro] == superficie.BRANCO_DO_SECO).all()
+    assert (png[:, :, 3][dentro] == round(255 * superficie.OPACIDADE)).all()
+    assert (png[:, :, 3][~dentro] == 0).all()                           # fora do estado, transparente
 
 
 def test_valor_acima_do_teto_fica_na_cor_do_extremo(grade):

@@ -22,6 +22,10 @@ from modulos import calculos, config
 # que se aproxima ela aparece em degraus: cada célula cobriria uns 7 km.
 RESOLUCAO = 400
 OPACIDADE = 0.72  # deixa as cidades e os rios do mapa base aparecerem por baixo
+# Abaixo da primeira classe da chuva não choveu, e fica branco, como o papel do PNG do boletim.
+# Transparente, como era até 13/11/2026, mostrava o mapa de fundo: no tema escuro, o lugar mais seco
+# virava uma mancha preta, que parecia falta de dado (em Aquidauana, ao lado de um pluviômetro com 1,4 mm)
+BRANCO_DO_SECO = (255, 255, 255)
 
 
 @dataclass(frozen=True)
@@ -55,8 +59,6 @@ def png_da_grade(grade: np.ndarray, grade_fina: Malha, paleta: str, niveis=None,
     # Uma superfície já calculada na malha fina: a do IDW das estações, ou a do modelo na previsão
     pintura, vazio = cores(grade, paleta, niveis, medidas, opacidade)
     pintura[~grade_fina.dentro | np.isnan(grade)] = 0  # transparente fora do estado
-    if vazio is not None:
-        pintura[vazio] = 0  # abaixo da primeira classe (chuva) não se pinta: ali não choveu
 
     # A primeira linha da imagem é o norte; a grade começa no sul
     return _png(Image.fromarray(np.flipud(pintura), mode="RGBA"))
@@ -64,13 +66,17 @@ def png_da_grade(grade: np.ndarray, grade_fina: Malha, paleta: str, niveis=None,
 
 def cores(valores: np.ndarray, paleta: str, niveis=None, medidas: pd.Series | None = None,
           opacidade: float = OPACIDADE) -> tuple[np.ndarray, np.ndarray | None]:
-    # A cor de cada valor (RGBA, de 0 a 255) e o que fica abaixo da primeira classe. Sem escala
-    # fixa, as cores vão do menor ao maior valor medido nas estações (`medidas`)
+    # A cor de cada valor (RGBA, de 0 a 255) e o que fica abaixo da primeira classe (a chuva que não
+    # choveu), pintado de branco. Sem escala fixa, as cores vão do menor ao maior valor medido nas
+    # estações (`medidas`)
     if niveis is None:
         normalizado, vazio = _normalizar(valores, medidas), None
     else:
         normalizado, vazio = _pela_escala(valores, np.asarray(niveis, dtype=float))
-    return colormaps[paleta](normalizado, alpha=opacidade, bytes=True), vazio
+    pintura = colormaps[paleta](normalizado, alpha=opacidade, bytes=True)
+    if vazio is not None:
+        pintura[vazio] = [*BRANCO_DO_SECO, round(255 * opacidade)]
+    return pintura, vazio
 
 
 def _pela_escala(grade: np.ndarray, niveis: np.ndarray):

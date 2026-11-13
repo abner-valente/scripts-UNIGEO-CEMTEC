@@ -2476,7 +2476,7 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
         st.info(f"Não choveu em nenhuma estação em {quando}.")
     st.caption(f"{legenda}, {quando}: de {medidas.min():.1f} a {medidas.max():.1f} mm em {estacoes_no_mapa(valores)}. "
                "A superfície é a do mapa do boletim (o IDW das estações, com as vizinhas na borda), e abaixo "
-               "da primeira classe não se pinta. **Passe o mouse** em qualquer ponto para ler a chuva interpolada, "
+               "da primeira classe, onde não choveu, fica branca. **Passe o mouse** em qualquer ponto para ler a chuva interpolada, "
                "e **clique** para ver a chuva do ponto, ou a de uma estação."
                + (f" No relevo, {interativo.ALTURA_DO_TETO / por_unidade:g} mm sobem 100 km; **arraste com o "
                   "botão direito** para inclinar e girar." if em_3d and por_unidade else "")

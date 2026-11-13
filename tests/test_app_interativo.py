@@ -335,9 +335,10 @@ def test_o_relevo_pinta_como_a_superficie_e_sobe_com_a_chuva():
     valores = celulas["valor"].to_numpy()
     cores, vazio = superficie.cores(valores, "Blues", niveis, opacidade=interativo.OPACIDADE_DO_RELEVO)
     assert len(relevo) == len(celulas)
-    np.testing.assert_array_equal(relevo["pintada"], ~vazio)               # abaixo de 0,2 mm, nada
-    assert relevo["pintada"].any() and not relevo["pintada"].all()
-    np.testing.assert_allclose(relevo["altura"], np.where(~vazio, valores * 1000.0, 0.0))
+    np.testing.assert_array_equal(relevo["pintada"], ~np.isnan(valores))   # o seco também, branco
+    assert vazio.any() and not vazio.all()
+    assert all(cor[:3] == list(superficie.BRANCO_DO_SECO) for cor in relevo.loc[vazio, "cor"])
+    np.testing.assert_allclose(relevo["altura"], np.where(~vazio, valores * 1000.0, 0.0))   # e no chão
     assert relevo["cor"].tolist() == cores.tolist()                        # a cor do mapa plano
     np.testing.assert_array_equal(relevo[["Longitude", "Latitude"]], celulas[["Longitude", "Latitude"]])
 

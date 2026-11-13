@@ -348,13 +348,14 @@ def lado_do_bloco(grade: GradeDoPonto) -> float:
 
 def relevo(celulas: pd.DataFrame, paleta: str, niveis, medidas: pd.Series, por_unidade: float) -> pd.DataFrame:
     # Uma linha por célula, na ordem de `celulas`: a cor da superfície e a altura. Abaixo da
-    # primeira classe a célula não se pinta, como no mapa plano, e fica no chão
+    # primeira classe a célula fica no chão, branca, como no mapa plano
     valores = celulas["valor"].to_numpy(dtype=float)
     pintura, vazio = superficie.cores(valores, paleta, niveis, medidas, OPACIDADE_DO_RELEVO)
-    pintada = ~np.isnan(valores) if vazio is None else ~np.isnan(valores) & ~vazio
+    pintada = ~np.isnan(valores)
+    sobe = pintada if vazio is None else pintada & ~vazio
     return pd.DataFrame({
         "Longitude": celulas["Longitude"].to_numpy(), "Latitude": celulas["Latitude"].to_numpy(),
-        "cor": pintura.tolist(), "altura": np.where(pintada, np.nan_to_num(valores) * por_unidade, 0.0),
+        "cor": pintura.tolist(), "altura": np.where(sobe, np.nan_to_num(valores) * por_unidade, 0.0),
         "pintada": pintada})
 
 
