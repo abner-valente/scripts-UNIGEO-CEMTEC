@@ -108,6 +108,30 @@ def test_na_chuva_o_ponto_e_escuro_e_leva_o_valor():
     assert pontos["cor"].iloc[0] == interativo.COR_DA_ESTACAO
 
 
+def test_todo_pluviometro_do_cemaden_fica_a_vista_e_so_o_escolhido_vai_cheio():
+    acumulado = pd.DataFrame({"Estação": ["CEMADEN · Mundo Novo (Centro)", "CEMADEN · Rochedo (Centro)",
+                                          "CEMADEN · Bonito (Centro)"],
+                              "Latitude": [-23.9, -19.9, -21.1], "Longitude": [-54.3, -54.9, -56.5],
+                              "Chuva acumulada": [63.8, 2.2, np.nan]})
+
+    pontos = interativo.pontos_do_cemaden(acumulado, "Chuva acumulada", "Chuva 24 h", "mm", 1,
+                                          {"CEMADEN · Mundo Novo (Centro)", "CEMADEN · Bonito (Centro)"})
+
+    assert pontos["Estação"].tolist() == ["CEMADEN · Mundo Novo (Centro)", "CEMADEN · Rochedo (Centro)"]  # sem o sem dado
+    assert pontos["rotulo"].tolist() == ["63,8", "2,2"]
+    assert pontos["cor"].tolist() == [[*interativo.COR_DO_CEMADEN, 235], interativo.COR_DO_CEMADEN_DE_FORA]
+    assert pontos["detalhe"].tolist() == [
+        "Chuva 24 h: 63,8 mm\nEntra na superfície (escolhido na gaveta)",
+        "Chuva 24 h: 2,2 mm\nFora da superfície: para incluir, escolha na gaveta"]
+
+
+def test_sem_pluviometro_com_dado_a_camada_do_cemaden_sai_vazia():
+    vazio = pd.DataFrame({"Estação": ["CEMADEN · Bonito (Centro)"], "Latitude": [-21.1], "Longitude": [-56.5],
+                          "Chuva acumulada": [np.nan]})
+
+    assert interativo.pontos_do_cemaden(vazio, "Chuva acumulada", "Chuva 24 h", "mm", 1, set()).empty
+
+
 def leituras_de_chuva() -> pd.DataFrame:
     horas = pd.date_range("2026-10-13 22:00", periods=4, freq="h", tz=config.FUSO_MS)   # 22h, 23h, 00h, 01h
     return pd.DataFrame({"Estação": "Campo Grande", "dt_local": horas, "CHUVA": [1.0, 2.5, np.nan, 4.0]})

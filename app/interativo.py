@@ -25,6 +25,10 @@ COR_DA_ESTACAO = [25, 25, 25, 215]   # nas variáveis contínuas o ponto é escu
 # com o risco alto
 COR_DO_PONTO_ESCOLHIDO = [229, 57, 53]
 COR_DO_PONTO_ESCOLHIDO_NO_RISCO = [0, 229, 255]
+# Os pluviômetros do CEMADEN no mapa da chuva: laranja, que não se confunde com o azul da chuva nem com
+# o ponto escuro do INMET. O que entra na superfície é cheio; o que fica fora, branco com a borda laranja
+COR_DO_CEMADEN = [245, 124, 0]
+COR_DO_CEMADEN_DE_FORA = [255, 255, 255, 235]
 # O que toda camada de estações leva: posição, cor, o texto sobre o ponto e o balão
 COLUNAS_DOS_PONTOS = ["Estação", "Longitude", "Latitude", "cor", "rotulo", "titulo", "detalhe"]
 # Um estilo de mapa sem fonte nenhuma, só a cor de fundo, num endereço "data:" que o navegador lê sem
@@ -128,6 +132,20 @@ def pontos_de_valores(pontos: pd.DataFrame, coluna: str, legenda: str, unidade: 
     tabela["titulo"] = tabela["Estação"]
     tabela["detalhe"] = f"{legenda}: " + texto + f" {unidade}"
     return tabela[COLUNAS_DOS_PONTOS].reset_index(drop=True)
+
+
+def pontos_do_cemaden(pontos: pd.DataFrame, coluna: str, legenda: str, unidade: str, casas: int,
+                      escolhidas: set[str]) -> pd.DataFrame:
+    # Todos os pluviômetros do CEMADEN com dado ficam à vista; só os escolhidos na gaveta entram na
+    # superfície, e o balão diz de que lado cada um está
+    tabela = pontos_de_valores(pontos, coluna, legenda, unidade, casas)
+    if tabela.empty:
+        return tabela
+    dentro = tabela["Estação"].isin(escolhidas).to_numpy()
+    tabela["cor"] = [[*COR_DO_CEMADEN, 235] if entra else COR_DO_CEMADEN_DE_FORA for entra in dentro]
+    tabela["detalhe"] = tabela["detalhe"] + QUEBRA + np.where(
+        dentro, "Entra na superfície (escolhido na gaveta)", "Fora da superfície: para incluir, escolha na gaveta")
+    return tabela
 
 
 def municipios(base) -> dict:
