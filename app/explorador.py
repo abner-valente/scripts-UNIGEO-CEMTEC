@@ -3528,19 +3528,29 @@ def painel_semanal_no_imovel(mapa: previsao.MapaSemanal, celulas: pd.DataFrame, 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def tabela_das_estacoes(uf: str) -> pd.DataFrame:
-    # As estações do estado, numeradas, com o município, a altitude e desde quando operam.
-    return referencia.tabela_de_referencia(carregar_estacoes(uf), base_cartografica(uf).municipios)
+    # As estações do estado, numeradas, com o município, a altitude e desde quando operam. Lendo do
+    # banco, os pluviômetros do CEMADEN em operação vêm depois, como nos mapas de chuva: o parado não
+    # aparece em mapa nenhum
+    municipios = base_cartografica(uf).municipios
+    inmet = referencia.tabela_de_referencia(carregar_estacoes(uf), municipios)
+    cadastro = estacoes_do_cemaden(uf)
+    operantes = cadastro[cadastro["CD_SITUACAO"] == "Operante"]
+    return referencia.com_o_cemaden(inmet, referencia.tabela_de_referencia(operantes, municipios, rede="CEMADEN"))
 
 
 def mapa_das_estacoes(tabela: pd.DataFrame, destacadas: pd.Series, uf: str) -> pdk.Deck:
-    # O mapa navegável com cada estação e o nome dela ao lado; as que a busca achou, em vermelho.
+    # O mapa navegável com cada estação e o nome dela ao lado; as que a busca achou, em vermelho, e
+    # os pluviômetros do CEMADEN em laranja, como nos Mapas interativos
     base = base_cartografica(uf)
+    cores = {"INMET": [31, 78, 121, 225], "CEMADEN": [*interativo.COR_DO_CEMADEN, 235]}
     pontos = pd.DataFrame({
-        "nome": tabela["Estação"], "municipio": tabela["Município"].fillna("—"), "codigo": tabela["Código"],
+        "nome": tabela["Estação"], "rede": tabela["Rede"], "municipio": tabela["Município"].fillna("—"),
+        "codigo": tabela["Código"],
         "altitude": tabela["Altitude (m)"].map(lambda metros: "—" if pd.isna(metros) else f"{metros} m"),
         "desde": tabela["Em operação desde"].fillna("—"),
         "Longitude": tabela["Longitude"], "Latitude": tabela["Latitude"],
-        "cor": [[200, 30, 30, 235] if destacada else [31, 78, 121, 225] for destacada in destacadas],
+        "cor": [[200, 30, 30, 235] if destacada else cores.get(rede, cores["INMET"])
+                for destacada, rede in zip(destacadas, tabela["Rede"])],
     })
     nomes = camada_de_rotulos(pontos, "nome", ["Longitude", "Latitude"], [9, 0])
     # Como a imagem dos mapas: passados no construtor, o pydeck trataria os textos como expressões
@@ -3561,12 +3571,13 @@ def mapa_das_estacoes(tabela: pd.DataFrame, destacadas: pd.Series, uf: str) -> p
     visao["zoom"] = round(visao["zoom"] - 0.7, 1)
     # O fundo claro da Carto, como era o do Mapa Navegação: os nomes escuros se leem nele em qualquer tema
     return pdk.Deck(layers=camadas, map_style=pdk.map_styles.LIGHT, initial_view_state=pdk.ViewState(**visao),
-                    tooltip={"html": "<b>{nome}</b><br/>Município: {municipio}<br/>Código: {codigo}<br/>"
+                    tooltip={"html": "<b>{nome}</b><br/>Rede: {rede}<br/>Município: {municipio}<br/>Código: {codigo}<br/>"
                                      "Altitude: {altitude}<br/>Em operação desde: {desde}"})
 
 
 def pagina_estacoes() -> None:
-    # Onde fica cada estação do INMET em MS: o mapa, a lista com busca e o PNG de referência.
+    # Onde fica cada estação do INMET em MS, e cada pluviômetro do CEMADEN (lendo do banco): o mapa, a
+    # lista com busca e o PNG de referência.
     # Os mapas das variáveis mostram números em pontos. Para o meteorologista é óbvio de quem é cada
     # ponto; para o público, não (pedido de uma colega da equipe, 22/10/2026). Só as do estado, e só
     # as em operação, que são as dos mapas.
@@ -3580,11 +3591,17 @@ def pagina_estacoes() -> None:
         tabela = tabela_das_estacoes(uf)
     except fonte.ErroFonte:
         sem_lista_de_estacoes(aviso, uf)
-    st.caption(f"As {len(tabela)} estações automáticas do INMET em operação em {uf}. São os pontos dos mapas do "
-               "painel: o número que cada mapa mostra num ponto é o que aquela estação mediu.")
+    do_cemaden = int((tabela["Rede"] == "CEMADEN").sum())
+    do_inmet = len(tabela) - do_cemaden
+    st.caption(f"As {do_inmet} estações automáticas do INMET em operação em {uf}"
+               + (f", em azul, e os {do_cemaden} pluviômetros do CEMADEN em operação, em laranja" if do_cemaden else "")
+               + ". São os pontos dos mapas do painel: o número que cada mapa mostra num ponto é o que aquela "
+                 "estação mediu."
+               + (" Os pluviômetros só medem chuva, e só entram nos mapas de chuva. "
+                  f"{cemaden.CITACAO}." if do_cemaden else ""))
 
     busca = st.text_input("Procurar", key="busca_estacoes",
-                          placeholder="nome da estação, município ou código (ex.: Dourados, A702)")
+                          placeholder="nome da estação, município, código ou rede (ex.: Dourados, A702, CEMADEN)")
     achadas = referencia.procurar(tabela, busca)
     procurando = bool(busca.strip())
     if procurando and not achadas.any():
@@ -3597,18 +3614,24 @@ def pagina_estacoes() -> None:
                    "para os nomes deixarem de se cobrir. As que a busca achou ficam em vermelho. O mapa base "
                    "vem do Carto, fora da SEMADESC.")
     with lista:
-        colunas = ["Nº", "Estação", "Município", "Código", "Altitude (m)", "Em operação desde"]
+        colunas = ["Nº", "Estação", "Rede", "Município", "Código", "Altitude (m)", "Em operação desde"]
         st.dataframe(tabela[achadas][colunas], hide_index=True, height=ALTURA_MAPA)
 
     # O PNG só é desenhado no clique, numa thread à parte: chega com a tabela e a base prontas
     hoje = date.today()
     base = base_cartografica(uf)
-    titulo = f"Estações meteorológicas do INMET em {uf}"
-    subtitulo = f"{len(tabela)} estações automáticas em operação em {hoje:%d/%m/%Y}"
+    if do_cemaden:
+        titulo = f"Estações meteorológicas do INMET e pluviômetros do CEMADEN em {uf}"
+        subtitulo = f"{do_inmet} estações automáticas e {do_cemaden} pluviômetros em operação em {hoje:%d/%m/%Y}"
+        arquivo, rodape = f"Mapa_Estacoes_INMET_CEMADEN_{uf}_{hoje:%Y%m%d}.png", cemaden.CITACAO
+    else:
+        titulo = f"Estações meteorológicas do INMET em {uf}"
+        subtitulo = f"{len(tabela)} estações automáticas em operação em {hoje:%d/%m/%Y}"
+        arquivo, rodape = f"Mapa_Estacoes_INMET_{uf}_{hoje:%Y%m%d}.png", ""
     st.download_button("Baixar o mapa de referência (PNG)",
-                       lambda: boletim.png(mapas.mapa_de_referencia(tabela, titulo, subtitulo, base)),
+                       lambda: boletim.png(mapas.mapa_de_referencia(tabela, titulo, subtitulo, base, rodape=rodape)),
                        mime="image/png", key="baixar_referencia", on_click="ignore",
-                       file_name=f"Mapa_Estacoes_INMET_{uf}_{hoje:%Y%m%d}.png",
+                       file_name=arquivo,
                        help="As estações numeradas no mapa, com a lista dos nomes ao lado, no padrão do boletim "
                             "(título e logos), em 300 dpi: para boletins, relatórios e apresentações.")
 

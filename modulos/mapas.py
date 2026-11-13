@@ -22,6 +22,10 @@ from matplotlib.ticker import MaxNLocator
 
 from . import calculos, config
 
+# As cores das redes no mapa de referência das estações: o azul do INMET e o laranja do CEMADEN, o
+# mesmo dos Mapas interativos
+CORES_DAS_REDES = {"INMET": "#1f4e79", "CEMADEN": "#f57c00"}
+NOMES_DAS_REDES = {"INMET": "Estação automática do INMET", "CEMADEN": "Pluviômetro do CEMADEN"}
 # Embaixo do mapa do relatório, quando o agrupamento (EspecMapa.agrupar_km) tirou estações do desenho
 AVISO_DO_GRUPO = "Estações a até {km:g} km umas das outras mostram só o maior valor."
 # Acima disso a lista de níveis é uma faixa contínua, e não classes (como as da chuva)
@@ -61,6 +65,7 @@ class EspecClasses:
     rotulos: list[str]
     credito: str = CREDITO
     credito_no_rodape: bool = False
+    rodape: str = ""                # uma linha miúda embaixo do mapa (a citação que o CEMADEN pede)
 
 
 @dataclass(frozen=True)
@@ -275,19 +280,27 @@ def mapa_classes_pontual(gdf, coluna: str, espec: EspecClasses, base: BaseCartog
 
 
 def mapa_de_referencia(tabela: pd.DataFrame, titulo: str, subtitulo: str, base: BaseCartografica,
-                       caminho: Path | None = None) -> Figure:
+                       caminho: Path | None = None, rodape: str = "") -> Figure:
     # As estações numeradas no mapa, e a lista dos números com os nomes ao lado.
     # É a referência para quem não lida com as estações todo dia. Numa imagem parada, os nomes
     # escritos no mapa se atropelariam onde as estações ficam juntas (o sul de MS); o número é curto e
-    # cabe. `tabela` traz o "Nº", a "Estação" e as coordenadas, na ordem da lista.
+    # cabe. `tabela` traz o "Nº", a "Estação" e as coordenadas, na ordem da lista, e pode trazer a
+    # "Rede" (INMET ou CEMADEN), que dá a cor do ponto e, com as duas redes, a legenda
     fig = Figure(figsize=(19, 12))
     fig.patch.set_facecolor("white")
     partes = fig.add_gridspec(1, 2, width_ratios=[2.1, 1.2])
     ax, lista = fig.add_subplot(partes[0]), fig.add_subplot(partes[1])
     ax.set_facecolor("white")
     _desenhar_limites(ax, base)
-    ax.scatter(tabela["Longitude"], tabela["Latitude"], s=190, color="#1f4e79", edgecolor="white",
-               linewidth=1.0, zorder=5)
+    redes = tabela["Rede"] if "Rede" in tabela else pd.Series("INMET", index=tabela.index)
+    cores = redes.map(CORES_DAS_REDES).fillna(CORES_DAS_REDES["INMET"])
+    for rede in dict.fromkeys(redes):
+        dela = redes == rede
+        ax.scatter(tabela.loc[dela, "Longitude"], tabela.loc[dela, "Latitude"], s=190 if rede == "INMET" else 150,
+                   color=CORES_DAS_REDES.get(rede, CORES_DAS_REDES["INMET"]), edgecolor="white", linewidth=1.0,
+                   zorder=5, label=NOMES_DAS_REDES.get(rede, rede))
+    if redes.nunique() > 1:
+        ax.legend(loc="lower left", fontsize=10, framealpha=0.9)
     for numero, longitude, latitude in zip(tabela["Nº"], tabela["Longitude"], tabela["Latitude"]):
         ax.text(longitude, latitude, str(numero), ha="center", va="center", fontsize=6.5, color="white",
                 weight="bold", zorder=6)
@@ -297,14 +310,14 @@ def mapa_de_referencia(tabela: pd.DataFrame, titulo: str, subtitulo: str, base: 
     por_coluna = -(-len(tabela) // 2)
     passo = 0.96 / max(por_coluna, 1)
     lista.text(0.0, 1.0, "ESTAÇÕES", fontsize=11, weight="bold", va="bottom", transform=lista.transAxes)
-    for indice, (numero, nome) in enumerate(zip(tabela["Nº"], tabela["Estação"])):
+    for indice, (numero, nome, cor) in enumerate(zip(tabela["Nº"], tabela["Estação"], cores)):
         coluna, linha = divmod(indice, por_coluna)
         x, y = coluna * 0.5, 0.975 - linha * passo
         lista.text(x + 0.05, y, str(numero), ha="right", va="top", fontsize=9, weight="bold",
-                   color="#1f4e79", transform=lista.transAxes)
+                   color=cor, transform=lista.transAxes)
         lista.text(x + 0.07, y, nome, ha="left", va="top", fontsize=9, transform=lista.transAxes)
 
-    espec = EspecClasses(titulo, subtitulo, "", [], [])
+    espec = EspecClasses(titulo, subtitulo, "", [], [], rodape=rodape)
     return _finalizar(fig, ax, espec, base, caminho)
 
 

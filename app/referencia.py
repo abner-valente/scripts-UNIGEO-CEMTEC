@@ -1,9 +1,10 @@
-"""Onde fica cada estação do INMET: a referência para quem não lida com elas todo dia.
+"""Onde fica cada estação do INMET, e cada pluviômetro do CEMADEN: a referência para quem não lida com elas.
 
 Os mapas das variáveis mostram números em pontos, e para o meteorologista é óbvio de quem é cada
 ponto; para o público, não (pedido de uma colega da equipe, 22/10/2026). Daqui sai a tabela que a
 página de referência e o PNG numerado usam: a estação, o município, o código, a altitude e desde
-quando ela opera.
+quando ela opera. Os pluviômetros do CEMADEN, quando o painel lê do banco, vêm depois das estações do
+INMET, com a rede numa coluna.
 
 Só cálculo, sem tela, para poder ser testado.
 """
@@ -13,13 +14,16 @@ import unicodedata
 import geopandas as gpd
 import pandas as pd
 
+from modulos.fonte import PREFIXO_CEMADEN
+
 COLUNA_DO_MUNICIPIO = "Municipio"   # a dos shapefiles simplificados de shp/
-COLUNAS = ["Nº", "Estação", "Município", "Código", "Altitude (m)", "Em operação desde", "Latitude", "Longitude"]
+COLUNAS = ["Nº", "Estação", "Rede", "Município", "Código", "Altitude (m)", "Em operação desde", "Latitude",
+           "Longitude"]
 # A projeção métrica do IBGE para o Brasil: é nela que se mede a distância ao município mais perto
 PROJECAO_METRICA = "EPSG:5880"
 
 
-def tabela_de_referencia(estacoes: pd.DataFrame, municipios: gpd.GeoDataFrame) -> pd.DataFrame:
+def tabela_de_referencia(estacoes: pd.DataFrame, municipios: gpd.GeoDataFrame, rede: str = "INMET") -> pd.DataFrame:
     # Uma linha por estação, em ordem alfabética e numerada: é como se procura um nome numa lista.
     # O município não vem na lista do INMET. Vale o do começo do nome da estação, quando ele é um
     # município do estado; senão, o do ponto dela no shapefile, e a que cai fora de todos os polígonos
@@ -42,16 +46,23 @@ def tabela_de_referencia(estacoes: pd.DataFrame, municipios: gpd.GeoDataFrame) -
     # outro lado da divisa: a de Dourados em Itaporã, a de Miranda em Bodoquena (conferido em
     # 22/10/2026, também com a malha completa do IBGE). Quando o começo do nome é um município do
     # estado, vale ele; senão (Nhumirim, uma fazenda), vale o ponto
+    # (o do CEMADEN, depois do "CEMADEN · ")
     pelo_nome = {sem_acento(nome): nome for nome in limites[COLUNA_DO_MUNICIPIO]}
-    comeco = pontos["Estação"].map(lambda nome: sem_acento(re.split(r"\s+\(|\s+-\s+", str(nome))[0]))
+    comeco = pontos["Estação"].map(
+        lambda nome: sem_acento(re.split(r"\s+\(|\s+-\s+", str(nome).removeprefix(PREFIXO_CEMADEN))[0]))
     municipio = comeco.map(pelo_nome).fillna(municipio)
 
     # A altitude e o começo da operação vêm na lista do INMET; outra fonte pode não os ter
     vazia = pd.Series(index=estacoes.index, dtype=object)
-    desde = pd.to_datetime(estacoes.get("DT_INICIO_OPERACAO", vazia), errors="coerce", utc=True)
+    bruto = estacoes.get("DT_INICIO_OPERACAO", vazia)
+    if pd.api.types.is_datetime64_any_dtype(bruto) and bruto.dt.tz is None:
+        desde = bruto.dt.tz_localize("America/Sao_Paulo")   # a data sem fuso (a do CEMADEN) é de Brasília
+    else:
+        desde = pd.to_datetime(bruto, errors="coerce", utc=True)
     altitude = pd.to_numeric(estacoes.get("VL_ALTITUDE", vazia), errors="coerce")
     tabela = pd.DataFrame({
         "Estação": estacoes["Estação"].to_numpy(),
+        "Rede": rede,
         "Município": municipio.to_numpy(),
         "Código": estacoes["CD_ESTACAO"].astype(str).to_numpy(),
         "Altitude (m)": altitude.round().astype("Int64").reset_index(drop=True),   # inteiro, com lacuna
@@ -63,6 +74,16 @@ def tabela_de_referencia(estacoes: pd.DataFrame, municipios: gpd.GeoDataFrame) -
     tabela = tabela.sort_values("Estação", key=lambda nomes: nomes.map(sem_acento)).reset_index(drop=True)
     tabela.insert(0, "Nº", range(1, len(tabela) + 1))
     return tabela[COLUNAS]
+
+
+def com_o_cemaden(inmet: pd.DataFrame, cemaden: pd.DataFrame) -> pd.DataFrame:
+    # As duas redes numa lista só: o INMET primeiro, como sempre foi, e o CEMADEN depois, cada uma em
+    # ordem alfabética, e os números em sequência
+    if cemaden.empty:
+        return inmet
+    juntas = pd.concat([inmet, cemaden], ignore_index=True)
+    juntas["Nº"] = range(1, len(juntas) + 1)
+    return juntas[COLUNAS]
 
 
 def sem_acento(texto) -> str:
@@ -77,5 +98,5 @@ def procurar(tabela: pd.DataFrame, texto: str) -> pd.Series:
     if not procurado:
         return pd.Series(True, index=tabela.index)
     onde = tabela["Estação"].map(sem_acento) + " " + tabela["Município"].map(sem_acento) + " " + \
-        tabela["Código"].map(sem_acento)
+        tabela["Código"].map(sem_acento) + " " + tabela["Rede"].map(sem_acento)
     return onde.str.contains(procurado, regex=False)

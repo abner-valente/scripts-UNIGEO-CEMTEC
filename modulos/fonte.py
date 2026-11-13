@@ -33,8 +33,8 @@ FONTES = ("apis", "banco")
 
 # O CEMADEN nas listas e nas tabelas, ao lado do INMET: o nome da estação começa por aqui
 PREFIXO_CEMADEN = "CEMADEN · "
-COLUNAS_ESTACOES_CEMADEN = ["CD_ESTACAO", "DC_NOME", "SG_ESTADO", "VL_LATITUDE", "VL_LONGITUDE", "CD_SITUACAO",
-                            "Estação"]
+COLUNAS_ESTACOES_CEMADEN = ["CD_ESTACAO", "DC_NOME", "SG_ESTADO", "VL_LATITUDE", "VL_LONGITUDE", "DT_INICIO_OPERACAO",
+                            "CD_SITUACAO", "Estação"]
 SITUACOES_CEMADEN = {False: "Operante", True: "Parada"}
 
 # O erro que os produtos e o painel tratam, venha de qual fonte vier
@@ -126,6 +126,7 @@ def estacoes_cemaden(uf: str = config.UF) -> pd.DataFrame:
     tabela = pd.DataFrame({
         "CD_ESTACAO": cadastro["codigo"], "DC_NOME": cadastro["nome"], "SG_ESTADO": cadastro["uf"],
         "VL_LATITUDE": cadastro["latitude"], "VL_LONGITUDE": cadastro["longitude"],
+        "DT_INICIO_OPERACAO": cadastro["instalada_em"],   # sem fuso declarado, como a PED manda
         # A parada fica na lista: num período de antes da parada, ela tem leitura
         "CD_SITUACAO": cemaden.esta_parada(cadastro).map(SITUACOES_CEMADEN),
         "Estação": [_nome_cemaden(municipio, nome) for municipio, nome in zip(cadastro["municipio"], cadastro["nome"])],

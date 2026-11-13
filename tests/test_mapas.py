@@ -420,6 +420,22 @@ def test_com_classes_a_barra_marca_todas_as_fronteiras():
     assert list(figura.axes[1].get_yticks()) == niveis
 
 
+def test_no_mapa_de_referencia_cada_rede_tem_a_sua_cor_e_a_legenda(base):
+    tabela = pd.DataFrame({"Nº": [1, 2, 3], "Estação": ["Corumba", "Dourados", "CEMADEN · Dourados (Centro)"],
+                           "Rede": ["INMET", "INMET", "CEMADEN"],
+                           "Latitude": [-19.02, -22.19, -22.22], "Longitude": [-57.67, -54.91, -54.80]})
+
+    figura = mapas.mapa_de_referencia(tabela, "Estações em MS", "2 e 1", base, rodape="Citação da rede")
+
+    mapa, lista = figura.axes[0], figura.axes[1]
+    assert [texto.get_text() for texto in mapa.get_legend().get_texts()] == [
+        mapas.NOMES_DAS_REDES["INMET"], mapas.NOMES_DAS_REDES["CEMADEN"]]
+    numeros = {texto.get_text(): texto.get_color() for texto in lista.texts if texto.get_text().isdigit()}
+    assert numeros == {"1": mapas.CORES_DAS_REDES["INMET"], "2": mapas.CORES_DAS_REDES["INMET"],
+                       "3": mapas.CORES_DAS_REDES["CEMADEN"]}
+    assert "Citação da rede" in [texto.get_text() for texto in mapa.texts]
+
+
 def test_o_mapa_de_referencia_numera_as_estacoes_e_lista_os_nomes(base):
     tabela = pd.DataFrame({"Nº": [1, 2], "Estação": ["Corumba", "Dourados"],
                            "Latitude": [-19.02, -22.19], "Longitude": [-57.67, -54.91]})

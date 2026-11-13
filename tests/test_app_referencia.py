@@ -66,6 +66,39 @@ def test_a_busca_ignora_acento_e_maiuscula_e_olha_nome_municipio_e_codigo():
     assert referencia.procurar(tabela, "  ").all()
 
 
+def pluviometros() -> pd.DataFrame:
+    # Como fonte.estacoes_cemaden: o nome com o município, e a instalação sem fuso
+    return pd.DataFrame({
+        "CD_ESTACAO": ["500320701A", "500370201A"],
+        "Estação": ["CEMADEN · Dourados (Centro)", "CEMADEN · Corumbá (Cravo Vermelho)"],
+        "VL_LATITUDE": [-22.22, -19.00], "VL_LONGITUDE": [-54.80, -57.65],
+        "DT_INICIO_OPERACAO": pd.to_datetime(["2015-04-01 00:00", "2015-03-30 14:14"]),
+    })
+
+
+def test_o_pluviometro_do_cemaden_leva_a_rede_e_o_municipio_do_nome():
+    tabela = referencia.tabela_de_referencia(pluviometros(), municipios(), rede="CEMADEN")
+
+    assert tabela["Estação"].tolist() == ["CEMADEN · Corumbá (Cravo Vermelho)", "CEMADEN · Dourados (Centro)"]
+    assert tabela["Rede"].tolist() == ["CEMADEN", "CEMADEN"]
+    assert tabela["Município"].tolist() == ["Corumbá", "Dourados"]
+    assert tabela["Em operação desde"].tolist() == ["30/03/2015", "01/04/2015"]   # a data sem fuso é de Brasília
+    assert tabela["Altitude (m)"].isna().all()
+
+
+def test_as_duas_redes_numa_lista_so_o_inmet_primeiro_e_os_numeros_em_sequencia():
+    inmet = referencia.tabela_de_referencia(estacoes(), municipios())
+    cemaden = referencia.tabela_de_referencia(pluviometros(), municipios(), rede="CEMADEN")
+
+    juntas = referencia.com_o_cemaden(inmet, cemaden)
+
+    assert list(juntas.columns) == referencia.COLUNAS
+    assert juntas["Nº"].tolist() == [1, 2, 3, 4, 5]
+    assert juntas["Rede"].tolist() == ["INMET"] * 3 + ["CEMADEN"] * 2
+    assert referencia.com_o_cemaden(inmet, cemaden.iloc[0:0]) is inmet
+    assert referencia.procurar(juntas, "cemaden").tolist() == [False] * 3 + [True] * 2
+
+
 def test_sem_estacoes_a_tabela_sai_vazia_com_as_colunas():
     tabela = referencia.tabela_de_referencia(estacoes().iloc[0:0], municipios())
     assert tabela.empty and list(tabela.columns) == referencia.COLUNAS

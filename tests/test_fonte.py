@@ -211,6 +211,7 @@ def test_as_estacoes_do_cemaden_tem_as_colunas_do_inmet_e_o_municipio_no_nome(ce
                                             "CEMADEN · Três Lagoas (São Carlos)"]
     assert estacoes["CD_SITUACAO"].tolist() == ["Operante", "Operante", "Parada"]   # a parada fica na lista
     assert estacoes.at[1, "VL_LATITUDE"] == -20.52545
+    assert (estacoes["DT_INICIO_OPERACAO"] == pd.Timestamp("2015-04-01")).all()     # a instalação, para a referência
 
 
 def test_cada_leitura_do_cemaden_entra_na_hora_que_termina_na_hora_cheia_seguinte(cemaden_no_banco):

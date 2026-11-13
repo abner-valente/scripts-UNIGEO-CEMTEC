@@ -725,6 +725,7 @@ Onde fica cada estação automática do INMET em MS, para quem não lida com ela
 | **A lista e a busca** | Ao lado do mapa, numerada em ordem alfabética. A busca procura no nome, no município e no código, sem ligar para acento e maiúscula ("corumba" acha as 7 de Corumbá e Nhumirim), e as achadas ficam em vermelho no mapa |
 | **O município** | Não vem na lista do INMET. Vale o do começo do nome da estação, quando ele é um município do estado; senão, o do ponto dela no mapa. Pelas coordenadas, a estação de Dourados cai do lado de Itaporã e a de Miranda do lado de Bodoquena, e é pelo nome que o público as procura |
 | **O mapa de referência (PNG)** | As estações numeradas no mapa e a lista dos números com os nomes ao lado, no padrão do boletim (título e logos), em 300 dpi, para boletins, relatórios e apresentações. Numa imagem parada os nomes escritos no mapa se atropelariam no sul; o número cabe |
+| **Os pluviômetros do CEMADEN** | No painel que lê do banco (o do servidor), os pluviômetros do CEMADEN em operação entram em laranja no mapa, na lista (depois das estações do INMET, com a coluna "Rede") e no PNG de referência, que ganha a legenda das duas redes e a citação do CEMADEN no rodapé. A busca também acha pela rede ("cemaden"). O parado fica de fora, como fica dos mapas de chuva. Onde uma cidade tem estações coladas (os três pluviômetros de Bonito, a cerca de 1 km um do outro), os números do PNG se sobrepõem; no mapa da página, o zoom os separa |
 
 ### Previsão (MS)
 

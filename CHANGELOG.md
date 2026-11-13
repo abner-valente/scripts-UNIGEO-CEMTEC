@@ -31,6 +31,7 @@ A rede de pluviômetros automáticos do CEMADEN em MS (29 estações, quatro só
   - Nos **Mapas interativos**, os pluviômetros aparecem em laranja, menores que as estações do INMET, e o clique abre a chuva da estação.
   - O PNG do boletim leva embaixo a citação que os termos da PED pedem ("DATA FROM THE CEMADEN/MCTIC OBSERVATIONAL NETWORK"), e as legendas da tela também.
   - O pluviômetro que mandar dado errado sai pela gaveta **"Estações retiradas"**, como uma estação do INMET.
+  - Na página **Localização Estações**, os pluviômetros em operação entram em laranja no mapa, na lista (com a coluna "Rede") e no PNG de referência, com a citação do CEMADEN.
 - **Nos mapas de chuva em PNG do painel (o da tela e o do boletim), as estações a até 15 km umas das outras mostram só o maior valor**: o ponto, o número e o ranking. A superfície continua com todas. O rodapé do boletim avisa quando o agrupamento tirou estações do desenho. Hoje nenhuma dupla do INMET fica a menos de 15 km (as mais próximas, Dourados e Itaporã, estão a 16,1 km): quem se junta são as estações de uma mesma cidade, com o CEMADEN. Os mapas do `main.py` e os das outras variáveis não mudam.
 
 ### Atenção ao atualizar o servidor
