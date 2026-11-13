@@ -132,12 +132,29 @@ def tamanho_do_cache() -> tuple[int, float]:
 
 def _faltando(guardadas: pd.DataFrame | None, inicio: datetime,
               fim: datetime) -> list[tuple[datetime, datetime]]:
+    # Os pedaços da janela que o cache ainda não tem. Baixar só o que falta é o que faz alargar o
+    # período sair barato. Falta toda hora da janela sem linha no cache, onde quer que ela esteja:
+    # antes da primeira guardada, depois da última ou num buraco no meio. Até a 0.3.6 o cache era
+    # julgado pelos extremos, e o buraco no meio ficava para sempre; ele nasce também do cache que
+    # fica dias sem uso: guardado até 05/11 e consultado em 13/11, ele pedia só as últimas 48 horas,
+    # e a chuva do meio ficava de fora sem aviso (o mensal de Fátima do Sul saiu com 112,6 mm em vez
+    # de 164,4). A hora que a estação não mandou volta a ser pedida a cada consulta: é um pedido a
+    # mais por estação, e só do trecho que falta
     if guardadas is None or guardadas.empty:
         return [(inicio, fim)]
-    tem_desde = guardadas["dt_utc"].min()
     pedacos = []
-    if inicio < tem_desde:
-        pedacos.append((inicio, min(fim, tem_desde)))
+    comeco_utc, fim_utc = pd.Timestamp(inicio).tz_convert("UTC"), pd.Timestamp(fim).tz_convert("UTC")
+    horas = pd.date_range(comeco_utc.floor("h"), fim_utc, freq="h", inclusive="right")
+    faltam = horas.difference(pd.DatetimeIndex(guardadas["dt_utc"]).tz_convert("UTC"))
+    if len(faltam):
+        # Um pedido só, da primeira à última hora que falta (a janela de cada hora é (h - 1 h, h]),
+        # começando na última hora com medida antes do buraco: as horas vazias logo antes dele são
+        # as que o INMET ainda não tinha preenchido quando o cache as guardou
+        comeco = faltam.min() - timedelta(hours=1)
+        medida_antes = _ultima_com_medida(guardadas[guardadas["dt_utc"] < faltam.min()])
+        if medida_antes is not None:
+            comeco = min(comeco, medida_antes)
+        pedacos.append((max(inicio, comeco), faltam.max()))
 
     # A ponta recente é sempre refeita. O INMET publica a linha da hora **antes** das medidas e
     # as preenche depois; julgar a cobertura pela última linha faz o vazio ficar guardado para
@@ -148,7 +165,18 @@ def _faltando(guardadas: pd.DataFrame | None, inicio: datetime,
     ponta = max(confiavel, piso) if confiavel is not None else piso
     if fim > ponta:
         pedacos.append((max(inicio, ponta), fim))
-    return pedacos
+    return _unir(pedacos)
+
+
+def _unir(pedacos: list[tuple[datetime, datetime]]) -> list[tuple[datetime, datetime]]:
+    # Os pedaços que se encostam ou se cobrem viram um pedido só
+    unidos = []
+    for comeco, termino in sorted(pedacos, key=lambda pedaco: pedaco[0]):
+        if unidos and comeco <= unidos[-1][1]:
+            unidos[-1] = (unidos[-1][0], max(unidos[-1][1], termino))
+        else:
+            unidos.append((comeco, termino))
+    return unidos
 
 
 def _ultima_com_medida(guardadas: pd.DataFrame):
