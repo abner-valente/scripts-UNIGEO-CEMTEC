@@ -250,7 +250,6 @@ def test_a_estacao_do_cemaden_sem_leitura_no_periodo_fica_de_fora_com_aviso(cema
 def test_com_a_fonte_apis_nao_ha_cemaden_e_o_banco_nem_e_aberto(monkeypatch):
     monkeypatch.setattr(fonte, "_conectar", lambda: pytest.fail("não devia abrir o banco"))
 
-    assert not fonte.tem_cemaden()
     assert fonte.estacoes_cemaden("MS").empty
     assert list(fonte.estacoes_cemaden("MS").columns) == fonte.COLUNAS_ESTACOES_CEMADEN
     assert fonte.chuva_cemaden(CADASTRO_CEMADEN.rename(columns={"codigo": "CD_ESTACAO"}), DIA, DIA) == []

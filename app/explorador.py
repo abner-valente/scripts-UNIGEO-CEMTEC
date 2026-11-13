@@ -526,7 +526,8 @@ def retiradas_da_variavel(grandeza: str) -> set[str]:
 def cemaden_escolhidas(cadastro: pd.DataFrame) -> tuple[str, ...]:
     # As estações do CEMADEN que a equipe pôs nos mapas de chuva nesta sessão (a gaveta). Mora no
     # dicionário da sessão pelo mesmo motivo das retiradas: vale nas abas e nos Mapas interativos
-    return tuple(nome for nome in st.session_state.get("cemaden", []) if nome in set(cadastro["Estação"]))
+    existentes = set(cadastro["Estação"])
+    return tuple(nome for nome in st.session_state.get("cemaden", []) if nome in existentes)
 
 
 def gaveta_das_retiradas(onde: str, grandezas: list[str], estacoes: pd.DataFrame,
@@ -3995,7 +3996,10 @@ with aba_chuva:
             # barras e os mapas. A cascata do estado e o alcance dos acumulados ficam com as do INMET
             chuva_dos_mapas = (pd.concat([leituras_chuva, chuva_cemaden], ignore_index=True)
                                if not chuva_cemaden.empty else leituras_chuva)
-            nas_contas = len(estacoes) + chuva_cemaden["Estação"].nunique()
+            # Contam os pluviômetros com alguma leitura na janela: o escolhido parado entra sem nenhuma
+            com_leitura = (chuva_cemaden.loc[chuva_cemaden["CHUVA"].notna(), "Estação"].nunique()
+                           if "CHUVA" in chuva_cemaden else 0)
+            nas_contas = len(estacoes) + com_leitura
             # Sai do mesmo dado dos acumulados, então não custa consulta nenhuma: só reagrupa o
             # que já veio. Vem antes dos mapas porque responde outra pergunta — quando choveu no
             # período, e não onde —, e porque não depende de escolha nenhuma na barra lateral.
@@ -4039,8 +4043,8 @@ with aba_chuva:
 
                 st.caption(f"Acumulados até **{ate:%d/%m %H:%M}**, somando a chuva de cada hora para "
                            "trás. A barra diz quanto choveu em cada estação; o mapa, onde choveu." +
-                           (f" Com {chuva_cemaden['Estação'].nunique()} pluviômetros do CEMADEN, escolhidos "
-                            f"na gaveta à direita. {cemaden.CITACAO}." if not chuva_cemaden.empty else ""))
+                           (f" Com {com_leitura} pluviômetros do CEMADEN, escolhidos na gaveta à direita. "
+                            f"{cemaden.CITACAO}." if com_leitura else ""))
                 if secas:
                     st.info(f"Sem chuva em nenhuma estação em: {', '.join(secas)}.")
 
