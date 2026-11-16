@@ -105,7 +105,8 @@ def test_o_mapa_do_boletim_sai_com_titulo_logos_ranking_e_a_escala_da_tela(base)
     textos = [texto.get_text() for texto in mapa.texts]
     superficie = next(colecao for colecao in mapa.collections if hasattr(colecao, "levels"))
 
-    assert mapa.get_title() == "Temperatura máxima em MS\n03/09/2026 — INMET/SEMADESC"
+    assert mapa.get_title() == "Temperatura máxima em MS\n03/09/2026"             # as instituições, só no rodapé
+    assert "Dados: INMET/SEMADESC" in textos
     assert len(mapa.child_axes) == len(config.LOGOS)                  # cada logo é um eixo filho
     assert any(texto.startswith("5 MAIORES TEMPERATURAS:\nCorumba: 36.2") for texto in textos)
     assert np.allclose(superficie.levels, escala_da_tela)             # a escala fixa da tela
@@ -128,9 +129,9 @@ def test_o_pluviometro_do_cemaden_entra_no_ranking_e_a_citacao_vai_embaixo(base)
     mapa = mapas.mapa_interpolado(gdf, espec, base).axes[0]
     textos = [texto.get_text() for texto in mapa.texts]
 
-    assert mapa.get_title() == "Chuva acumulada em 24 h em MS\n03/11/2026 — INMET/SEMADESC"
+    assert mapa.get_title() == "Chuva acumulada em 24 h em MS\n03/11/2026"
     assert any(texto.startswith(f"5 MAIORES ACUMULADOS:\n{jardim_panama}: 20.4\nCorumba: 12.0") for texto in textos)
-    assert cemaden.CITACAO in textos
+    assert f"Dados: INMET/SEMADESC\n{cemaden.CITACAO}" in textos
 
 
 def test_no_boletim_da_chuva_a_cidade_com_varios_pluviometros_mostra_so_o_maior(base):
@@ -147,7 +148,7 @@ def test_no_boletim_da_chuva_a_cidade_com_varios_pluviometros_mostra_so_o_maior(
     ranking = next(texto for texto in textos if texto.startswith("5 MAIORES ACUMULADOS"))
     assert ranking.startswith(f"5 MAIORES ACUMULADOS:\n{jardim_panama}: 20.4\nCorumba: 12.0\nCoxim: 8.0")
     assert "Campo Grande:" not in ranking and "9.0" not in textos                 # o INMET da cidade sai do desenho
-    assert f"{cemaden.CITACAO}\n{mapas.AVISO_DO_GRUPO.format(km=15)}" in textos
+    assert f"Dados: INMET/SEMADESC\n{cemaden.CITACAO}\n{mapas.AVISO_DO_GRUPO.format(km=15)}" in textos
 
 
 @pytest.mark.parametrize("teto, esperadas", [

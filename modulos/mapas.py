@@ -30,8 +30,9 @@ NOMES_DAS_REDES = {"INMET": "Estação automática do INMET", "CEMADEN": "Pluvi�
 AVISO_DO_GRUPO = "Estações a até {km:g} km umas das outras mostram só o maior valor."
 # Acima disso a lista de níveis é uma faixa contínua, e não classes (como as da chuva)
 MAX_CLASSES = 12
-# De quem é o dado, no fim do subtítulo. A previsão troca pelo do Open-Meteo, cuja licença
-# (CC BY 4.0) obriga o crédito.
+# De quem é o dado, numa linha miúda embaixo do mapa ("Dados: INMET/SEMADESC"). O título e o
+# subtítulo dizem só o quê e quando: as instituições ficam no rodapé (pedido da equipe, 16/11/2026).
+# A previsão troca pelo do Open-Meteo, cuja licença (CC BY 4.0) obriga o crédito.
 CREDITO = "INMET/SEMADESC"
 
 
@@ -49,7 +50,6 @@ class EspecMapa:
     direcao_vento: bool = False  # desenha as setas de direção do vento
     decimais: int = 1            # casas decimais dos rótulos e do ranking (0 para contagens, como horas)
     credito: str = CREDITO
-    credito_no_rodape: bool = False  # o crédito numa linha embaixo do mapa, e não no subtítulo
     ranking_absoluto: bool = False  # ranqueia pelo tamanho do valor, para cima ou para baixo (anomalias)
     com_sinal: bool = False         # escreve o + dos positivos: nas anomalias, o número é um desvio
     rodape: str = ""                # uma linha miúda embaixo do mapa (a citação que o CEMADEN pede)
@@ -64,7 +64,6 @@ class EspecClasses:
     cores: list[str]
     rotulos: list[str]
     credito: str = CREDITO
-    credito_no_rodape: bool = False
     rodape: str = ""                # uma linha miúda embaixo do mapa (a citação que o CEMADEN pede)
 
 
@@ -498,16 +497,13 @@ def _corpo_rotulo(tamanho: float, tela: "Tela | None") -> float:
 def _finalizar(fig, ax, espec, base: BaseCartografica, caminho: Path | None,
                tela: "Tela | None" = None) -> Figure:
     if tela is None:
-        # O crédito vai no fim do subtítulo ou, quando o subtítulo deve ficar só com a data (os
-        # mapas da previsão), numa linha miúda embaixo do mapa, à direita. O rodapé (a citação do
-        # CEMADEN) vai nessa mesma linha miúda
-        subtitulo = espec.subtitulo if espec.credito_no_rodape else f"{espec.subtitulo} — {espec.credito}"
-        ax.set_title(f"{espec.titulo}\n{subtitulo}", fontsize=16, weight="bold", pad=20)
-        linhas = ([f"Dados: {espec.credito}"] if espec.credito_no_rodape else []) + \
-            ([espec.rodape] if getattr(espec, "rodape", "") else [])
-        if linhas:
-            ax.annotate("\n".join(linhas), xy=(1, 0), xycoords="axes fraction", xytext=(0, -30),
-                        textcoords="offset points", ha="right", va="top", fontsize=9, color="#555555")
+        # O título e o subtítulo dizem o quê e quando; de quem é o dado vai numa linha miúda embaixo
+        # do mapa, à direita (até a 0.3.7, o crédito do INMET ia no fim do subtítulo). O rodapé da
+        # espec (a citação do CEMADEN, o aviso do agrupamento) vem nas linhas de baixo
+        ax.set_title(f"{espec.titulo}\n{espec.subtitulo}", fontsize=16, weight="bold", pad=20)
+        linhas = [f"Dados: {espec.credito}"] + ([espec.rodape] if getattr(espec, "rodape", "") else [])
+        ax.annotate("\n".join(linhas), xy=(1, 0), xycoords="axes fraction", xytext=(0, -30),
+                    textcoords="offset points", ha="right", va="top", fontsize=9, color="#555555")
     # O enquadramento vem da base, e não do módulo: é a base que sabe de que recorte ela é
     oeste, leste, sul, norte = base.recorte.limites
     ax.set_xlim(oeste, leste)

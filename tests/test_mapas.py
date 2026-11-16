@@ -92,6 +92,23 @@ def test_mapa_devolve_a_figura_sem_gravar_nada(base):
     assert len(figura.axes) >= 2  # o mapa e a barra de cores
 
 
+def test_no_mapa_do_relatorio_as_instituicoes_vao_so_no_rodape(base, monkeypatch, tmp_path):
+    # Pedido da equipe (16/11/2026): o título e o subtítulo dizem o quê e quando, e "INMET/SEMADESC"
+    # fica numa linha embaixo do mapa. Vale para os mapas do main.py, que gravam o PNG daqui
+    monkeypatch.setattr(config, "DPI", 40)
+    gdf = mapas._preparar_dados(ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]}), CHUVA)
+
+    mapa = mapas.mapa_interpolado(gdf, CHUVA, base, tmp_path / "relatorio.png").axes[0]
+    classes = mapas.mapa_classes_pontual(gdf.assign(Nivel=[0, 1, 2, 3, 0]), "Nivel",
+                                         mapas.EspecClasses("Risco de teste", "03/09/2026", "", config.CORES_RISCO,
+                                                            config.ROTULOS_RISCO), base).axes[0]
+
+    for desenho in (mapa, classes):
+        assert "SEMADESC" not in desenho.get_title() and "INMET" not in desenho.get_title()
+        assert "Dados: INMET/SEMADESC" in [texto.get_text() for texto in desenho.texts]
+    assert mapa.get_title() == "Chuva de teste\nsubtítulo"
+
+
 def test_na_tela_o_mapa_sai_sem_titulo_nem_logos(base, monkeypatch, tmp_path):
     monkeypatch.setattr(config, "DPI", 40)
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
@@ -114,14 +131,13 @@ def test_o_rodape_vai_embaixo_do_mapa_do_relatorio_e_nao_no_da_tela(base):
 
     relatorio = mapas.mapa_interpolado(gdf, com_rodape, base)
     na_tela = mapas.mapa_interpolado(gdf, com_rodape, base, tela=mapas.Tela())
-    com_o_credito = mapas.mapa_interpolado(gdf, replace(com_rodape, credito_no_rodape=True), base)
     sem_rodape = mapas.mapa_interpolado(gdf, CHUVA, base)
 
-    assert "Citação da rede" in [texto.get_text() for texto in relatorio.axes[0].texts]
-    assert relatorio.axes[0].get_title().endswith("subtítulo — INMET/SEMADESC")   # o crédito continua lá
-    assert "Citação da rede" not in [texto.get_text() for texto in na_tela.axes[0].texts]
-    assert "Dados: INMET/SEMADESC\nCitação da rede" in [texto.get_text() for texto in com_o_credito.axes[0].texts]
-    assert len(sem_rodape.axes[0].texts) == len(relatorio.axes[0].texts) - 1
+    # O crédito na primeira linha do rodapé, e o rodapé da espec embaixo dele
+    assert "Dados: INMET/SEMADESC\nCitação da rede" in [texto.get_text() for texto in relatorio.axes[0].texts]
+    assert relatorio.axes[0].get_title() == "Chuva de teste\nsubtítulo"
+    assert not any("Citação da rede" in texto.get_text() for texto in na_tela.axes[0].texts)
+    assert "Dados: INMET/SEMADESC" in [texto.get_text() for texto in sem_rodape.axes[0].texts]
 
 
 # Campo Grande e duas vizinhas a ~5 e ~10 km (0,045° e 0,09° de latitude), mais as outras longe
@@ -154,7 +170,7 @@ def test_no_mapa_agrupado_a_superficie_leva_todas_e_o_desenho_so_o_maior_de_cada
     assert numeros == ["0.0", "12.0", "5.0", "8.0", "9.5"]
     ranking = next(texto for texto in textos if texto.startswith("5 MAIORES"))
     assert "CG 2: 9.5" in ranking and "Campo Grande" not in ranking and "CG 3" not in ranking
-    assert mapas.AVISO_DO_GRUPO.format(km=15) in textos
+    assert f"Dados: INMET/SEMADESC\n{mapas.AVISO_DO_GRUPO.format(km=15)}" in textos
 
 
 def test_sem_estacao_juntada_o_mapa_agrupado_nao_leva_o_aviso(base):
@@ -172,7 +188,8 @@ def test_o_aviso_do_grupo_vai_junto_da_citacao_no_rodape(base):
 
     figura = mapas.mapa_interpolado(gdf, replace(CHUVA, agrupar_km=15, rodape="Citação da rede"), base)
 
-    assert f"Citação da rede\n{mapas.AVISO_DO_GRUPO.format(km=15)}" in [t.get_text() for t in figura.axes[0].texts]
+    assert f"Dados: INMET/SEMADESC\nCitação da rede\n{mapas.AVISO_DO_GRUPO.format(km=15)}" in \
+        [t.get_text() for t in figura.axes[0].texts]
 
 
 def test_na_tela_o_mapa_agrupado_tambem_escreve_so_o_maior_de_cada_grupo(base):
@@ -433,7 +450,7 @@ def test_no_mapa_de_referencia_cada_rede_tem_a_sua_cor_e_a_legenda(base):
     numeros = {texto.get_text(): texto.get_color() for texto in lista.texts if texto.get_text().isdigit()}
     assert numeros == {"1": mapas.CORES_DAS_REDES["INMET"], "2": mapas.CORES_DAS_REDES["INMET"],
                        "3": mapas.CORES_DAS_REDES["CEMADEN"]}
-    assert "Citação da rede" in [texto.get_text() for texto in mapa.texts]
+    assert "Dados: INMET/SEMADESC\nCitação da rede" in [texto.get_text() for texto in mapa.texts]
 
 
 def test_o_mapa_de_referencia_numera_as_estacoes_e_lista_os_nomes(base):
@@ -443,6 +460,7 @@ def test_o_mapa_de_referencia_numera_as_estacoes_e_lista_os_nomes(base):
     figura = mapas.mapa_de_referencia(tabela, "Estações do INMET em MS", "2 estações", base)
 
     mapa, lista = figura.axes[0], figura.axes[1]
-    assert mapa.get_title() == "Estações do INMET em MS\n2 estações — INMET/SEMADESC"
+    assert mapa.get_title() == "Estações do INMET em MS\n2 estações"
+    assert "Dados: INMET/SEMADESC" in {texto.get_text() for texto in mapa.texts}
     assert {"1", "2"} <= {texto.get_text() for texto in mapa.texts}
     assert {"ESTAÇÕES", "1", "Corumba", "2", "Dourados"} <= {texto.get_text() for texto in lista.texts}
