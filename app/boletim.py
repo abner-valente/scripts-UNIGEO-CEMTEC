@@ -1,9 +1,9 @@
 """A moldura do relatório para os mapas que o painel deixa baixar.
 
 Na tela o mapa sai sem título, logos e ranking: numa coluna estreita eles tomariam o lugar do
-desenho. Para o boletim a equipe quer o mapa como o `main.py` entrega — título, subtítulo com o
-crédito INMET/SEMADESC, os logos do CEMTEC e da SEMADESC, o ranking das cinco estações e a barra
-de cores —, mas com **as cores da tela** (decisão de 01/10/2026): a mesma paleta e a mesma
+desenho. Para o boletim a equipe quer o mapa como o `main.py` entrega — título, subtítulo, os
+logos do CEMTEC e da SEMADESC, o ranking das cinco estações, a barra de cores e o crédito
+INMET/SEMADESC no rodapé —, mas com **as cores da tela** (decisão de 01/10/2026): a mesma paleta e a mesma
 escala, fixa ou ajustada ao dado, que a pessoa estava vendo quando clicou. O que se baixa é o
 que se vê, pronto para ir ao boletim.
 
@@ -64,7 +64,7 @@ def nome_da_chuva(rotulo: str) -> str:
 
 def espec(nome: str, grandeza: str, unidade: str, paleta: str, decimais: int, uf: str,
           subtitulo: str, direcao_vento: bool = False, credito: str = mapas.CREDITO,
-          coluna: str | None = None, credito_no_rodape: bool = False) -> mapas.EspecMapa:
+          coluna: str | None = None) -> mapas.EspecMapa:
     """O que o relatório precisa saber para desenhar a moldura de um mapa da tela.
 
     A coluna é o próprio nome, que é como o painel monta os pontos que vão para o mapa, salvo
@@ -74,7 +74,7 @@ def espec(nome: str, grandeza: str, unidade: str, paleta: str, decimais: int, uf
     return mapas.EspecMapa(tabela="", coluna=coluna or nome, titulo=titulo(nome, uf), subtitulo=subtitulo,
                            arquivo="", cmap=paleta, unidade=f"{grandeza} ({unidade})", ranking=texto,
                            maiores=maiores, direcao_vento=direcao_vento, decimais=decimais,
-                           credito=credito, credito_no_rodape=credito_no_rodape)
+                           credito=credito)
 
 
 def nome_do_arquivo(nome: str, uf: str, carimbo: str) -> str:

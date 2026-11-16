@@ -394,8 +394,7 @@ def test_o_png_do_boletim_da_previsao_leva_o_credito_do_open_meteo_no_rodape():
     pontos = previsao.nas_estacoes(diaria({HOJE: 33.0}, pontos=("A702", "A721"), coluna="temp_max"),
                                    ESTACOES, mapa, HOJE, HOJE)
     espec = boletim.espec(mapa.titulo, mapa.grandeza, mapa.unidade, mapa.paleta, mapa.decimais, "MS",
-                          "Previsão para 08/10/2026", credito=previsao.CREDITO, coluna=mapa.nome,
-                          credito_no_rodape=True)
+                          "Previsão para 08/10/2026", credito=previsao.CREDITO, coluna=mapa.nome)
 
     figura = mapas.mapa_de_grade(np.full(base.lon_grade.shape, 30.0),
                                  mapas.preparar_pontos(pontos, mapa.nome), espec, base,

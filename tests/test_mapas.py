@@ -96,6 +96,23 @@ def test_mapa_devolve_a_figura_sem_gravar_nada(base):
     assert len(figura.axes) >= 2  # o mapa e a barra de cores
 
 
+def test_no_mapa_do_relatorio_as_instituicoes_vao_so_no_rodape(base, monkeypatch, tmp_path):
+    # Pedido da equipe (16/11/2026): o título e o subtítulo dizem o quê e quando, e "INMET/SEMADESC"
+    # fica numa linha embaixo do mapa. Vale para os mapas do main.py, que gravam o PNG daqui
+    monkeypatch.setattr(config, "DPI", 40)
+    gdf = mapas._preparar_dados(ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]}), CHUVA)
+
+    mapa = mapas.mapa_interpolado(gdf, CHUVA, base, tmp_path / "relatorio.png").axes[0]
+    classes = mapas.mapa_classes_pontual(gdf.assign(Nivel=[0, 1, 2, 3, 0]), "Nivel",
+                                         mapas.EspecClasses("Risco de teste", "03/09/2026", "", config.CORES_RISCO,
+                                                            config.ROTULOS_RISCO), base).axes[0]
+
+    for desenho in (mapa, classes):
+        assert "SEMADESC" not in desenho.get_title() and "INMET" not in desenho.get_title()
+        assert "Dados: INMET/SEMADESC" in [texto.get_text() for texto in desenho.texts]
+    assert mapa.get_title() == "Chuva de teste\nsubtítulo"
+
+
 def test_na_tela_o_mapa_sai_sem_titulo_nem_logos(base, monkeypatch, tmp_path):
     """Numa miniatura, título e logos institucionais só tomariam o lugar do mapa."""
     monkeypatch.setattr(config, "DPI", 40)
@@ -375,6 +392,7 @@ def test_o_mapa_de_referencia_numera_as_estacoes_e_lista_os_nomes(base):
     figura = mapas.mapa_de_referencia(tabela, "Estações do INMET em MS", "2 estações", base)
 
     mapa, lista = figura.axes[0], figura.axes[1]
-    assert mapa.get_title() == "Estações do INMET em MS\n2 estações — INMET/SEMADESC"
+    assert mapa.get_title() == "Estações do INMET em MS\n2 estações"
+    assert "Dados: INMET/SEMADESC" in {texto.get_text() for texto in mapa.texts}
     assert {"1", "2"} <= {texto.get_text() for texto in mapa.texts}
     assert {"ESTAÇÕES", "1", "Corumba", "2", "Dourados"} <= {texto.get_text() for texto in lista.texts}

@@ -9,6 +9,24 @@ Cada versão separa as mudanças em até quatro grupos:
 
 Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
+## [0.3.8] — 16/11/2026
+
+Um pedido da equipe de meteorologia: as instituições saem do título dos mapas e vão para o rodapé.
+
+### Atenção ao atualizar
+
+- **Os mapas mudam de cara**: o subtítulo deixa de terminar com " — INMET/SEMADESC". Quem tiver modelo de boletim ou rotina que dependa do texto antigo precisa ajustá-los.
+- **Quem roda o painel na própria máquina precisa reiniciá-lo** (Ctrl+C e `streamlit run app/explorador.py` de novo), porque o Streamlit não relê o `modulos/mapas.py` sozinho. No Streamlit Cloud, é o Reboot. As dependências não mudaram.
+
+### Mudou
+
+- **Mapas: o crédito das instituições fica só no rodapé.** O título e o subtítulo dizem só o quê e quando ("Temperatura máxima em MS", "03/09/2026"), e o crédito vai numa linha miúda embaixo do mapa, à direita: "Dados: INMET/SEMADESC". Vale para todos os mapas com moldura de relatório:
+  - os do `main.py` (o `relatorio_inmet` e o `risco_fogo`);
+  - o PNG do boletim que o painel deixa baixar, nas abas Mapas Boletim, Chuva e Risco de Fogo;
+  - o mapa de referência das estações.
+
+  Os mapas da previsão já punham o crédito do Open-Meteo no rodapé, e seguem assim. Os mapas da tela, sem moldura, continuam sem crédito.
+
 ## [0.3.7] — 13/11/2026
 
 Uma correção no painel: em alguns casos, a chuva somada saía menor do que a medida.
