@@ -442,7 +442,7 @@ def test_no_mapa_de_referencia_cada_rede_tem_a_sua_cor_e_a_legenda(base):
                            "Rede": ["INMET", "INMET", "CEMADEN"],
                            "Latitude": [-19.02, -22.19, -22.22], "Longitude": [-57.67, -54.91, -54.80]})
 
-    figura = mapas.mapa_de_referencia(tabela, "Estações em MS", "2 e 1", base, rodape="Citação da rede")
+    figura = mapas.mapa_de_referencia(tabela, "Estações em MS", "2 e 1", base, credito=mapas.CREDITO_COM_CEMADEN)
 
     mapa, lista = figura.axes[0], figura.axes[1]
     assert [texto.get_text() for texto in mapa.get_legend().get_texts()] == [
@@ -450,7 +450,7 @@ def test_no_mapa_de_referencia_cada_rede_tem_a_sua_cor_e_a_legenda(base):
     numeros = {texto.get_text(): texto.get_color() for texto in lista.texts if texto.get_text().isdigit()}
     assert numeros == {"1": mapas.CORES_DAS_REDES["INMET"], "2": mapas.CORES_DAS_REDES["INMET"],
                        "3": mapas.CORES_DAS_REDES["CEMADEN"]}
-    assert "Dados: INMET/SEMADESC\nCitação da rede" in [texto.get_text() for texto in mapa.texts]
+    assert "Dados: INMET/SEMADESC/CEMADEN" in [texto.get_text() for texto in mapa.texts]
 
 
 def test_o_mapa_de_referencia_numera_as_estacoes_e_lista_os_nomes(base):

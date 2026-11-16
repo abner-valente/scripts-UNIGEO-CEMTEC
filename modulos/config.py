@@ -260,6 +260,9 @@ MIN_ESTACOES_INTERPOLACAO = 3
 # 13/11/2026, para os pluviômetros do CEMADEN, que se juntam nas cidades (Campo Grande tem cinco
 # estações num raio de 15 km), não se cobrirem no mapa
 AGRUPAR_CHUVA_KM = 15.0
+# O começo do nome das estações do CEMADEN nas listas que juntam as duas redes ("CEMADEN · Bonito
+# (Centro)"). O ranking do mapa do boletim o tira: ali o nome longo cobria o mapa do estado
+PREFIXO_CEMADEN = "CEMADEN · "
 # Folga da poda das estações de apoio: quantas mais próximas olhar ao decidir se uma
 # estação de fora pode entrar na conta de alguma célula. O IDW usa 8; olhar o dobro
 # guarda a que só vira vizinha quando outra falta naquela hora — e falta: num dia comum

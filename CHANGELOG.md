@@ -29,9 +29,10 @@ A rede de pluviômetros automáticos do CEMADEN em MS (29 estações, quatro só
   - O nome é "CEMADEN · Município (Nome)", porque o nome sozinho não diz onde a estação fica.
   - Cada leitura entra na hora que termina na hora cheia seguinte: a das 13:40 conta na hora das 14:00, como a leitura do INMET das 14:00 é a chuva das 13:00 às 14:00. A hora sem leitura fica sem dado, e não seca.
   - Nos **Mapas interativos**, os pluviômetros aparecem em laranja, menores que as estações do INMET, e o clique abre a chuva da estação.
-  - O PNG do boletim leva embaixo a citação que os termos da PED pedem ("DATA FROM THE CEMADEN/MCTIC OBSERVATIONAL NETWORK"), e as legendas da tela também.
+  - Com pluviômetro do CEMADEN no mapa, o crédito do rodapé do PNG do boletim passa a "Dados: INMET/SEMADESC/CEMADEN", e as legendas da tela também o trazem. Os termos da PED pedem a citação em inglês ("DATA FROM THE CEMADEN/MCTIC OBSERVATIONAL NETWORK"), e a equipe preferiu o crédito em português, junto com as outras instituições (16/11/2026).
+  - No ranking das 5 maiores do PNG do boletim, o nome do pluviômetro sai sem o "CEMADEN · ", que alargava o quadro por cima do mapa.
   - O pluviômetro que mandar dado errado sai pela gaveta **"Estações retiradas"**, como uma estação do INMET.
-  - Na página **Localização Estações**, os pluviômetros em operação entram em laranja no mapa, na lista (com a coluna "Rede") e no PNG de referência, com a citação do CEMADEN.
+  - Na página **Localização Estações**, os pluviômetros em operação entram em laranja no mapa, na lista (com a coluna "Rede") e no PNG de referência, com o crédito "Dados: INMET/SEMADESC/CEMADEN".
 - **Nos mapas de chuva em PNG do painel (o da tela e o do boletim), as estações a até 15 km umas das outras mostram só o maior valor**: o ponto, o número e o ranking. A superfície continua com todas. O rodapé do boletim avisa quando o agrupamento tirou estações do desenho. Hoje nenhuma dupla do INMET fica a menos de 15 km (as mais próximas, Dourados e Itaporã, estão a 16,1 km): quem se junta são as estações de uma mesma cidade, com o CEMADEN. Os mapas do `main.py` e os das outras variáveis não mudam.
 
 ### Atenção ao atualizar o servidor

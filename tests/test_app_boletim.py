@@ -8,7 +8,7 @@ import pytest
 from PIL import Image
 
 from app import boletim, chuva, variaveis
-from modulos import cemaden, config, fonte, mapas
+from modulos import config, fonte, mapas
 from modulos.produtos import risco_fogo
 
 ESTACOES = pd.DataFrame({
@@ -113,9 +113,10 @@ def test_o_mapa_do_boletim_sai_com_titulo_logos_ranking_e_a_escala_da_tela(base)
     assert len(figura.axes) == 2                                      # o mapa e a barra de cores
 
 
-def test_so_o_mapa_com_estacao_do_cemaden_leva_a_citacao_dele():
-    assert boletim.rodape(["Campo Grande", "Dourados"]) == ""
-    assert boletim.rodape(pd.Index(["Campo Grande", f"{fonte.PREFIXO_CEMADEN}Bonito (Centro)"])) == cemaden.CITACAO
+def test_so_o_mapa_com_estacao_do_cemaden_leva_o_cemaden_no_credito():
+    assert boletim.credito(["Campo Grande", "Dourados"]) == "INMET/SEMADESC"
+    assert boletim.credito(pd.Index(["Campo Grande", f"{fonte.PREFIXO_CEMADEN}Bonito (Centro)"])) == \
+        "INMET/SEMADESC/CEMADEN"
 
 
 def test_o_pluviometro_do_cemaden_entra_no_ranking_e_a_citacao_vai_embaixo(base):
@@ -124,14 +125,17 @@ def test_o_pluviometro_do_cemaden_entra_no_ranking_e_a_citacao_vai_embaixo(base)
     pontos = pd.concat([ESTACOES, pd.DataFrame({"Estação": [jardim_panama], "Latitude": [-20.48],
                                                 "Longitude": [-54.58]})], ignore_index=True)
     gdf = mapas.preparar_pontos(pontos.assign(**{nome: [0.0, 5.0, 12.0, 3.0, 8.0, 20.4]}), nome)
-    espec = boletim.espec(nome, "Chuva", "mm", "Blues", 1, "MS", "03/11/2026", rodape=boletim.rodape(gdf["Estação"]))
+    espec = boletim.espec(nome, "Chuva", "mm", "Blues", 1, "MS", "03/11/2026", credito=boletim.credito(gdf["Estação"]))
 
     mapa = mapas.mapa_interpolado(gdf, espec, base).axes[0]
     textos = [texto.get_text() for texto in mapa.texts]
 
     assert mapa.get_title() == "Chuva acumulada em 24 h em MS\n03/11/2026"
-    assert any(texto.startswith(f"5 MAIORES ACUMULADOS:\n{jardim_panama}: 20.4\nCorumba: 12.0") for texto in textos)
-    assert f"Dados: INMET/SEMADESC\n{cemaden.CITACAO}" in textos
+    # No ranking, sem o "CEMADEN · ", que alargava o quadro por cima do mapa
+    assert any(texto.startswith("5 MAIORES ACUMULADOS:\nCampo Grande (Jardim Panamá): 20.4\nCorumba: 12.0")
+               for texto in textos)
+    assert "Dados: INMET/SEMADESC/CEMADEN" in textos                            # sem a citação em inglês
+    assert not any("OBSERVATIONAL" in texto for texto in textos)
 
 
 def test_no_boletim_da_chuva_a_cidade_com_varios_pluviometros_mostra_so_o_maior(base):
@@ -141,14 +145,14 @@ def test_no_boletim_da_chuva_a_cidade_com_varios_pluviometros_mostra_so_o_maior(
                                                 "Longitude": [-54.58]})], ignore_index=True)
     gdf = mapas.preparar_pontos(pontos.assign(**{nome: [9.0, 5.0, 12.0, 3.0, 8.0, 20.4]}), nome)
     espec = boletim.espec(nome, "Chuva", "mm", "Blues", 1, "MS", "03/11/2026",
-                          rodape=boletim.rodape(gdf["Estação"]), agrupar_km=config.AGRUPAR_CHUVA_KM)
+                          credito=boletim.credito(gdf["Estação"]), agrupar_km=config.AGRUPAR_CHUVA_KM)
 
     textos = [texto.get_text() for texto in mapas.mapa_interpolado(gdf, espec, base).axes[0].texts]
 
     ranking = next(texto for texto in textos if texto.startswith("5 MAIORES ACUMULADOS"))
-    assert ranking.startswith(f"5 MAIORES ACUMULADOS:\n{jardim_panama}: 20.4\nCorumba: 12.0\nCoxim: 8.0")
+    assert ranking.startswith("5 MAIORES ACUMULADOS:\nCampo Grande (Jardim Panamá): 20.4\nCorumba: 12.0\nCoxim: 8.0")
     assert "Campo Grande:" not in ranking and "9.0" not in textos                 # o INMET da cidade sai do desenho
-    assert f"Dados: INMET/SEMADESC\n{cemaden.CITACAO}\n{mapas.AVISO_DO_GRUPO.format(km=15)}" in textos
+    assert f"Dados: INMET/SEMADESC/CEMADEN\n{mapas.AVISO_DO_GRUPO.format(km=15)}" in textos
 
 
 @pytest.mark.parametrize("teto, esperadas", [

@@ -6,7 +6,7 @@ logos do CEMTEC e da SEMADESC, o ranking das cinco estações, a barra de cores 
 INMET/SEMADESC no rodapé —, mas com **as cores da tela** (decisão de 01/10/2026): a mesma paleta e a mesma
 escala, fixa ou ajustada ao dado, que a pessoa estava vendo quando clicou. O que se baixa é o
 que se vê, pronto para ir ao boletim. O mapa de chuva com pluviômetros do CEMADEN leva embaixo a
-citação que os termos de uso da PED pedem, e nele as estações a até 15 km umas das outras mostram só
+crédito "Dados: INMET/SEMADESC/CEMADEN", e nele as estações a até 15 km umas das outras mostram só
 o maior valor (config.AGRUPAR_CHUVA_KM).
 
 O desenho não é refeito aqui: é o de `modulos/mapas.py` chamado sem `Tela`, que é o caminho do
@@ -17,7 +17,7 @@ import io
 from datetime import datetime
 
 from app import chuva, variaveis
-from modulos import cemaden, config, fonte, mapas
+from modulos import config, fonte, mapas
 
 # Como o ranking chama os valores de cada grandeza — "5 MAIORES TEMPERATURAS", como no main.py.
 # A radiação vai com a chuva porque as duas são acumuladas.
@@ -61,9 +61,9 @@ def espec(nome: str, grandeza: str, unidade: str, paleta: str, decimais: int, uf
                            credito=credito, rodape=rodape, agrupar_km=agrupar_km)
 
 
-def rodape(estacoes) -> str:
-    # O mapa com estação do CEMADEN leva, embaixo, a citação que a PED pede
-    return cemaden.CITACAO if fonte.do_cemaden(estacoes) else ""
+def credito(estacoes) -> str:
+    # O crédito do rodapé: com estação do CEMADEN no mapa, ele entra junto ("INMET/SEMADESC/CEMADEN")
+    return mapas.CREDITO_COM_CEMADEN if fonte.do_cemaden(estacoes) else mapas.CREDITO
 
 
 def nome_do_arquivo(nome: str, uf: str, carimbo: str) -> str:

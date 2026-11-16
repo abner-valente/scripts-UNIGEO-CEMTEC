@@ -34,6 +34,8 @@ MAX_CLASSES = 12
 # subtítulo dizem só o quê e quando: as instituições ficam no rodapé (pedido da equipe, 16/11/2026).
 # A previsão troca pelo do Open-Meteo, cuja licença (CC BY 4.0) obriga o crédito.
 CREDITO = "INMET/SEMADESC"
+# O do mapa que tem estação do CEMADEN (decisão da equipe, 16/11/2026, no lugar da citação em inglês da PED)
+CREDITO_COM_CEMADEN = "INMET/SEMADESC/CEMADEN"
 
 
 @dataclass(frozen=True)
@@ -279,7 +281,7 @@ def mapa_classes_pontual(gdf, coluna: str, espec: EspecClasses, base: BaseCartog
 
 
 def mapa_de_referencia(tabela: pd.DataFrame, titulo: str, subtitulo: str, base: BaseCartografica,
-                       caminho: Path | None = None, rodape: str = "") -> Figure:
+                       caminho: Path | None = None, rodape: str = "", credito: str = CREDITO) -> Figure:
     # As estações numeradas no mapa, e a lista dos números com os nomes ao lado.
     # É a referência para quem não lida com as estações todo dia. Numa imagem parada, os nomes
     # escritos no mapa se atropelariam onde as estações ficam juntas (o sul de MS); o número é curto e
@@ -316,7 +318,7 @@ def mapa_de_referencia(tabela: pd.DataFrame, titulo: str, subtitulo: str, base: 
                    color=cor, transform=lista.transAxes)
         lista.text(x + 0.07, y, nome, ha="left", va="top", fontsize=9, transform=lista.transAxes)
 
-    espec = EspecClasses(titulo, subtitulo, "", [], [], rodape=rodape)
+    espec = EspecClasses(titulo, subtitulo, "", [], [], credito=credito, rodape=rodape)
     return _finalizar(fig, ax, espec, base, caminho)
 
 
@@ -469,7 +471,9 @@ def _ranking(ax, gdf, espec: EspecMapa, tamanho_fonte, sufixos=None) -> None:
     texto = f"{espec.ranking}:\n"
     for indice, linha in extremos.iterrows():
         sufixo = sufixos[indice] if sufixos is not None else ""
-        texto += f"{linha['Estação']}: {_formato(espec)(linha[espec.coluna])}{sufixo}\n"
+        # Sem o "CEMADEN · ": o nome longo alargava o quadro por cima do mapa, e o crédito já diz a rede
+        nome = str(linha["Estação"]).removeprefix(config.PREFIXO_CEMADEN)
+        texto += f"{nome}: {_formato(espec)(linha[espec.coluna])}{sufixo}\n"
     ax.text(0.97, 0.04, texto, transform=ax.transAxes, ha="right", va="bottom",
             fontsize=tamanho_fonte, weight="bold",
             bbox=dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor="black", alpha=0.9))

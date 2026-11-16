@@ -32,8 +32,9 @@ SEM_RESULTADO = "Nenhum resultado"
 # O token que a PED deixa de aceitar antes das 4 horas vem com HTTP 400 e este aviso, em CSV ("Alerta"
 # e, na linha de baixo, "O Token informado é inválido!") ou em JSON: visto na carga do histórico de 05/11/2026
 TOKEN_RECUSADO = "token informado"
-# A citação que os termos de uso da PED pedem em todo produto feito com os dados dela, como está lá
-CITACAO = "DATA FROM THE CEMADEN/MCTIC OBSERVATIONAL NETWORK"
+# Os termos de uso da PED pedem a citação "DATA FROM THE CEMADEN/MCTIC OBSERVATIONAL NETWORK". A equipe
+# decidiu (16/11/2026) creditar em português, junto com as outras instituições: "Dados:
+# INMET/SEMADESC/CEMADEN" (mapas.CREDITO_COM_CEMADEN)
 
 # Uma sessão só, e o token dela, para o processo inteiro: o coletor é um só e consulta em fila
 _ESTADO = {"sessao": None, "token": "", "obtido_em": 0.0, "ultima_consulta": float("-inf")}

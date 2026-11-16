@@ -32,7 +32,7 @@ from . import banco, cemaden, config, inmet, openmeteo
 FONTES = ("apis", "banco")
 
 # O CEMADEN nas listas e nas tabelas, ao lado do INMET: o nome da estação começa por aqui
-PREFIXO_CEMADEN = "CEMADEN · "
+PREFIXO_CEMADEN = config.PREFIXO_CEMADEN
 COLUNAS_ESTACOES_CEMADEN = ["CD_ESTACAO", "DC_NOME", "SG_ESTADO", "VL_LATITUDE", "VL_LONGITUDE", "DT_INICIO_OPERACAO",
                             "CD_SITUACAO", "Estação"]
 SITUACOES_CEMADEN = {False: "Operante", True: "Parada"}

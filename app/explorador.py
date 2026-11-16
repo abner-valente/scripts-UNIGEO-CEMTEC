@@ -39,7 +39,7 @@ from app import referencia
 from app import risco
 from app import superficie
 from app import variaveis
-from modulos import cemaden, config, fonte, mapas, openmeteo, retiradas
+from modulos import config, fonte, mapas, openmeteo, retiradas
 from modulos.produtos import risco_fogo
 
 # A API manda o vento em m/s; os produtos trabalham em km/h, e aqui seguimos a mesma unidade
@@ -613,7 +613,7 @@ def desenho_do_boletim(valores: pd.Series, nome: str, grandeza: str, unidade: st
     gdf = _pontos_do_mapa(valores, nome, uf, subtitulo, direcoes)
     vizinhas = _vizinhas_do_mapa(apoio, nome, uf, subtitulo)
     espec = boletim.espec(nome, grandeza, unidade, paleta, decimais, uf, subtitulo, direcoes is not None,
-                          rodape=boletim.rodape(valores.dropna().index),
+                          credito=boletim.credito(valores.dropna().index),
                           agrupar_km=config.AGRUPAR_CHUVA_KM if grandeza == "Chuva" else 0.0)
     base = base_cartografica(uf)
     return lambda: mapas.mapa_interpolado(gdf, espec, base, niveis=niveis, apoio=vizinhas)
@@ -653,9 +653,9 @@ def nota_do_grupo(valores: pd.Series, nome: str, uf: str) -> str:
             f"({sem_ponto} ficaram sem ponto)." if sem_ponto else "")
 
 
-def citacao_do_cemaden(valores: pd.Series) -> str:
-    citacao = boletim.rodape(valores.dropna().index)
-    return f" {citacao}." if citacao else ""
+def credito_do_cemaden(valores: pd.Series) -> str:
+    # Sob o mapa da tela, quando ele tem estação do CEMADEN: o crédito com as três instituições
+    return f" Dados: {mapas.CREDITO_COM_CEMADEN}." if fonte.do_cemaden(valores.dropna().index) else ""
 
 
 def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, subtitulo: str,
@@ -680,7 +680,7 @@ def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, 
     # A regra do produto vai junto, para ninguém precisar adivinhar que conta é aquela
     casas = produto.decimais
     st.caption(f"{valores.min():.{casas}f} a {valores.max():.{casas}f} {produto.unidade} · "
-               f"{estacoes_no_mapa(valores)} · {produto.regra}.{citacao_do_cemaden(valores)}"
+               f"{estacoes_no_mapa(valores)} · {produto.regra}.{credito_do_cemaden(valores)}"
                + (nota_do_grupo(valores, produto.nome, uf) if chuva else ""))
     arquivo = produto.nome.lower().replace("/", "").replace(" ", "_")
     st.download_button(f"Baixar PNG — {medida}", png, mime="image/png", key=f"baixar_{produto.nome}",
@@ -769,7 +769,7 @@ def painel_da_chuva(rotulo: str, valores: pd.Series, janela: str, subtitulo: str
     if niveis is not None:
         st.image(barra_de_escala("Blues", tuple(niveis), "mm"), width="stretch")
     st.caption(f"{valores.min():.1f} a {valores.max():.1f} mm · {estacoes_no_mapa(valores)} · "
-               f"soma das horas de {janela}.{citacao_do_cemaden(valores)}"
+               f"soma das horas de {janela}.{credito_do_cemaden(valores)}"
                + nota_do_grupo(valores, f"Chuva {rotulo}", uf))
     st.download_button(f"Baixar PNG — chuva {rotulo}", png, mime="image/png",
                        key=f"baixar_chuva_{rotulo}",
@@ -2482,7 +2482,7 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
                   "botão direito** para inclinar e girar." if em_3d and por_unidade else "")
                + nota_das_retiradas(fora)
                + (" **Em laranja, os pluviômetros do CEMADEN**, que entram na superfície como as estações do "
-                  f"INMET. {cemaden.CITACAO}." if not pontos_cemaden.empty else ""))
+                  f"INMET. Dados: {mapas.CREDITO_COM_CEMADEN}." if not pontos_cemaden.empty else ""))
 
     objetos = evento.selection.get("objects", {}) if evento is not None else {}
     celula_clicada = objetos.get("pontos") or objetos.get(PONTOS_NO_RELEVO)
@@ -2515,7 +2515,7 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
             st.altair_chart(grafico_da_chuva_na_estacao(serie, por_dia), width="stretch")
             st.caption("As barras são a chuva de cada " + ("dia" if por_dia else "hora")
                        + "; a linha tracejada, o acumulado ao longo da janela." + NAVEGAR_NO_GRAFICO
-                       + (f" {cemaden.CITACAO}." if do_cemaden_clicada else ""))
+                       + (f" Dados: {mapas.CREDITO_COM_CEMADEN}." if do_cemaden_clicada else ""))
 
 
 def risco_interativo(uf: str, recorte: config.Recorte, intervalo: tuple, estacoes: pd.DataFrame,
@@ -3598,7 +3598,7 @@ def pagina_estacoes() -> None:
                + ". São os pontos dos mapas do painel: o número que cada mapa mostra num ponto é o que aquela "
                  "estação mediu."
                + (" Os pluviômetros só medem chuva, e só entram nos mapas de chuva. "
-                  f"{cemaden.CITACAO}." if do_cemaden else ""))
+                  f"Dados: {mapas.CREDITO_COM_CEMADEN}." if do_cemaden else ""))
 
     busca = st.text_input("Procurar", key="busca_estacoes",
                           placeholder="nome da estação, município, código ou rede (ex.: Dourados, A702, CEMADEN)")
@@ -3623,13 +3623,13 @@ def pagina_estacoes() -> None:
     if do_cemaden:
         titulo = f"Estações meteorológicas do INMET e pluviômetros do CEMADEN em {uf}"
         subtitulo = f"{do_inmet} estações automáticas e {do_cemaden} pluviômetros em operação em {hoje:%d/%m/%Y}"
-        arquivo, rodape = f"Mapa_Estacoes_INMET_CEMADEN_{uf}_{hoje:%Y%m%d}.png", cemaden.CITACAO
+        arquivo, credito = f"Mapa_Estacoes_INMET_CEMADEN_{uf}_{hoje:%Y%m%d}.png", mapas.CREDITO_COM_CEMADEN
     else:
         titulo = f"Estações meteorológicas do INMET em {uf}"
         subtitulo = f"{len(tabela)} estações automáticas em operação em {hoje:%d/%m/%Y}"
-        arquivo, rodape = f"Mapa_Estacoes_INMET_{uf}_{hoje:%Y%m%d}.png", ""
+        arquivo, credito = f"Mapa_Estacoes_INMET_{uf}_{hoje:%Y%m%d}.png", mapas.CREDITO
     st.download_button("Baixar o mapa de referência (PNG)",
-                       lambda: boletim.png(mapas.mapa_de_referencia(tabela, titulo, subtitulo, base, rodape=rodape)),
+                       lambda: boletim.png(mapas.mapa_de_referencia(tabela, titulo, subtitulo, base, credito=credito)),
                        mime="image/png", key="baixar_referencia", on_click="ignore",
                        file_name=arquivo,
                        help="As estações numeradas no mapa, com a lista dos nomes ao lado, no padrão do boletim "
@@ -4042,7 +4042,8 @@ with aba_chuva:
 
                 st.caption(f"Acumulados até **{ate:%d/%m %H:%M}**, somando a chuva de cada hora para "
                            "trás. A barra diz quanto choveu em cada estação; o mapa, onde choveu." +
-                           (f" Com {com_leitura} pluviômetros do CEMADEN. {cemaden.CITACAO}." if com_leitura else ""))
+                           (f" Com {com_leitura} pluviômetros do CEMADEN. Dados: {mapas.CREDITO_COM_CEMADEN}."
+                            if com_leitura else ""))
                 if secas:
                     st.info(f"Sem chuva em nenhuma estação em: {', '.join(secas)}.")
 
