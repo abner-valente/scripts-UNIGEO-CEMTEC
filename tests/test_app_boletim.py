@@ -109,7 +109,8 @@ def test_o_mapa_do_boletim_sai_com_titulo_logos_ranking_e_a_escala_da_tela(base)
     textos = [texto.get_text() for texto in mapa.texts]
     superficie = next(colecao for colecao in mapa.collections if hasattr(colecao, "levels"))
 
-    assert mapa.get_title() == "Temperatura máxima em MS\n03/09/2026 — INMET/SEMADESC"
+    assert mapa.get_title() == "Temperatura máxima em MS\n03/09/2026"             # as instituições, só no rodapé
+    assert "Dados: INMET/SEMADESC" in textos
     assert len(mapa.child_axes) == len(config.LOGOS)                  # cada logo é um eixo filho
     assert any(texto.startswith("5 MAIORES TEMPERATURAS:\nCorumba: 36.2") for texto in textos)
     assert np.allclose(superficie.levels, escala_da_tela)             # a escala fixa da tela

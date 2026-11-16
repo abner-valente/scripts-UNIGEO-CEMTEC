@@ -1399,7 +1399,7 @@ def painel_do_mapa_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: da
                        file_name=f"Mapa_{mapa.titulo.replace(' ', '_')}_{carimbo}.png")
     espec = boletim.espec(mapa.titulo, mapa.grandeza, mapa.unidade, mapa.paleta, mapa.decimais,
                           previsao.UF, previsao.subtitulo(mapa, dia, hoje), mapa.setas,
-                          credito=previsao.CREDITO, coluna=mapa.nome, credito_no_rodape=True)
+                          credito=previsao.CREDITO, coluna=mapa.nome)
     gdf = _pontos_previstos(pontos, mapa.nome)
     botao_do_boletim(mapa.nome.lower(), f"previsto_{mapa.nome}",
                      boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo),
@@ -1437,7 +1437,7 @@ def painel_do_risco_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: d
                   if (no_estado == classe).any()]
         st.caption(f"{' · '.join(partes)} do estado · {mapa.regra}.")
         espec = mapas.EspecClasses(boletim.titulo(mapa.titulo, previsao.UF), subtitulo, "", config.CORES_RISCO,
-                                   config.ROTULOS_RISCO, credito=previsao.CREDITO, credito_no_rodape=True)
+                                   config.ROTULOS_RISCO, credito=previsao.CREDITO)
         desenhar = lambda: mapas.mapa_classes_interpolado(nivel, gdf, mapa.nome, espec, base)  # noqa: E731
     else:
         niveis = niveis_das_horas(horas_alto)
@@ -1450,7 +1450,7 @@ def painel_do_risco_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: d
         st.caption(f"0 a {int(no_estado.max())} h · {mapa.regra}.")
         espec = mapas.EspecMapa("", mapa.nome, boletim.titulo(mapa.titulo, previsao.UF), subtitulo, "",
                                 mapa.paleta, "Horas em risco alto", "5 MAIORES EXPOSIÇÕES", decimais=0,
-                                credito=previsao.CREDITO, credito_no_rodape=True)
+                                credito=previsao.CREDITO)
         desenhar = lambda: mapas.mapa_de_grade(horas_alto, gdf, espec, base, niveis=niveis)  # noqa: E731
 
     arquivo = mapa.titulo.replace(" — ", " ")   # sem o travessão no nome do arquivo
@@ -1598,7 +1598,7 @@ def painel_do_mapa_semanal(mapa: previsao.MapaSemanal, rodada: datetime, semana:
                             subtitulo=previsao.subtitulo_da_semana(semana), arquivo="",
                             cmap=mapa.paleta, unidade=f"{mapa.unidade} em relação ao normal",
                             ranking=previsao.RANKING_SEMANAS, decimais=mapa.decimais,
-                            credito=previsao.CREDITO, credito_no_rodape=True, ranking_absoluto=True,
+                            credito=previsao.CREDITO, ranking_absoluto=True,
                             com_sinal=True)
     gdf = _pontos_previstos(pontos, mapa.titulo)
     botao_do_boletim(mapa.titulo.lower(), f"semana_{chave}",
