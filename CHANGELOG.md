@@ -43,6 +43,21 @@ A rede de pluviômetros automáticos do CEMADEN em MS (29 estações, quatro só
 - **A PED aceita 12 consultas por minuto por conta**, e o coletor faz no máximo 10. Não rode outra coisa contra a PED com a mesma conta enquanto a carga do histórico estiver rodando.
 - **Os mapas de chuva do painel do servidor mudam**: entram os pluviômetros do CEMADEN. No histórico há 7 leituras impossíveis, de 100 a 235 mm em 10 minutos (Rochedo em 01/12/2016, Mundo Novo em 07/10/2021 e 04/05/2023, Rio Verde de Mato Grosso em 25/10/2021, Aquidauana em 02/02/2024, Corguinho em 29/12/2018 e Corumbá em 22/10/2018), que entram nos mapas desses dias. Se aparecerem, retire a estação pela gaveta.
 
+## [0.3.9] — 18/11/2026
+
+Um pedido da equipe de meteorologia: a chuva acumulada de um período qualquer, como de 17/10 a 03/11.
+
+### Atenção ao atualizar
+
+- **Quem roda o painel na própria máquina precisa reiniciá-lo** (Ctrl+C e `streamlit run app/explorador.py` de novo), porque o Streamlit não relê o `app/chuva.py` sozinho. No Streamlit Cloud, é o Reboot. As dependências não mudaram.
+
+### Novo
+
+- **Painel, aba Chuva: o acumulado do período.** A lista de janelas dos acumulados ganha a opção **Período**, que soma a chuva do primeiro dia escolhido na barra lateral até o instante do "Acumulados até". Com o instante no fim do período, que é o padrão, é a chuva do período inteiro. Até aqui só havia as janelas fixas (3 a 96 h) e o mensal, que começa no dia 1º, e nenhuma alcançava um período de mais de quatro dias que atravessasse a virada do mês.
+  - Vem com tudo o que as outras janelas têm: as barras por estação, o mapa, as estações retiradas e o PNG do boletim, com o título "Chuva acumulada no período" e as datas no subtítulo.
+  - A escala de cores segue a duração: até 96 h, as classes curtas; acima disso, as do mensal (até 300 mm).
+  - Quando o período começa antes da carga do mês, a aba busca só as horas que faltam, e só quando a opção é escolhida.
+
 ## [0.3.8] — 16/11/2026
 
 Um pedido da equipe de meteorologia: as instituições saem do título dos mapas e vão para o rodapé.
