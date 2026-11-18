@@ -116,7 +116,52 @@ def test_avisa_quando_o_dado_carregado_nao_cobre_a_janela():
 
 
 def test_rotulos_saem_na_ordem_pedida():
-    assert chuva.rotulos() == ["3 h", "6 h", "12 h", "24 h", "48 h", "72 h", "96 h", "Mensal"]
+    assert chuva.rotulos() == ["3 h", "6 h", "12 h", "24 h", "48 h", "72 h", "96 h", "Mensal", "Período"]
+
+
+# =====================================================
+# O PERÍODO DA BARRA LATERAL
+# =====================================================
+def test_o_periodo_vai_do_primeiro_dia_da_barra_lateral_ate_o_instante():
+    comeco, fim = instante("2026-10-17 00:00"), instante("2026-11-04 00:00")
+    assert chuva.janela(fim, chuva.PERIODO, comeco) == (comeco, fim)
+    assert chuva.horas_da_janela(fim, chuva.PERIODO, comeco) == 18 * 24
+
+
+def test_o_periodo_soma_o_que_passa_de_96_h_e_atravessa_a_virada_do_mes():
+    # 17/10 a 03/11, 1 mm por hora: nem o mensal (só novembro) nem as 96 h chegam lá
+    tabela = leituras("Bonito", "2026-10-15 01:00", 24 * 20, 1.0)
+    comeco, fim = instante("2026-10-17 00:00"), instante("2026-11-04 00:00")
+
+    assert chuva.acumulado(tabela, fim, chuva.PERIODO, comeco)["Bonito"] == pytest.approx(18 * 24)
+    assert chuva.acumulado(tabela, fim, chuva.MENSAL)["Bonito"] == pytest.approx(3 * 24)
+    assert chuva.acumulado(tabela, fim, "96 h")["Bonito"] == pytest.approx(96)
+
+
+def test_o_periodo_entra_a_leitura_do_fim_e_nao_a_do_inicio():
+    tabela = pd.concat([leituras("Bonito", "2026-10-17 00:00", 1, 50.0),     # fecha 16/10: fora
+                        leituras("Bonito", "2026-10-17 01:00", 47, 1.0)])     # até 18/10 23:00
+    soma = chuva.acumulado(tabela, instante("2026-10-18 23:00"), chuva.PERIODO, instante("2026-10-17 00:00"))
+    assert soma["Bonito"] == pytest.approx(47.0)
+
+
+def test_o_periodo_avisa_quando_a_carga_nao_alcanca_o_comeco():
+    tabela = leituras("Bonito", "2026-10-31 01:00", 24 * 4, 1.0)
+    fim = instante("2026-11-04 00:00")
+
+    assert not chuva.cobre(tabela, fim, chuva.PERIODO, instante("2026-10-17 00:00"))
+    assert chuva.cobre(tabela, fim, chuva.PERIODO, instante("2026-10-31 00:00"))
+
+
+def test_sem_o_comeco_do_periodo_o_acumulado_dele_nao_tem_como_sair():
+    with pytest.raises(ValueError):
+        chuva.janela(instante("2026-11-04 00:00"), chuva.PERIODO)
+
+
+def test_a_legenda_do_periodo_na_tela():
+    assert chuva.legenda("24 h") == "Chuva 24 h"
+    assert chuva.legenda(chuva.MENSAL) == "Chuva Mensal"
+    assert chuva.legenda(chuva.PERIODO) == "Chuva do período"
 
 
 # =====================================================

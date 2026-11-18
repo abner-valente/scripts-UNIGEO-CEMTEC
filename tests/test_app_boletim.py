@@ -70,6 +70,7 @@ def test_o_subtitulo_de_cada_modo_e_o_que_o_main_py_escreveria():
 def test_o_acumulado_da_chuva_ganha_nome_de_relatorio():
     assert boletim.nome_da_chuva("24 h") == "Chuva acumulada em 24 h"
     assert boletim.nome_da_chuva(chuva.MENSAL) == "Chuva acumulada no mês"
+    assert boletim.nome_da_chuva(chuva.PERIODO) == "Chuva acumulada no período"
 
 
 def test_a_moldura_leva_as_cores_da_tela_e_nao_as_do_main_py():
