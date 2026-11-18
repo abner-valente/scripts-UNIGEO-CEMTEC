@@ -59,6 +59,8 @@ def subtitulo(modo: str, momento, periodo: config.Periodo) -> str:
 
 def nome_da_chuva(rotulo: str) -> str:
     """O nome de um acumulado no título: "Chuva acumulada em 24 h", "Chuva acumulada no mês"."""
+    if rotulo == chuva.PERIODO:
+        return "Chuva acumulada no período"
     return "Chuva acumulada no mês" if rotulo == chuva.MENSAL else f"Chuva acumulada em {rotulo}"
 
 
