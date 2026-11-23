@@ -78,7 +78,9 @@ def test_o_esquema_pode_rodar_de_novo_sem_erro(conexao):
     assert tabelas == {"estacao": "BASE TABLE", "inmet_horaria": "BASE TABLE",
                        "previsao_horaria_grade": "BASE TABLE", "previsao_horaria_estacao": "BASE TABLE",
                        "previsao_semanal": "BASE TABLE", "previsao_horaria": "VIEW",
-                       "cemaden_estacao": "BASE TABLE", "cemaden_chuva": "BASE TABLE"}
+                       "cemaden_estacao": "BASE TABLE", "cemaden_chuva": "BASE TABLE",
+                       "raios_glm_hora": "BASE TABLE", "raios_glm_cobertura": "BASE TABLE",
+                       "raios_glm_coleta": "BASE TABLE"}
 
 
 def test_o_esquema_roda_de_novo_com_uma_coluna_a_mais_numa_tabela(conexao):

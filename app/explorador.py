@@ -35,6 +35,7 @@ from app import dados as coleta
 from app import interativo
 from app import previsao
 from app import qualidade
+from app import raios
 from app import referencia
 from app import risco
 from app import superficie
@@ -3845,6 +3846,255 @@ def pagina_estacoes() -> None:
                             "(título e logos), em 300 dpi: para boletins, relatórios e apresentações.")
 
 
+# =====================================================
+# RAIOS (GOES-19 GLM)
+# =====================================================
+# Os flashes do GLM que um colega da unidade grava no banco. O Agora lê direto as tabelas dele (o
+# tempo real chega com ~40 s de atraso) e se atualiza sozinho a cada minuto; a Densidade lê a
+# contagem por hora do coletor (`python coletar.py raios`), porque um mês nas tabelas dele levaria
+# minutos. Prioridades da equipe (23/11/2026): o monitoramento, depois a densidade de um período,
+# com todos os flashes, de qualquer qualidade, espalhados pelo estado (sem a conta por estação)
+ATUALIZACAO_DOS_RAIOS = 60     # segundos
+ATRASO_ACEITO_DOS_RAIOS = timedelta(minutes=10)
+VISTAS_DOS_RAIOS = ("Agora", "Densidade")
+JANELAS_DA_DENSIDADE = {"24 h": 24, "48 h": 48, "72 h": 72, "Período": None}
+VISTAS_DA_DENSIDADE = ("Navegável", "Boletim")
+SOBRE_O_GLM = ("O GLM é o sensor de raios do satélite GOES-19: vê os raios dentro da nuvem e os que chegam ao solo, "
+               "sem separar uns dos outros, com ~8 a 10 km de resolução, e não pega todos. Cada flash marca onde "
+               "houve atividade elétrica, e não o lugar exato de uma descarga.")
+METODO_DOS_RAIOS = ("Flashes do GLM (GOES-19) contados por célula de 0,1° e divididos pela área da célula; cada pixel "
+                    "de 0,01° tem o valor da célula em que cai. Todos os flashes, de qualquer qualidade")
+
+
+def inteiro_br(valor: int) -> str:
+    return f"{valor:,}".replace(",", ".")
+
+
+@st.cache_resource(show_spinner=False, max_entries=ESTADOS_NA_MEMORIA)
+def contorno_do_estado(uf: str):
+    return base_cartografica(uf).uf.geometry.union_all()
+
+
+@st.cache_data(ttl=ATUALIZACAO_DOS_RAIOS, show_spinner=False, max_entries=3)
+def carregar_raios_recentes(minuto: str) -> tuple[pd.DataFrame, pd.Timestamp | None, datetime]:
+    # Um cache por minuto: quem abre a página no mesmo minuto não consulta o banco de novo
+    agora = datetime.now(config.FUSO_UTC)
+    flashes, ultimo = fonte.raios_recentes(agora - timedelta(hours=raios.HORAS_DO_GRAFICO), agora)
+    return flashes, ultimo, agora
+
+
+@st.cache_data(ttl=300, show_spinner=False, max_entries=20)
+def carregar_raios_do_periodo(inicio: datetime, fim: datetime) -> tuple[pd.DataFrame, pd.DataFrame]:
+    return fonte.raios_do_periodo(inicio, fim)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def carregar_alcance_dos_raios() -> tuple:
+    return fonte.alcance_dos_raios()
+
+
+def legenda_de_cores(itens: list[tuple[str, str]], titulo: str) -> str:
+    # Uma linha por cor, na ordem dos itens, para ir por cima do mapa navegável (escala_no_mapa)
+    linhas = "".join(f'<span style="display:flex;align-items:center;margin-top:0.25rem">'
+                     f'<span style="width:0.9rem;height:0.9rem;border-radius:2px;margin-right:0.35rem;'
+                     f'background:{cor}"></span>{rotulo}</span>' for cor, rotulo in itens)
+    return f'<div style="font-size:0.8rem;color:#e0e0e0"><b>{titulo}</b>{linhas}</div>'
+
+
+def mapa_dos_raios(uf: str, camada: pdk.Layer, por_cima: bool) -> pdk.Deck:
+    # O fundo, os municípios e o estado dos outros mapas navegáveis. Os flashes do Agora vão por cima
+    # dos limites; as células da densidade, por baixo, como as superfícies
+    estado, municipios = contornos_interativos(uf)
+    limites = [
+        pdk.Layer("GeoJsonLayer", data=municipios, id="municipios", stroked=True, filled=False,
+                  get_line_color=[70, 70, 70, 150], line_width_min_pixels=0.6),
+        pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[235, 235, 235, 220],
+                  line_width_min_pixels=3.5),
+        pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[25, 25, 25],
+                  line_width_min_pixels=1.6),
+    ]
+    camadas = [*limites, camada] if por_cima else [camada, *limites]
+    visao = pdk.ViewState(**visao_inicial(config.recorte_de(uf)))
+    if st.session_state.get("fundo_interativo", True):
+        return pdk.Deck(layers=camadas, map_style=None, initial_view_state=visao, tooltip=interativo.BALAO)
+    return pdk.Deck(layers=camadas, map_provider=None, map_style=interativo.ESTILO_SEM_FUNDO,
+                    initial_view_state=visao, tooltip=interativo.BALAO)
+
+
+def grafico_dos_raios(barras: pd.DataFrame, uf: str) -> alt.Chart:
+    return alt.Chart(barras).mark_bar(color="#ff9900").encode(
+        x=alt.X("inicio:T", title=None, axis=alt.Axis(format="%H:%M", labelFontSize=FONTE_DOS_EIXOS, grid=True,
+                                                      gridOpacity=0.25)),
+        y=alt.Y("flashes:Q", title=f"Flashes em {uf} a cada {raios.MINUTOS_POR_BARRA} min",
+                axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS, grid=True, gridOpacity=0.25)),
+        tooltip=[alt.Tooltip("inicio:T", title="A partir de", format="%d/%m %H:%M"),
+                 alt.Tooltip("flashes:Q", title="Flashes", format=",d")],
+    ).properties(height=220)
+
+
+@st.fragment(run_every=ATUALIZACAO_DOS_RAIOS)
+def raios_agora(uf: str, recorte: config.Recorte) -> None:
+    try:
+        flashes, ultimo, agora = carregar_raios_recentes(datetime.now(config.FUSO_UTC).strftime("%Y%m%d%H%M"))
+    except fonte.ErroFonte as erro:
+        st.error(f"Não foi possível ler os raios no banco ({erro}). A página tenta de novo a cada minuto.")
+        return
+    dentro = raios.no_estado(flashes, contorno_do_estado(uf))
+    idade = raios.idade_em_minutos(flashes["hora_utc"], agora)
+    if ultimo is None or agora - ultimo > ATRASO_ACEITO_DOS_RAIOS:
+        desde = (f"desde {ultimo.tz_convert(recorte.fuso):%d/%m %H:%M}" if ultimo is not None
+                 else f"há mais de {raios.HORAS_DO_GRAFICO} h")
+        st.warning(f"O GLM não chega ao banco {desde}: o script que grava os raios pode estar parado. O mapa mostra "
+                   "o que chegou até lá.")
+    colunas = st.columns(4)
+    for coluna, minutos in zip(colunas, (5, 15, 60)):
+        coluna.metric(f"Flashes em {uf}, últimos {minutos} min", inteiro_br(int((dentro & (idade < minutos)).sum())))
+    colunas[3].metric("Dados até", f"{ultimo.tz_convert(recorte.fuso):%H:%M:%S}" if ultimo is not None else "—",
+                      help="O começo do arquivo de 20 s mais novo do GLM no banco. Ele chega uns 40 s depois; a "
+                           "página se atualiza sozinha a cada minuto.")
+    janela = st.segmented_control("Mapa", raios.JANELAS_DO_AGORA, default=raios.JANELAS_DO_AGORA[-1],
+                                  format_func=lambda minutos: f"Últimos {minutos} min",
+                                  key="janela_raios_agora") or raios.JANELAS_DO_AGORA[-1]
+    pontos = raios.pontos_por_idade(flashes, agora, janela, recorte.fuso)
+    camada = pdk.Layer("ScatterplotLayer", data=pontos[["longitude", "latitude", "cor", "titulo", "detalhe"]],
+                       id="flashes", get_position=["longitude", "latitude"], get_fill_color="cor",
+                       get_line_color=[40, 40, 40, 200], stroked=True, line_width_min_pixels=0.5, get_radius=1500,
+                       radius_min_pixels=2.5, radius_max_pixels=8, pickable=True)
+    st.pydeck_chart(mapa_dos_raios(uf, camada, por_cima=True), key="mapa_raios_agora", height=ALTURA_MAPA)
+    escala_no_mapa("escala_raios_agora", legenda_de_cores(raios.rotulos_das_idades(), "Idade do flash"))
+    st.caption(f"{inteiro_br(len(pontos))} flashes nos últimos {janela} min no mapa, de {uf} e de até ~1° em volta, "
+               "com a cor da idade: o mais novo por cima. **Passe o mouse** num flash para ver a hora. As contagens "
+               f"acima são só de dentro de {uf}. Atualiza sozinho a cada minuto.")
+    st.altair_chart(grafico_dos_raios(raios.por_barra(flashes[dentro], agora, recorte.fuso), uf), width="stretch")
+    st.caption(f"Os flashes dentro de {uf} a cada {raios.MINUTOS_POR_BARRA} min, nas últimas "
+               f"{raios.HORAS_DO_GRAFICO} h: mostra se a atividade cresce ou enfraquece. A última barra está em "
+               "andamento.")
+
+
+def espec_da_densidade(quando: str, uf: str, rodape: str) -> mapas.EspecMapa:
+    return mapas.EspecMapa(tabela="", coluna="densidade", titulo=f"Densidade de raios em {uf}", subtitulo=quando,
+                           arquivo="", cmap="", unidade=raios.UNIDADE_DENSIDADE, ranking="", credito=raios.CREDITO,
+                           rodape=rodape)
+
+
+@st.cache_data(show_spinner=False, max_entries=10)
+def mapa_de_densidade(por_celula: pd.DataFrame, quando: str, uf: str) -> bytes:
+    lon, lat, valores = raios.matriz(raios.densidade(por_celula))
+    figura = mapas.mapa_de_celulas(lon, lat, valores, espec_da_densidade(quando, uf, ""), base_cartografica(uf),
+                                   raios.NIVEIS_DENSIDADE, raios.CORES_DENSIDADE,
+                                   tela=mapas.Tela(barra_de_cores=True))
+    arquivo = io.BytesIO()
+    figura.savefig(arquivo, format="png", dpi=DPI_MAPA, bbox_inches="tight", facecolor="white")
+    return arquivo.getvalue()
+
+
+def desenho_da_densidade(por_celula: pd.DataFrame, quando: str, uf: str, rodape: str):
+    lon, lat, valores = raios.matriz(raios.densidade(por_celula))
+    base = base_cartografica(uf)
+    return lambda: mapas.mapa_de_celulas(lon, lat, valores, espec_da_densidade(quando, uf, rodape), base,
+                                         raios.NIVEIS_DENSIDADE, raios.CORES_DENSIDADE)
+
+
+def geotiff_dos_raios(por_celula: pd.DataFrame, uf: str, quando: str):
+    def gravar() -> bytes:
+        grade = grade_do_geotiff(uf)
+        campo = raios.nos_pixels(por_celula, grade.lon, grade.lat)
+        return geotiff.gravar(campo, grade, f"Densidade de raios ({raios.UNIDADE_DENSIDADE})", raios.UNIDADE_DENSIDADE,
+                              {"TITULO": "Densidade de raios", "QUANDO": quando, "FONTE": raios.CREDITO,
+                               "METODO": METODO_DOS_RAIOS})
+    return gravar
+
+
+def densidade_de_raios(uf: str, recorte: config.Recorte, intervalo: tuple) -> None:
+    try:
+        primeira, ultima = carregar_alcance_dos_raios()
+    except fonte.ErroFonte as erro:
+        st.error(f"Não foi possível ler a contagem dos raios no banco ({erro}).")
+        return
+    if ultima is None:
+        st.info("A contagem dos raios ainda não começou no banco. Ela vem do coletor (`python coletar.py raios`), "
+                "que roda de 10 em 10 minutos.")
+        return
+    rotulo = st.segmented_control("Janela", list(JANELAS_DA_DENSIDADE), default="24 h", key="janela_raios_densidade",
+                                  help="As de 24 a 72 h terminam na última hora contada; a do período vai do primeiro "
+                                       "ao último dia da barra lateral.") or "24 h"
+    horas = JANELAS_DA_DENSIDADE[rotulo]
+    if horas is None:
+        inicio, fim = janela_do_periodo(intervalo, recorte)
+    else:
+        fim = ultima.to_pydatetime()
+        inicio = fim - timedelta(hours=horas)
+    try:
+        por_celula, cobertura = carregar_raios_do_periodo(inicio, fim)
+    except fonte.ErroFonte as erro:
+        st.error(f"Não foi possível ler a contagem dos raios no banco ({erro}).")
+        return
+    inicio_local, fim_local = inicio.astimezone(recorte.fuso), fim.astimezone(recorte.fuso)
+    quando = f"{inicio_local:%d/%m/%Y %H:%M} a {fim_local:%d/%m/%Y %H:%M}"
+    faltam = raios.horas_que_faltam(cobertura, inicio, fim)
+    if faltam["ausentes"]:
+        de, ate = (primeira - pd.Timedelta(hours=1)).tz_convert(recorte.fuso), ultima.tz_convert(recorte.fuso)
+        st.warning(f"{faltam['ausentes']} das {faltam['esperadas']} horas de {quando} não estão na contagem: o GLM no "
+                   f"banco vai de {de:%d/%m/%Y %H:%M} a {ate:%d/%m/%Y %H:%M}. O histórico chega aos poucos, de trás "
+                   "para frente, até 2018. O mapa soma só as horas contadas.")
+    elif faltam["incompletas"]:
+        st.info(f"{faltam['incompletas']} das {faltam['esperadas']} horas estão sem todos os arquivos de 20 s do GLM "
+                "(a hora corrente, ou um arquivo atrasado): entram com o que já chegou.")
+    total = raios.total_no_estado(por_celula, contorno_do_estado(uf))
+    rodape = f"{inteiro_br(total)} flashes no estado, contados em células de 0,1°"
+    um, dois = st.columns(2)
+    um.metric(f"Flashes em {uf}", inteiro_br(total))
+    tabela = raios.densidade(por_celula)
+    maior = float(tabela["densidade"].max()) if not tabela.empty else 0.0
+    dois.metric("Maior densidade", f"{maior:.2f} {raios.UNIDADE_DENSIDADE}".replace(".", ","),
+                help="A da célula de 0,1° com mais flashes por km², no mapa inteiro (o estado e ~1° em volta).")
+    vista = st.segmented_control("Mapa", VISTAS_DA_DENSIDADE, default=VISTAS_DA_DENSIDADE[0],
+                                 key="vista_raios_densidade") or VISTAS_DA_DENSIDADE[0]
+    if vista == VISTAS_DA_DENSIDADE[0]:
+        celulas = raios.celulas_do_mapa(por_celula)
+        meio = 0.5 / config.CELULAS_POR_GRAU_RAIOS
+        quadrado = (f"[[Longitude - {meio}, Latitude - {meio}], [Longitude + {meio}, Latitude - {meio}], "
+                    f"[Longitude + {meio}, Latitude + {meio}], [Longitude - {meio}, Latitude + {meio}]]")
+        camada = pdk.Layer("PolygonLayer", data=celulas[["Longitude", "Latitude", "cor", "titulo", "detalhe"]],
+                           id="celulas", get_polygon=quadrado, filled=True, stroked=False, get_fill_color="cor",
+                           pickable=True)
+        st.pydeck_chart(mapa_dos_raios(uf, camada, por_cima=False), key="mapa_raios_densidade", height=ALTURA_MAPA)
+        classes = list(zip(raios.CORES_DENSIDADE, raios.rotulos_das_classes()))[::-1]
+        escala_no_mapa("escala_raios_densidade", legenda_de_cores(classes, raios.UNIDADE_DENSIDADE))
+        st.caption(f"{quando}: os flashes por km² em cada célula de 0,1° (~10 km), de {uf} e de até ~1° em volta; a "
+                   "célula sem flash fica sem cor. **Passe o mouse** numa célula para ver quantos flashes ela teve.")
+    else:
+        _, meio_da_tela, _ = st.columns([1, 3, 1])
+        with meio_da_tela:
+            st.image(mapa_de_densidade(por_celula, quando, uf), width="stretch")
+        st.caption(f"{quando}: os flashes por km² em cada célula de 0,1° (~10 km), recortados pelo contorno do "
+                   "estado, como no PNG do boletim.")
+    arquivo = f"Mapa_densidade_raios_{uf}_{inicio_local:%Y%m%d_%H}h_a_{fim_local:%Y%m%d_%H}h.png"
+    botao_do_boletim("densidade de raios", "raios", arquivo, desenho_da_densidade(por_celula, quando, uf, rodape))
+    botao_do_geotiff("densidade de raios", "raios", nome_do_geotiff(arquivo), geotiff_dos_raios(por_celula, uf, quando))
+
+
+def pagina_raios() -> None:
+    st.title("Raios (GOES-19)")
+    with st.sidebar:
+        st.header("Filtros")
+        uf, recorte, intervalo = filtros_de_estado_e_periodo()
+        st.checkbox("Mapa de fundo", value=True, key="fundo_interativo",
+                    help="Países, cidades, estradas e rios, da internet. Desligado, ficam só os limites do estado e "
+                         "dos municípios.")
+    if uf != config.UF:
+        st.info(f"Os raios são contados só em {config.NOME_UF} e em volta: escolha {config.UF} na barra lateral.")
+        st.stop()
+    st.caption(SOBRE_O_GLM + " O **Agora** mostra os flashes da última hora e se atualiza sozinho; a **Densidade**, os "
+               "de um período, por km².")
+    vista = st.segmented_control("Ver", VISTAS_DOS_RAIOS, default=VISTAS_DOS_RAIOS[0], key="vista_raios",
+                                 label_visibility="collapsed") or VISTAS_DOS_RAIOS[0]
+    if vista == VISTAS_DOS_RAIOS[0]:
+        raios_agora(uf, recorte)
+    else:
+        densidade_de_raios(uf, recorte, intervalo)
+
+
 def _observado() -> None:
     pass
 
@@ -3860,6 +4110,8 @@ pagina = st.navigation({
         st.Page(pagina_mapas_interativos, title="Mapas interativos", icon=":material/travel_explore:",
                 url_path="mapas-interativos"),
         st.Page(pagina_estacoes, title="Localização Estações", icon=":material/location_on:", url_path="estacoes"),
+        # Os raios só vêm do banco: no Streamlit Cloud, que lê as APIs, a página não aparece
+        *([st.Page(pagina_raios, title="Raios", icon=":material/bolt:", url_path="raios")] if fonte.tem_raios() else []),
     ],
     "Previsão (MS)": [
         st.Page(pagina_previsao, title="Estações", icon=":material/show_chart:", url_path="previsao"),

@@ -156,6 +156,9 @@ FONTE_DADOS = os.getenv("FONTE_DADOS", "apis").strip().lower()
 BANCO_SCHEMA = os.getenv("BANCO_SCHEMA", "climageo").strip()
 BANCO_CONEXOES = {"gravacao": "BANCO_GRAVACAO", "leitura": "BANCO_LEITURA", "teste": "BANCO_TESTE"}
 BANCO_ESQUEMA = RAIZ / "banco" / "esquema.sql"
+# Os raios do GOES-19 (GLM) vêm de tabelas que um colega da unidade alimenta no mesmo banco, neste
+# schema: a dos flashes (relampagos_glm_rt) e a de controle dos arquivos (controle_processamento_glm)
+GLM_SCHEMA = os.getenv("GLM_SCHEMA", "eventos_atmosfericos_rt").strip()
 
 # =====================================================
 # API DO INMET
@@ -206,6 +209,16 @@ TIMEOUT_CEMADEN = 120                # segundos: um dia do estado inteiro vem em
 INTERVALO_CEMADEN = 6.0              # segundos entre o começo de uma consulta e o da seguinte
 PAUSA_NO_LIMITE_CEMADEN = 60         # segundos
 RECUSAS_NO_LIMITE_CEMADEN = 3
+
+# =====================================================
+# RAIOS DO GOES (GLM)
+# =====================================================
+# O GLM manda um arquivo a cada 20 s, com os flashes do disco inteiro (raios dentro da nuvem e até o
+# solo). O banco guarda a contagem por hora em células de 0,1° (~10 km, perto da resolução do GLM),
+# na caixa do estado com ~1° de folga: oeste, sul, leste, norte, em múltiplos da célula
+CAIXA_RAIOS = (-59.2, -25.1, -49.9, -16.1)
+CELULAS_POR_GRAU_RAIOS = 10
+ARQUIVOS_GLM_POR_HORA = 180
 
 # =====================================================
 # PREVISÃO (OPEN-METEO)

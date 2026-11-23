@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import shapely
 from matplotlib import colormaps
-from matplotlib.colors import BoundaryNorm
+from matplotlib.colors import BoundaryNorm, ListedColormap
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patheffects import withStroke
@@ -344,6 +344,28 @@ def mapa_classes_interpolado(grade, gdf, coluna: str, espec: EspecClasses, base:
     _legenda_classes(ax, espec, classes)
     if indicadores is not None:
         _desenhar_indicadores(ax, gdf, indicadores)
+    return _finalizar(fig, ax, espec, base, caminho, tela)
+
+
+def mapa_de_celulas(lon_bordas: np.ndarray, lat_bordas: np.ndarray, valores: np.ndarray, espec: EspecMapa,
+                    base: BaseCartografica, niveis: list[float], cores: list[str], caminho: Path | None = None,
+                    tela: Tela | None = None) -> Figure:
+    # Uma grade já contada célula a célula (a densidade de raios), sem interpolar: cada célula com a
+    # cor da sua classe, e a que tem zero sem cor. Recortada pelo contorno do estado, como as outras
+    fig, ax = _nova_figura((14, 12))
+    # O que passa do último nível sai com a cor da última classe (o "over" da paleta)
+    norma = BoundaryNorm(niveis, ncolors=len(cores))
+    paleta = ListedColormap(cores).with_extremes(over=cores[-1])
+    celulas = ax.pcolormesh(lon_bordas, lat_bordas, np.ma.masked_less_equal(valores, 0), cmap=paleta, norm=norma,
+                            alpha=0.9, shading="flat")
+    celulas.set_clip_path(base.contorno_uf, transform=ax.transData)
+    if tela is None or tela.barra_de_cores:
+        barra = fig.colorbar(celulas, ax=ax, shrink=0.75, extend="max")
+        barra.set_ticks(niveis)
+        barra.set_ticklabels([f"{nivel:g}".replace(".", ",") for nivel in niveis])
+        barra.set_label(espec.unidade, size=_corpo(tela))
+        barra.ax.tick_params(labelsize=_corpo(tela))
+    _desenhar_limites(ax, base)
     return _finalizar(fig, ax, espec, base, caminho, tela)
 
 

@@ -15,6 +15,9 @@ Os pluviômetros do CEMADEN só vêm do banco (`estacoes_cemaden`, `chuva_cemade
 "apis", a PED teria de ser consultada na hora, e o limite de 12 consultas por minuto é da conta,
 dividido com o coletor. As tabelas deles têm as colunas das do INMET, só com a chuva.
 
+Os raios do GOES (GLM) também só vêm do banco (`tem_raios` diz se há): os recentes direto das
+tabelas que um colega da unidade alimenta, e os de um período da contagem por hora do coletor.
+
 As funções procuram o `inmet` na hora de cada chamada, sem guardar referência às funções dele.
 É o que deixa os testes trocarem a API do INMET por dados sintéticos, como sempre fizeram.
 """
@@ -170,6 +173,43 @@ def chuva_cemaden(estacoes: pd.DataFrame, inicio: datetime, fim: datetime,
     print(f"🌧️ CEMADEN: {len(coletados)} de {len(estacoes)} estações com leitura no período"
           + (f"; sem leitura ({len(sem_dados)}): {', '.join(sem_dados)}" if sem_dados else ""))
     return coletados
+
+
+# =====================================================
+# OS RAIOS DO GOES (GLM)
+# =====================================================
+COLUNAS_RAIOS_RECENTES = ["hora_utc", "longitude", "latitude"]
+COLUNAS_RAIOS_POR_CELULA = ["lon_celula", "lat_celula", "flashes"]
+COLUNAS_COBERTURA_RAIOS = ["hora_utc", "arquivos", "sem_arquivo", "flashes"]
+
+
+def tem_raios() -> bool:
+    return _do_banco()
+
+
+def raios_recentes(desde: datetime, ate: datetime) -> tuple[pd.DataFrame, pd.Timestamp | None]:
+    # Os flashes de [desde, ate) na caixa do estado, e o arquivo processado mais novo: até ele, o
+    # GLM está no banco (o tempo real chega com ~40 s de atraso)
+    if not _do_banco():
+        return pd.DataFrame(columns=COLUNAS_RAIOS_RECENTES), None
+    with _conexao() as conexao:
+        return banco.ler_raios_recentes(conexao, desde, ate), banco.ultimo_arquivo_do_glm(conexao, desde)
+
+
+def raios_do_periodo(inicio: datetime, fim: datetime) -> tuple[pd.DataFrame, pd.DataFrame]:
+    # A soma dos flashes de cada célula de 0,1° nas horas de (início, fim], e a cobertura das horas
+    if not _do_banco():
+        return pd.DataFrame(columns=COLUNAS_RAIOS_POR_CELULA), pd.DataFrame(columns=COLUNAS_COBERTURA_RAIOS)
+    with _conexao() as conexao:
+        return banco.ler_raios_por_celula(conexao, inicio, fim), banco.cobertura_dos_raios(conexao, inicio, fim)
+
+
+def alcance_dos_raios() -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    # A primeira e a última hora contadas (pelo fim delas)
+    if not _do_banco():
+        return None, None
+    with _conexao() as conexao:
+        return banco.alcance_dos_raios(conexao)
 
 
 # =====================================================

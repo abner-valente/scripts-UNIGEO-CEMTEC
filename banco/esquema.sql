@@ -223,3 +223,54 @@ COMMENT ON COLUMN previsao_horaria_estacao.chuva IS 'mm, a da hora que termina n
 COMMENT ON COLUMN previsao_horaria_estacao.vento IS 'km/h, a 10 m, na hora cheia.';
 COMMENT ON COLUMN previsao_horaria_estacao.rajada IS 'km/h, a mais forte da hora que termina na hora prevista.';
 COMMENT ON COLUMN previsao_horaria_estacao.direcao IS 'graus, de onde o vento sopra.';
+
+-- =====================================================
+-- OS RAIOS DO GOES (GLM), POR HORA E CÉLULA
+-- =====================================================
+-- Os flashes vêm das tabelas que um colega da unidade alimenta no mesmo banco (o schema
+-- eventos_atmosfericos_rt): um flash por linha, do disco inteiro do GOES-19, sem índice no horário.
+-- Ler um mês dali levaria minutos. Aqui fica só a contagem da caixa do estado com ~1° de folga, por
+-- hora e por célula de 0,1°, que o coletor (`python coletar.py raios`) refaz a cada 10 minutos para
+-- as horas que ganharam arquivo novo. O flash entra na hora do arquivo de 20 s que o trouxe: o que
+-- começou nos últimos segundos de uma hora e terminou na seguinte vai para a seguinte. Sem partições,
+-- para o coletor não precisar criar tabela no meio do caminho: de 2018 até hoje são poucos GB.
+CREATE TABLE IF NOT EXISTS raios_glm_hora (
+    hora_utc   timestamptz NOT NULL,
+    lon_celula smallint NOT NULL,
+    lat_celula smallint NOT NULL,
+    flashes    integer NOT NULL,
+    PRIMARY KEY (hora_utc, lon_celula, lat_celula)
+);
+COMMENT ON TABLE raios_glm_hora IS
+    'Os flashes do GLM do GOES-19 na caixa do estado com ~1° de folga, contados por hora e por célula '
+    'de 0,1°. A célula sem flash não tem linha. Vem das tabelas de eventos_atmosfericos_rt.';
+COMMENT ON COLUMN raios_glm_hora.hora_utc IS
+    'O fim da hora, em UTC, como na chuva: a das 14:00 tem os arquivos de 13:00 a 13:59:40.';
+COMMENT ON COLUMN raios_glm_hora.lon_celula IS
+    'A célula em décimos de grau: floor(longitude × 10). A -546 vai de -54,6° a -54,5°.';
+COMMENT ON COLUMN raios_glm_hora.lat_celula IS
+    'A célula em décimos de grau: floor(latitude × 10). A -205 vai de -20,5° a -20,4°.';
+
+CREATE TABLE IF NOT EXISTS raios_glm_cobertura (
+    hora_utc    timestamptz PRIMARY KEY,
+    arquivos    smallint NOT NULL,
+    sem_arquivo smallint NOT NULL,
+    flashes     integer NOT NULL,
+    contada_em  timestamptz NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE raios_glm_cobertura IS
+    'Quantos dos 180 arquivos de 20 s de cada hora já estavam na contagem: separa a hora sem raio da '
+    'hora que ainda não foi processada. Uma linha por hora que tem algum arquivo no controle.';
+COMMENT ON COLUMN raios_glm_cobertura.arquivos IS 'Os arquivos processados (status CONCLUIDO no controle).';
+COMMENT ON COLUMN raios_glm_cobertura.sem_arquivo IS
+    'Os arquivos que a NOAA não publicou (status ENCERRADO_SEM_CENA): a hora está completa quando '
+    'arquivos + sem_arquivo = 180.';
+COMMENT ON COLUMN raios_glm_cobertura.flashes IS 'O total de flashes da hora na caixa.';
+
+CREATE TABLE IF NOT EXISTS raios_glm_coleta (
+    id                 smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    ultimo_id_controle bigint NOT NULL,
+    atualizada_em      timestamptz NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE raios_glm_coleta IS
+    'Até onde o coletor dos raios leu o controle do GLM: o maior id que ele já viu. Uma linha só.';

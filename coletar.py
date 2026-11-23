@@ -11,6 +11,7 @@ Feitos para o Agendador de Tarefas do Windows, pelo servidor\\coletar.bat, e rod
     python coletar.py previsao                       # de hora em hora: as rodadas novas dos modelos e do EC46
     python coletar.py cemaden                        # de hora em hora: o cadastro e os últimos 3 dias dos pluviômetros
     python coletar.py cemaden --historico 2015-03-01 # uma vez só: os dias desde a data, retomando de onde parou
+    python coletar.py raios                          # de 10 em 10 minutos: a contagem dos raios do GOES por hora e célula
 
 A conexão é a BANCO_GRAVACAO do .env, no schema BANCO_SCHEMA (padrão: climageo). Com --teste
 (`python coletar.py inmet --teste`), é a BANCO_TESTE, no schema climageo_teste, que os testes
@@ -28,7 +29,7 @@ from datetime import datetime, timedelta, timezone
 
 import psycopg
 
-from modulos import banco, cemaden, coletor_cemaden, coletor_inmet, coletor_previsao, config, inmet
+from modulos import banco, cemaden, coletor_cemaden, coletor_inmet, coletor_previsao, coletor_raios, config, inmet
 
 SCHEMA_DE_TESTE = "climageo_teste"
 # A carga do histórico leva horas sem ninguém olhando (~22 a do INMET, ~8 a do CEMADEN). Se a conexão
@@ -89,6 +90,9 @@ def argumentos(linha: list[str] | None = None) -> argparse.Namespace:
                             help="os dias desde DATA (UTC), pulando os que já estão no banco")
     do_cemaden.add_argument("--ate", type=ler_data, metavar="DATA",
                             help="com --historico: até o dia DATA (UTC), inclusive (padrão: hoje)")
+    trabalhos.add_parser("raios", parents=[comum],
+                         help="a contagem dos raios do GOES (GLM) no estado, por hora e célula de 0,1° "
+                              "(de 10 em 10 minutos)")
     opcoes = parser.parse_args(linha)
     if getattr(opcoes, "ate", None) and not opcoes.historico:
         parser.error("--ate só vale com --historico")
@@ -157,6 +161,9 @@ def executar(opcoes: argparse.Namespace) -> int:
             if opcoes.trabalho == "esquema":
                 banco.criar_esquema(conexao)
                 print(f"✅ Esquema conferido no schema {schema}: as tabelas que faltavam foram criadas.")
+                return 0
+            if opcoes.trabalho == "raios":
+                coletor_raios.coletar(conexao)
                 return 0
             if opcoes.trabalho == "cemaden":
                 coleta = coletor_cemaden.coletar_ultimos(conexao)
