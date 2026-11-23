@@ -37,8 +37,11 @@ def criar_grade(limites: tuple[float, float, float, float], resolucao: int) -> t
     return np.meshgrid(np.linspace(lon_min, lon_max, resolucao), np.linspace(lat_min, lat_max, resolucao))
 
 
-def interpolar_idw(lons, lats, valores, lon_grade, lat_grade, vizinhos: int = 8, potencia: float = 2) -> np.ndarray:
-    centro = float(np.mean(lon_grade)), float(np.mean(lat_grade))
+def interpolar_idw(lons, lats, valores, lon_grade, lat_grade, vizinhos: int = 8, potencia: float = 2,
+                   centro: tuple[float, float] | None = None) -> np.ndarray:
+    # O centro fixa a projeção das distâncias. Sem ele, é o meio da grade; quem interpola só parte
+    # dela (os pixels do estado, no GeoTIFF) passa o da grade inteira, para dar os mesmos números
+    centro = centro or (float(np.mean(lon_grade)), float(np.mean(lat_grade)))
     pontos = _em_km(lons, lats, *centro)
     k = min(vizinhos, len(pontos))
     distancias, indices = cKDTree(pontos).query(_em_km(lon_grade, lat_grade, *centro), k=k)

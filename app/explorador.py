@@ -39,7 +39,7 @@ from app import referencia
 from app import risco
 from app import superficie
 from app import variaveis
-from modulos import config, fonte, mapas, openmeteo, retiradas
+from modulos import config, fonte, geotiff, mapas, openmeteo, retiradas
 from modulos.produtos import risco_fogo
 
 # A API manda o vento em m/s; os produtos trabalham em km/h, e aqui seguimos a mesma unidade
@@ -67,6 +67,18 @@ DPI_MAPA = 150       # serve para a tela e para o PNG baixado: um desenho só, c
 # passaria de 20 MB. Em 72 dpi o quadro tem 854 px — legível na tela e ~68 KB no GIF.
 DPI_GIF = 72
 MAPAS_POR_LINHA = 3  # acima disso cada mapa fica estreito demais para se lerem os valores
+# O GeoTIFF de cada mapa, para a UNIGEO abrir no SIG (pedido de 23/11/2026)
+AJUDA_DO_GEOTIFF = ("Para o QGIS, o ArcGIS ou o PIN MS: o valor de cada pixel de 0,01° (~1 km), em SIRGAS 2000 "
+                    "(EPSG:4674), recortado pelo estado. A superfície é a deste mapa; as cores ficam por conta do SIG.")
+AJUDA_DO_GEOTIFF_DO_RISCO = ("Para o QGIS, o ArcGIS ou o PIN MS: o nível de cada pixel de 0,01° (~1 km), de 0 (sem "
+                             "condição) a 3 (risco alto), em SIRGAS 2000 (EPSG:4674), recortado pelo estado e já com "
+                             "as cores do painel. O risco é calculado na grade dos produtos, de ~8 km: os pixels de "
+                             "uma célula têm o mesmo nível.")
+AJUDA_DO_GEOTIFF_DAS_HORAS = ("Para o QGIS, o ArcGIS ou o PIN MS: as horas em risco alto de cada pixel de 0,01° "
+                              "(~1 km), em SIRGAS 2000 (EPSG:4674), recortado pelo estado. A conta é feita na grade "
+                              "dos produtos, de ~8 km: os pixels de uma célula têm o mesmo número.")
+METODO_DO_RISCO = ("Regra 30-30-30: temperatura, umidade e rajada das estações interpoladas separadas (IDW) na grade "
+                   "dos produtos (~8 km), e a regra aplicada célula a célula; nos pixels, pelo vizinho mais próximo")
 # Quantos estados ficam com os shapefiles na memória ao mesmo tempo. Cada um prende ~25 MB de
 # GeoDataFrame e grade, e esses caches são **do processo, não da sessão**: na nuvem um
 # contêiner serve a equipe inteira, então quem passeia pelo seletor enche a memória de todos.
@@ -608,6 +620,95 @@ def botao_do_boletim(medida: str, chave: str, arquivo: str, desenhar) -> None:
                             "barra de cores, em 300 dpi. As cores e a escala são as da tela.")
 
 
+@st.cache_resource(show_spinner=False, max_entries=ESTADOS_NA_MEMORIA)
+def grade_do_geotiff(uf: str) -> geotiff.Grade:
+    base = base_cartografica(uf)
+    return geotiff.grade_do_estado(base.uf.geometry.union_all(), base.recorte)
+
+
+def nome_do_geotiff(png: str) -> str:
+    # O nome do PNG do boletim com a outra extensão: o estado e o instante já estão nele
+    return png.removesuffix(".png") + ".tif"
+
+
+def botao_do_geotiff(medida: str, chave: str, arquivo: str, gravar, ajuda: str = AJUDA_DO_GEOTIFF) -> None:
+    # Como o do boletim, o arquivo só é feito no clique
+    st.download_button(f"Baixar GeoTIFF — {medida}", gravar, mime=geotiff.MIME, key=f"geotiff_{chave}",
+                       file_name=arquivo, on_click="ignore", help=ajuda)
+
+
+def geotiff_das_estacoes(valores: pd.Series, apoio: pd.Series | None, nome: str, unidade: str, uf: str,
+                         quando: str):
+    # O IDW das mesmas medidas do mapa, com as vizinhas na borda, refeito em cada pixel
+    def gravar() -> bytes:
+        pontos = _com_coordenadas(valores, nome, uf)
+        if apoio is not None and not apoio.dropna().empty:
+            pontos = pd.concat([pontos, _com_coordenadas(apoio, nome, uf)], ignore_index=True)
+        grade = grade_do_geotiff(uf)
+        campo = geotiff.idw(pontos["Longitude"], pontos["Latitude"], pontos[nome], grade)
+        return geotiff.gravar(campo, grade, f"{nome} ({unidade})", unidade,
+                              {"TITULO": nome, "QUANDO": quando, "FONTE": boletim.credito(valores.dropna().index),
+                               "METODO": geotiff.METODO_IDW})
+    return gravar
+
+
+def geotiff_previsto(valores: pd.Series, pontos_grade: pd.DataFrame, nome: str, unidade: str, quando: str,
+                     metodo: str, descricao: str | None = None):
+    # A superfície do modelo pela mesma bilinear dos mapas, calculada direto nos pixels
+    def gravar() -> bytes:
+        grade = grade_do_geotiff(previsao.UF)
+        campo = previsao.superficie(valores, pontos_grade, grade.lon, grade.lat)
+        return geotiff.gravar(np.full(grade.lon.shape, np.nan) if campo is None else campo, grade,
+                              descricao or f"{nome} ({unidade})", unidade,
+                              {"TITULO": nome, "QUANDO": quando, "FONTE": previsao.CREDITO, "METODO": metodo})
+    return gravar
+
+
+def geotiff_da_grade(campo: np.ndarray, uf: str, nome: str, quando: str, credito: str, metodo: str,
+                     classes: bool, unidade: str = ""):
+    # Uma superfície da grade dos produtos (o risco de fogo), levada aos pixels pelo vizinho mais próximo
+    def gravar() -> bytes:
+        base, grade = base_cartografica(uf), grade_do_geotiff(uf)
+        nos_pixels = geotiff.da_malha(campo, base.lon_grade, base.lat_grade, grade)
+        metadados = {"TITULO": nome, "QUANDO": quando, "FONTE": credito, "METODO": metodo}
+        if classes:
+            return geotiff.gravar_classes(nos_pixels, grade, config.CORES_RISCO, config.ROTULOS_RISCO, nome,
+                                          metadados)
+        return geotiff.gravar(nos_pixels, grade, f"{nome} ({unidade})", unidade, metadados)
+    return gravar
+
+
+def passo_da_grade(pontos_grade: pd.DataFrame) -> str:
+    return f"{previsao.espacamento(pontos_grade):g}°".replace(".", ",")
+
+
+def metodo_previsto(modelo: str, rodada: datetime, pontos_grade: pd.DataFrame) -> str:
+    return (f"{openmeteo.NOMES[modelo]}, rodada de {rodada:%d/%m/%Y %H} UTC: a superfície do modelo, na grade de "
+            f"{passo_da_grade(pontos_grade)}, levada aos pixels por interpolação bilinear (não é IDW de estação)")
+
+
+def metodo_do_risco_previsto(modelo: str, rodada: datetime) -> str:
+    return (f"Regra 30-30-30 com as três medidas de cada hora do {openmeteo.NOMES[modelo]} (rodada de "
+            f"{rodada:%d/%m/%Y %H} UTC), levadas à grade dos produtos (~8 km) por interpolação bilinear, e a regra "
+            "aplicada célula a célula; nos pixels, pelo vizinho mais próximo")
+
+
+def geotiff_do_risco_previsto(mapa: previsao.MapaPrevisto, nivel: np.ndarray, horas_alto: np.ndarray, quando: str,
+                              modelo: str, rodada: datetime):
+    # O nível, com a paleta, ou as horas em risco alto, conforme o mapa
+    do_nivel = mapa.risco == "nivel"
+    return geotiff_da_grade(nivel if do_nivel else horas_alto, previsao.UF, mapa.titulo, quando, previsao.CREDITO,
+                            metodo_do_risco_previsto(modelo, rodada), classes=do_nivel, unidade="" if do_nivel else "h")
+
+
+def geotiff_semanal(mapa: previsao.MapaSemanal, valores: pd.Series, pontos_grade: pd.DataFrame, semana: date,
+                    rodada: datetime):
+    metodo = (f"EC46 (média dos membros), rodada de {rodada:%d/%m/%Y %H} UTC: o desvio em relação ao normal da época, "
+              f"na grade de {passo_da_grade(pontos_grade)}, levado aos pixels por interpolação bilinear")
+    return geotiff_previsto(valores, pontos_grade, mapa.titulo, mapa.unidade, previsao.subtitulo_da_semana(semana),
+                            metodo, f"{mapa.titulo} ({mapa.unidade} em relação ao normal)")
+
+
 def desenho_do_boletim(valores: pd.Series, nome: str, grandeza: str, unidade: str, paleta: str,
                        decimais: int, subtitulo: str, uf: str, niveis=None, direcoes=None, apoio=None):
     gdf = _pontos_do_mapa(valores, nome, uf, subtitulo, direcoes)
@@ -690,6 +791,8 @@ def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, 
                      desenho_do_boletim(valores, produto.titulo or produto.nome, produto.grandeza,
                                         produto.unidade, produto.paleta, produto.decimais, subtitulo, uf,
                                         niveis, direcoes, apoio))
+    botao_do_geotiff(medida, produto.nome, nome_do_geotiff(boletim.nome_do_arquivo(produto.nome, uf, carimbo)),
+                     geotiff_das_estacoes(valores, apoio, produto.nome, produto.unidade, uf, subtitulo))
 
 
 def escala_do_periodo(produto: variaveis.Produto, leituras: pd.DataFrame, horas_janela):
@@ -752,6 +855,21 @@ def painel_do_gif(produto: variaveis.Produto, leituras: pd.DataFrame, modo: str,
                                  f"{momentos[0]:%Y%m%d}_a_{momentos[-1]:%Y%m%d}.gif")
 
 
+def carimbo_do_momento(modo: str, momento, intervalo: tuple) -> str:
+    # No nome dos arquivos baixados: a hora, o dia ou o período do mapa
+    if modo == variaveis.PERIODO:
+        return f"{intervalo[0]:%Y%m%d}_a_{intervalo[1]:%Y%m%d}"
+    return f"{momento:%Y%m%d}" if modo == variaveis.DIA else f"{momento:%Y%m%d_%H}h"
+
+
+def carimbo_da_chuva(rotulo: str, comeco, ate) -> str:
+    # O do período leva no nome do arquivo os dias que soma, como o "período inteiro" dos Mapas Boletim
+    if rotulo == chuva_calc.PERIODO:
+        return (f"{comeco:%Y%m%d}_a_{ate - timedelta(days=1):%Y%m%d}" if ate.hour == 0
+                else f"{comeco:%Y%m%d}_a_{ate:%Y%m%d_%H}h")
+    return f"{ate:%Y%m%d_%H}h"
+
+
 def painel_da_chuva(rotulo: str, valores: pd.Series, janela: str, subtitulo: str, carimbo: str,
                     rotulos: bool, uf: str, niveis=None, apoio=None) -> None:
     legenda = chuva_calc.legenda(rotulo)
@@ -781,6 +899,8 @@ def painel_da_chuva(rotulo: str, valores: pd.Series, janela: str, subtitulo: str
                      boletim.nome_do_arquivo(nome, uf, carimbo),
                      desenho_do_boletim(valores, nome, "Chuva", "mm", "Blues", 1, subtitulo, uf, niveis,
                                         apoio=apoio))
+    botao_do_geotiff(medida, f"chuva_{rotulo}", nome_do_geotiff(boletim.nome_do_arquivo(nome, uf, carimbo)),
+                     geotiff_das_estacoes(valores, apoio, legenda, "mm", uf, subtitulo))
 
 
 @st.cache_data(show_spinner=False, max_entries=2)
@@ -1215,8 +1335,8 @@ def painel_do_mapa_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: da
                                  diaria_estacoes, estacoes)
         return
     base = base_cartografica(previsao.UF)
-    grade = previsao.superficie(previsao.valores_do_dia(diaria_grade, mapa, dia, hoje), pontos_grade,
-                                base.lon_grade, base.lat_grade)
+    valores = previsao.valores_do_dia(diaria_grade, mapa, dia, hoje)
+    grade = previsao.superficie(valores, pontos_grade, base.lon_grade, base.lat_grade)
     if grade is None:
         st.info(f"O {openmeteo.NOMES[modelo]} não traz {mapa.nome.lower()} para {previsao.nome_do_dia(dia)}.")
         return
@@ -1245,6 +1365,10 @@ def painel_do_mapa_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: da
                      boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo),
                      lambda: mapas.mapa_de_grade(grade, gdf, espec, base,
                                                  niveis=list(escala) if escala else 20))
+    botao_do_geotiff(mapa.nome.lower(), f"previsto_{mapa.nome}",
+                     nome_do_geotiff(boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo)),
+                     geotiff_previsto(valores, pontos_grade, mapa.nome, mapa.unidade,
+                                      previsao.subtitulo(mapa, dia, hoje), metodo_previsto(modelo, rodada, pontos_grade)))
 
 
 def painel_do_risco_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: datetime, dia: date,
@@ -1294,6 +1418,10 @@ def painel_do_risco_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: d
                        file_name=f"Mapa_{arquivo.replace(' ', '_')}_{carimbo}.png")
     botao_do_boletim(mapa.nome.lower(), f"previsto_{mapa.nome}",
                      boletim.nome_do_arquivo(arquivo, previsao.UF, carimbo), desenhar)
+    botao_do_geotiff(mapa.nome.lower(), f"previsto_{mapa.nome}",
+                     nome_do_geotiff(boletim.nome_do_arquivo(arquivo, previsao.UF, carimbo)),
+                     geotiff_do_risco_previsto(mapa, nivel, horas_alto, subtitulo, modelo, rodada),
+                     AJUDA_DO_GEOTIFF_DO_RISCO if mapa.risco == "nivel" else AJUDA_DO_GEOTIFF_DAS_HORAS)
 
 
 def calendario_do_risco_previsto(dias: pd.DataFrame) -> alt.Chart:
@@ -1404,8 +1532,8 @@ def painel_do_mapa_semanal(mapa: previsao.MapaSemanal, rodada: datetime, semana:
                            semanal_estacoes: pd.DataFrame, estacoes: pd.DataFrame, titulo: str) -> None:
     st.markdown(f"**{titulo}**")
     base = base_cartografica(previsao.UF)
-    grade = previsao.superficie(previsao.valores_da_semana(semanal_grade, mapa, semana), pontos_grade,
-                                base.lon_grade, base.lat_grade)
+    valores = previsao.valores_da_semana(semanal_grade, mapa, semana)
+    grade = previsao.superficie(valores, pontos_grade, base.lon_grade, base.lat_grade)
     if grade is None:
         st.info(f"O EC46 não traz {mapa.nome.lower()} para a semana de {previsao.nome_da_semana(semana)}.")
         return
@@ -1437,6 +1565,9 @@ def painel_do_mapa_semanal(mapa: previsao.MapaSemanal, rodada: datetime, semana:
     botao_do_boletim(mapa.titulo.lower(), f"semana_{chave}",
                      boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo),
                      lambda: mapas.mapa_de_grade(grade, gdf, espec, base, niveis=list(escala)))
+    botao_do_geotiff(mapa.titulo.lower(), f"semana_{chave}",
+                     nome_do_geotiff(boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo)),
+                     geotiff_semanal(mapa, valores, pontos_grade, semana, rodada))
 
 
 def semana_contra_o_normal(tabela: pd.DataFrame, grandeza: str, unidade: str | None = None) -> alt.Chart:
@@ -2025,6 +2156,11 @@ def variaveis_interativas(uf: str, recorte: config.Recorte, intervalo: tuple, es
                + ". **Passe o mouse** em qualquer ponto para ler o valor interpolado, e **clique** para ver a "
                  "série do ponto, ou a de uma estação."
                  + nota_das_retiradas(fora))
+    carimbo = carimbo_do_momento(modo, momento, intervalo)
+    botao_do_geotiff(produto.nome.lower(), f"interativo_{produto.nome}",
+                     nome_do_geotiff(boletim.nome_do_arquivo(produto.nome, uf, carimbo)),
+                     geotiff_das_estacoes(valores, valores_apoio, produto.nome, produto.unidade, uf,
+                                          f"{momento:%d/%m/%Y %H:%M}" if modo == variaveis.HORA else rotulo))
 
     # No período inteiro, a série é a do dia: o produto do período é o diário somado no tempo
     modo_serie = variaveis.DIA if modo == variaveis.PERIODO else modo
@@ -2411,6 +2547,8 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
         comeco, _ = chuva_calc.janela(ate, rotulo, inicio_local)
         quando, legenda = f"{comeco:%d/%m %H:%M} a {ate:%d/%m %H:%M}", chuva_calc.legenda(rotulo)
         serie_de, serie_ate = comeco, ate
+        carimbo, nome_do_arquivo = carimbo_da_chuva(rotulo, comeco, ate), boletim.nome_da_chuva(rotulo)
+        quando_no_arquivo = f"{comeco:%d/%m/%Y %H:%M} a {ate:%d/%m/%Y %H:%M}"
     else:
         tipo = variaveis.HORA if modo == "Hora a hora" else variaveis.DIA
         inicio_local = inicio.astimezone(recorte.fuso)
@@ -2431,6 +2569,8 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
         quando = formatar(momento)
         legenda = "Chuva na hora" if tipo == variaveis.HORA else "Chuva do dia"
         serie_de, serie_ate = inicio_local, fim.astimezone(recorte.fuso)
+        carimbo, nome_do_arquivo = carimbo_do_momento(tipo, momento, ()), produto.nome
+        quando_no_arquivo = f"{momento:%d/%m/%Y}" if tipo == variaveis.DIA else f"{momento:%d/%m/%Y %H:%M}"
     # Sem as retiradas no ponto e na superfície; a chuva da estação clicada fica com todas
     valores, valores_apoio = retiradas.retirar(valores, fora), retiradas.retirar(valores_apoio, fora)
     valores_cemaden = retiradas.retirar(valores_cemaden, fora)
@@ -2487,6 +2627,9 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
                + nota_das_retiradas(fora)
                + (" **Em laranja, os pluviômetros do CEMADEN**, que entram na superfície como as estações do "
                   f"INMET. Dados: {mapas.CREDITO_COM_CEMADEN}." if not pontos_cemaden.empty else ""))
+    botao_do_geotiff(legenda.lower(), "interativo_chuva",
+                     nome_do_geotiff(boletim.nome_do_arquivo(nome_do_arquivo, uf, carimbo)),
+                     geotiff_das_estacoes(valores, valores_apoio, legenda, produto.unidade, uf, quando_no_arquivo))
 
     objetos = evento.selection.get("objects", {}) if evento is not None else {}
     celula_clicada = objetos.get("pontos") or objetos.get(PONTOS_NO_RELEVO)
@@ -2571,17 +2714,20 @@ def risco_interativo(uf: str, recorte: config.Recorte, intervalo: tuple, estacoe
         coluna, legenda = risco_fogo.COLUNA_NIVEL_HORA, "Na hora"
         hora_local = hora.tz_convert(recorte.fuso).tz_localize(None)
         das_celulas, horas_alto = avaliadas[hora].estacoes, None
+        momento, quando = hora_local, f"{hora_local:%d/%m/%Y %H:%M}"
     elif modo == variaveis.DIA:
         dias = risco.por_dia(avaliadas)
         dia = linha_do_tempo("Dia", list(dias), "dia_risco_interativo", lambda data: f"{data:%d/%m/%Y}")
         grade, pontos = dias[dia], risco.estacoes_do_dia(avaliadas, dia)
         coluna, legenda = risco_fogo.COLUNA_NIVEL_HORA, "Pior nível do dia"
         horas_alto = risco.horas_em_risco_alto(risco.do_dia(avaliadas, dia))
+        momento, quando = dia, f"{dia:%d/%m/%Y}"
     else:
         grade = risco.pior_nivel(avaliadas)
         pontos = risco.resumo(do_produto, config.Periodo.de_datas(*intervalo, fuso=recorte.fuso), uf)
         coluna, legenda = risco_fogo.COLUNA_NIVEL, "Pior nível do período"
         horas_alto = risco.horas_em_risco_alto(avaliadas)
+        momento, quando = None, f"{intervalo[0]:%d/%m/%Y} a {intervalo[1]:%d/%m/%Y}"
     if modo != variaveis.HORA:
         das_celulas = pd.concat([avaliada.estacoes for avaliada in avaliadas.values()]).drop_duplicates("Estação")
     # As vizinhas já entraram na superfície; nos pontos, só as do estado, e sem as retiradas (o
@@ -2621,6 +2767,12 @@ def risco_interativo(uf: str, recorte: config.Recorte, intervalo: tuple, estacoe
                + (f" No relevo, cada nível sobe {interativo.metros_por_nivel() / 1000:.0f} km; **arraste com o "
                   "botão direito** para inclinar e girar." if em_3d else "")
                + nota_das_retiradas(fora))
+    titulo = "Risco de fogo na hora" if modo == variaveis.HORA else f"Risco de fogo: {legenda.lower()}"
+    botao_do_geotiff("risco de fogo", "interativo_risco",
+                     nome_do_geotiff(boletim.nome_do_arquivo("Risco de fogo", uf,
+                                                             carimbo_do_momento(modo, momento, intervalo))),
+                     geotiff_da_grade(grade, uf, titulo, quando, mapas.CREDITO, METODO_DO_RISCO, classes=True),
+                     AJUDA_DO_GEOTIFF_DO_RISCO)
 
     if imovel is not None:
         painel_do_risco_no_imovel(celulas, imovel, avaliadas, uf, legenda, recorte.fuso, hora_local)
@@ -2975,9 +3127,14 @@ def dias_interativos(modelo: str, horaria: pd.DataFrame, horaria_estacoes: pd.Da
             resumo = f"0 a {int(no_estado.max())} h"
         conta = (f"sai das três medidas de cada hora nos {da_grade}, levadas a cada célula pela interpolação "
                  "bilinear, com a regra 30-30-30 aplicada célula a célula")
+        gravar = geotiff_do_risco_previsto(mapa, nivel, horas_alto, previsao.subtitulo_do_risco(dia), modelo, rodada)
+        ajuda = AJUDA_DO_GEOTIFF_DO_RISCO if mapa.risco == "nivel" else AJUDA_DO_GEOTIFF_DAS_HORAS
     else:
         chave = ("dia", modelo, rodada, mapa.nome, dia, hoje)
         valores = previsao.valores_do_dia(diaria_grade, mapa, dia, hoje)
+        gravar = geotiff_previsto(valores, pontos_grade, mapa.nome, mapa.unidade, previsao.subtitulo(mapa, dia, hoje),
+                                  metodo_previsto(modelo, rodada, pontos_grade))
+        ajuda = AJUDA_DO_GEOTIFF
         calculadas = superficies_previstas(chave, _valores=valores, _pontos=pontos_grade,
                                            _direcoes=previsao.direcoes_do_dia(diaria_grade, dia) if mapa.setas else None)
         if calculadas is None:
@@ -3008,6 +3165,10 @@ def dias_interativos(modelo: str, horaria: pd.DataFrame, horaria_estacoes: pd.Da
         imagem, pontos, celulas, relevo, imovel, chave_do_mapa("mapa_previsto_interativo", em_3d, imovel),
         bool(mapa.risco), mapa.risco == "nivel", niveis, mapa.paleta, "horas" if mapa.risco else mapa.unidade,
         legenda_do_mapa(mapa.nome, previsao.nome_do_dia(dia), resumo, mapa.regra, conta, em_3d), escritos)
+    botao_do_geotiff(mapa.nome.lower(), "previsto_interativo_dia",
+                     nome_do_geotiff(boletim.nome_do_arquivo(mapa.titulo.replace(" — ", " "), previsao.UF,
+                                                             previsao.carimbo(modelo, rodada, mapa, dia, hoje))),
+                     gravar, ajuda)
     if imovel is not None:
         painel_previsto_no_imovel(mapa, celulas, imovel, pontos_grade, modelo, dia, hoje)
     if tipo == "ponto":
@@ -3197,6 +3358,8 @@ def horas_interativas(modelo: str, horaria: pd.DataFrame, horaria_estacoes: pd.D
     grade, malha = grade_do_ponto(previsao.UF), malha_fina(previsao.UF)
     da_grade = pontos_da_origem(origem, pontos_grade)
     tabela_estacoes = previsao.nas_estacoes_na_hora(horaria_estacoes, estacoes, mapa, hora)
+    hora_local = hora.tz_convert(config.FUSO_MS)
+    quando = f"Previsão para {hora_local:%d/%m/%Y %H:%M}"
     da_estacao = tabela_estacoes.set_index("Estação")[mapa.nome]
     relevo = altura = None
     if mapa.risco:
@@ -3212,9 +3375,15 @@ def horas_interativas(modelo: str, horaria: pd.DataFrame, horaria_estacoes: pd.D
         resumo = resumo_do_risco(nivel[grade.dentro])
         conta = (f"sai das três medidas da hora nos {da_grade}, levadas a cada célula pela interpolação bilinear, "
                  "com a regra 30-30-30 aplicada célula a célula (no balão, ✔ e ✘ em cada uma)")
+        gravar = geotiff_da_grade(nivel, previsao.UF, mapa.titulo, quando, previsao.CREDITO,
+                                  metodo_do_risco_previsto(modelo, rodada), classes=True)
+        ajuda = AJUDA_DO_GEOTIFF_DO_RISCO
     else:
         chave = ("hora", modelo, rodada, mapa.nome, hora)
         valores = previsao.valores_da_hora(horaria, mapa.coluna, hora)
+        gravar = geotiff_previsto(valores, pontos_grade, mapa.nome, mapa.unidade, quando,
+                                  metodo_previsto(modelo, rodada, pontos_grade))
+        ajuda = AJUDA_DO_GEOTIFF
         calculadas = superficies_previstas(chave, _valores=valores, _pontos=pontos_grade,
                                            _direcoes=previsao.valores_da_hora(horaria, "direcao", hora)
                                            if mapa.setas else None)
@@ -3246,6 +3415,10 @@ def horas_interativas(modelo: str, horaria: pd.DataFrame, horaria_estacoes: pd.D
         imagem, pontos, celulas, relevo, imovel, chave_do_mapa("mapa_previsto_interativo", em_3d, imovel),
         bool(mapa.risco), bool(mapa.risco), niveis, mapa.paleta, mapa.unidade,
         legenda_do_mapa(mapa.nome, previsao.nome_da_hora(hora), resumo, mapa.regra, conta, em_3d), escritos)
+    carimbo = f"{openmeteo.NOMES[modelo]}_{hora_local:%Y%m%d_%H}h_rodada_{rodada:%Y%m%d_%H}UTC"
+    botao_do_geotiff(mapa.nome.lower(), "previsto_interativo_hora",
+                     nome_do_geotiff(boletim.nome_do_arquivo(mapa.titulo.replace(" — ", " "), previsao.UF, carimbo)),
+                     gravar, ajuda)
     if imovel is not None:
         painel_horario_no_imovel(mapa, celulas, imovel, pontos_grade, modelo, hora, desde)
     if tipo == "ponto":
@@ -3462,6 +3635,10 @@ def semanas_interativas(estacoes: pd.DataFrame, imovel: car.Imovel | None, aviso
     tipo, escolhida = mapa_previsto_na_tela(
         imagem, pontos, celulas, None, imovel, chave_do_mapa("mapa_semanal_interativo", imovel=imovel), False, False,
         escala, mapa.paleta, f"{mapa.unidade} em relação ao normal", texto, escritos)
+    botao_do_geotiff(mapa.titulo.lower(), "semanal_interativo",
+                     nome_do_geotiff(boletim.nome_do_arquivo(mapa.titulo, previsao.UF,
+                                                             previsao.carimbo_da_semana(rodada, semana))),
+                     geotiff_semanal(mapa, valores, pontos_grade, semana, rodada))
     if imovel is not None:
         painel_semanal_no_imovel(mapa, celulas, imovel, semanal_grade, pontos_grade, semana, rodada)
     if tipo == "ponto":
@@ -3858,13 +4035,12 @@ with aba_mapa:
             else:
                 if modo == variaveis.PERIODO:
                     momento, rotulo = None, periodo_escolhido
-                    carimbo = f"{intervalo[0]:%Y%m%d}_a_{intervalo[1]:%Y%m%d}"
                 else:
                     formatar = ((lambda marca: f"{marca:%d/%m/%Y}") if modo == variaveis.DIA
                                 else (lambda marca: f"{marca:%d/%m %H:%M}"))
                     momento = linha_do_tempo("Quando", paradas, f"quando_{modo}", formatar)
                     rotulo = formatar(momento)
-                    carimbo = (f"{momento:%Y%m%d}" if modo == variaveis.DIA else f"{momento:%Y%m%d_%H}h")
+                carimbo = carimbo_do_momento(modo, momento, intervalo)
 
                 marcar, ajustar_escala = st.columns([1, 1])
                 with marcar:
@@ -4121,13 +4297,7 @@ with aba_chuva:
                                 for coluna_tela, rotulo in zip(st.columns(por_linha), linha):
                                     with coluna_tela:
                                         comeco, _ = chuva_calc.janela(ate, rotulo, inicio_local)
-                                        # O do período leva no nome do arquivo os dias que soma, como o
-                                        # "período inteiro" dos Mapas Boletim
-                                        if rotulo == chuva_calc.PERIODO:
-                                            carimbo = (f"{comeco:%Y%m%d}_a_{ate - timedelta(days=1):%Y%m%d}"
-                                                       if ate.hour == 0 else f"{comeco:%Y%m%d}_a_{ate:%Y%m%d_%H}h")
-                                        else:
-                                            carimbo = f"{ate:%Y%m%d_%H}h"
+                                        carimbo = carimbo_da_chuva(rotulo, comeco, ate)
                                         painel_da_chuva(
                                             rotulo, retiradas.retirar(chovidas[rotulo], fora_chuva),
                                             f"{comeco:%d/%m %H:%M} a {ate:%d/%m %H:%M}",
@@ -4154,7 +4324,7 @@ with aba_chuva:
                     rotulos_chuva = st.checkbox("Mostrar o valor de cada estação", value=True,
                                                 key="valores_chuva_momento")
                     niveis_chuva = niveis_da_escala(produto, 1.0 if modo == variaveis.HORA else 24.0)
-                    carimbo = (f"{momento:%Y%m%d}" if modo == variaveis.DIA else f"{momento:%Y%m%d_%H}h")
+                    carimbo = carimbo_do_momento(modo, momento, intervalo)
                     fatia = retiradas.retirar(variaveis.recorte(do_periodo, modo, momento), fora_chuva)
                     apoio_periodo = chuva_apoio[chuva_apoio["dt_local"] > inicio.astimezone(recorte.fuso)]
                     fatia_apoio = retiradas.retirar(variaveis.recorte(apoio_periodo, modo, momento), fora_chuva)
@@ -4281,6 +4451,12 @@ with aba_risco:
                                              desenho_de_classes(avaliada.grade, do_estado_na_hora,
                                                                 risco_fogo.COLUNA_NIVEL_HORA, espec_hora, uf,
                                                                 risco_fogo.indicadores_condicoes()))
+                            botao_do_geotiff("risco de fogo", "risco",
+                                             nome_do_geotiff(f"{espec_hora.arquivo}_{local:%Y%m%d_%H}h.png"),
+                                             geotiff_da_grade(avaliada.grade, uf, "Risco de fogo na hora",
+                                                              f"{local:%d/%m/%Y %H:%M}", mapas.CREDITO,
+                                                              METODO_DO_RISCO, classes=True),
+                                             AJUDA_DO_GEOTIFF_DO_RISCO)
                             if st.button("Gerar GIF — risco de fogo", key="botao_gif_risco",
                                          help=f"{len(animacao.passos(quando))} quadros."):
                                 st.session_state["gif_risco"] = True
@@ -4321,6 +4497,12 @@ with aba_risco:
                                          f"{espec_dia.arquivo}_{dia:%Y%m%d}_interpolado.png",
                                          desenho_de_classes(dias[dia], do_dia[do_dia["Estação"].isin(nomes_do_estado)],
                                                             risco_fogo.COLUNA_NIVEL_HORA, espec_dia, uf))
+                        botao_do_geotiff("risco do dia", "risco_dia",
+                                         nome_do_geotiff(f"{espec_dia.arquivo}_{dia:%Y%m%d}_interpolado.png"),
+                                         geotiff_da_grade(dias[dia], uf, "Risco de fogo: pior nível do dia",
+                                                          f"{dia:%d/%m/%Y}", mapas.CREDITO, METODO_DO_RISCO,
+                                                          classes=True),
+                                         AJUDA_DO_GEOTIFF_DO_RISCO)
 
             # --- período inteiro ------------------------------------------------------------
             else:
@@ -4344,6 +4526,10 @@ with aba_risco:
                         botao_do_boletim("pior nível", "risco_periodo", f"{espec_pior.arquivo}_{sufixo}",
                                          desenho_de_classes(pior, pontos_risco, risco_fogo.COLUNA_NIVEL,
                                                             espec_pior, uf))
+                        botao_do_geotiff("pior nível", "risco_periodo", nome_do_geotiff(f"{espec_pior.arquivo}_{sufixo}"),
+                                         geotiff_da_grade(pior, uf, "Risco de fogo: pior nível do período",
+                                                          janela_risco, mapas.CREDITO, METODO_DO_RISCO, classes=True),
+                                         AJUDA_DO_GEOTIFF_DO_RISCO)
                 with direita:
                     st.markdown("**Horas em risco alto**")
                     exposicao = risco.horas_em_risco_alto(avaliadas_mapa)
@@ -4357,6 +4543,11 @@ with aba_risco:
                         botao_do_boletim("horas em risco alto", "risco_horas",
                                          f"{espec_horas.arquivo}_{sufixo}",
                                          desenho_das_horas(exposicao, pontos_risco, espec_horas, uf))
+                        botao_do_geotiff("horas em risco alto", "risco_horas",
+                                         nome_do_geotiff(f"{espec_horas.arquivo}_{sufixo}"),
+                                         geotiff_da_grade(exposicao, uf, "Horas em risco alto", janela_risco,
+                                                          mapas.CREDITO, METODO_DO_RISCO, classes=False, unidade="h"),
+                                         AJUDA_DO_GEOTIFF_DAS_HORAS)
 
                 st.subheader("Por estação")
                 st.caption("Da estação de maior risco para a de menor. As colunas são as mesmas da "
