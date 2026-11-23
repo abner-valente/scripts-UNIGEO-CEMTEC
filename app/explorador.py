@@ -39,7 +39,7 @@ from app import referencia
 from app import risco
 from app import superficie
 from app import variaveis
-from modulos import config, fonte, geotiff, mapas, openmeteo, retiradas
+from modulos import config, fonte, geotiff, gpkg, mapas, openmeteo, retiradas
 from modulos.produtos import risco_fogo
 
 # A API manda o vento em m/s; os produtos trabalham em km/h, e aqui seguimos a mesma unidade
@@ -77,6 +77,10 @@ AJUDA_DO_GEOTIFF_DO_RISCO = ("Para o QGIS, o ArcGIS ou o PIN MS: o nível de cad
 AJUDA_DO_GEOTIFF_DAS_HORAS = ("Para o QGIS, o ArcGIS ou o PIN MS: as horas em risco alto de cada pixel de 0,01° "
                               "(~1 km), em SIRGAS 2000 (EPSG:4674), recortado pelo estado. A conta é feita na grade "
                               "dos produtos, de ~8 km: os pixels de uma célula têm o mesmo número.")
+AJUDA_DAS_ESTACOES = ("Os pontos das estações que fizeram o mapa, com o valor de cada uma, em SIRGAS 2000 (EPSG:4674) "
+                      "como o GeoTIFF: é pôr a camada sobre ele no QGIS ou no ArcGIS. Vêm também as estações dos "
+                      "estados vizinhos, que firmam a borda (coluna uf). No QGIS a camada abre com os pontos pretos "
+                      "de borda branca dos mapas; os rótulos com o valor já vêm prontos, é só ligá-los.")
 METODO_DO_RISCO = ("Regra 30-30-30: temperatura, umidade e rajada das estações interpoladas separadas (IDW) na grade "
                    "dos produtos (~8 km), e a regra aplicada célula a célula; nos pixels, pelo vizinho mais próximo")
 # Quantos estados ficam com os shapefiles na memória ao mesmo tempo. Cada um prende ~25 MB de
@@ -583,12 +587,14 @@ def sem_lista_de_estacoes(onde, uf: str) -> None:
     st.stop()
 
 
-def _com_coordenadas(valores: pd.Series, nome_variavel: str, uf: str) -> pd.DataFrame:
+def _com_coordenadas(valores: pd.Series, nome_variavel: str, uf: str, extras: tuple[str, ...] = ()) -> pd.DataFrame:
+    # `extras`: outras colunas do cadastro que vão junto (o código e o estado, para o GeoPackage)
     cadastro = pd.concat([carregar_estacoes(uf), estacoes_vizinhas(uf, avisar=False), estacoes_do_cemaden(uf)],
                          ignore_index=True)
-    coordenadas = (cadastro.set_index("Estação")[["VL_LATITUDE", "VL_LONGITUDE"]]
+    coordenadas = (cadastro.set_index("Estação")[["VL_LATITUDE", "VL_LONGITUDE", *extras]]
                    .rename(columns={"VL_LATITUDE": "Latitude", "VL_LONGITUDE": "Longitude"}))
-    return coordenadas.join(valores.rename(nome_variavel), how="inner").reset_index().dropna()
+    return (coordenadas.join(valores.rename(nome_variavel), how="inner").reset_index()
+            .dropna(subset=["Latitude", "Longitude", nome_variavel]))
 
 
 def _pontos_do_mapa(valores: pd.Series, nome: str, uf: str, quando: str, direcoes=None):
@@ -650,6 +656,30 @@ def geotiff_das_estacoes(valores: pd.Series, apoio: pd.Series | None, nome: str,
                               {"TITULO": nome, "QUANDO": quando, "FONTE": boletim.credito(valores.dropna().index),
                                "METODO": geotiff.METODO_IDW})
     return gravar
+
+
+def estacoes_do_mapa(valores: pd.Series, apoio: pd.Series | None, nome: str, unidade: str, casas: int, uf: str,
+                     quando: str):
+    # Os pontos das mesmas medidas do GeoTIFF das estações, as vizinhas da borda junto
+    def gravar() -> bytes:
+        extras = ("CD_ESTACAO", "SG_ESTADO")
+        pontos = _com_coordenadas(valores, nome, uf, extras)
+        if apoio is not None and not apoio.dropna().empty:
+            pontos = pd.concat([pontos, _com_coordenadas(apoio, nome, uf, extras)], ignore_index=True)
+        return gpkg.gravar(gpkg.tabela_das_estacoes(pontos, nome, casas, unidade), f"Estações — {nome}",
+                           f"{nome} ({unidade}) · {quando} · {boletim.credito(valores.dropna().index)}")
+    return gravar
+
+
+def botoes_do_sig(medida: str, chave: str, png: str, valores: pd.Series, apoio: pd.Series | None, nome: str,
+                  unidade: str, casas: int, uf: str, quando: str) -> None:
+    # Nos mapas de estações, o GeoTIFF e, ao lado dele, os pontos das estações num GeoPackage
+    botao_do_geotiff(medida, chave, nome_do_geotiff(png),
+                     geotiff_das_estacoes(valores, apoio, nome, unidade, uf, quando))
+    st.download_button(f"Baixar estações (GeoPackage) — {medida}",
+                       estacoes_do_mapa(valores, apoio, nome, unidade, casas, uf, quando), mime=gpkg.MIME,
+                       key=f"gpkg_{chave}", file_name=png.removesuffix(".png") + "_estacoes.gpkg",
+                       on_click="ignore", help=AJUDA_DAS_ESTACOES)
 
 
 def geotiff_previsto(valores: pd.Series, pontos_grade: pd.DataFrame, nome: str, unidade: str, quando: str,
@@ -791,8 +821,8 @@ def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, 
                      desenho_do_boletim(valores, produto.titulo or produto.nome, produto.grandeza,
                                         produto.unidade, produto.paleta, produto.decimais, subtitulo, uf,
                                         niveis, direcoes, apoio))
-    botao_do_geotiff(medida, produto.nome, nome_do_geotiff(boletim.nome_do_arquivo(produto.nome, uf, carimbo)),
-                     geotiff_das_estacoes(valores, apoio, produto.nome, produto.unidade, uf, subtitulo))
+    botoes_do_sig(medida, produto.nome, boletim.nome_do_arquivo(produto.nome, uf, carimbo), valores, apoio,
+                  produto.nome, produto.unidade, produto.decimais, uf, subtitulo)
 
 
 def escala_do_periodo(produto: variaveis.Produto, leituras: pd.DataFrame, horas_janela):
@@ -899,8 +929,8 @@ def painel_da_chuva(rotulo: str, valores: pd.Series, janela: str, subtitulo: str
                      boletim.nome_do_arquivo(nome, uf, carimbo),
                      desenho_do_boletim(valores, nome, "Chuva", "mm", "Blues", 1, subtitulo, uf, niveis,
                                         apoio=apoio))
-    botao_do_geotiff(medida, f"chuva_{rotulo}", nome_do_geotiff(boletim.nome_do_arquivo(nome, uf, carimbo)),
-                     geotiff_das_estacoes(valores, apoio, legenda, "mm", uf, subtitulo))
+    botoes_do_sig(medida, f"chuva_{rotulo}", boletim.nome_do_arquivo(nome, uf, carimbo), valores, apoio, legenda,
+                  "mm", 1, uf, subtitulo)
 
 
 @st.cache_data(show_spinner=False, max_entries=2)
@@ -2157,10 +2187,9 @@ def variaveis_interativas(uf: str, recorte: config.Recorte, intervalo: tuple, es
                  "série do ponto, ou a de uma estação."
                  + nota_das_retiradas(fora))
     carimbo = carimbo_do_momento(modo, momento, intervalo)
-    botao_do_geotiff(produto.nome.lower(), f"interativo_{produto.nome}",
-                     nome_do_geotiff(boletim.nome_do_arquivo(produto.nome, uf, carimbo)),
-                     geotiff_das_estacoes(valores, valores_apoio, produto.nome, produto.unidade, uf,
-                                          f"{momento:%d/%m/%Y %H:%M}" if modo == variaveis.HORA else rotulo))
+    botoes_do_sig(produto.nome.lower(), f"interativo_{produto.nome}",
+                  boletim.nome_do_arquivo(produto.nome, uf, carimbo), valores, valores_apoio, produto.nome,
+                  produto.unidade, casas, uf, f"{momento:%d/%m/%Y %H:%M}" if modo == variaveis.HORA else rotulo)
 
     # No período inteiro, a série é a do dia: o produto do período é o diário somado no tempo
     modo_serie = variaveis.DIA if modo == variaveis.PERIODO else modo
@@ -2627,9 +2656,8 @@ def chuva_interativa(uf: str, recorte: config.Recorte, estacoes: pd.DataFrame, i
                + nota_das_retiradas(fora)
                + (" **Em laranja, os pluviômetros do CEMADEN**, que entram na superfície como as estações do "
                   f"INMET. Dados: {mapas.CREDITO_COM_CEMADEN}." if not pontos_cemaden.empty else ""))
-    botao_do_geotiff(legenda.lower(), "interativo_chuva",
-                     nome_do_geotiff(boletim.nome_do_arquivo(nome_do_arquivo, uf, carimbo)),
-                     geotiff_das_estacoes(valores, valores_apoio, legenda, produto.unidade, uf, quando_no_arquivo))
+    botoes_do_sig(legenda.lower(), "interativo_chuva", boletim.nome_do_arquivo(nome_do_arquivo, uf, carimbo), valores,
+                  valores_apoio, legenda, produto.unidade, produto.decimais, uf, quando_no_arquivo)
 
     objetos = evento.selection.get("objects", {}) if evento is not None else {}
     celula_clicada = objetos.get("pontos") or objetos.get(PONTOS_NO_RELEVO)
