@@ -454,7 +454,6 @@ def test_nas_estacoes_a_coluna_leva_o_titulo_que_nao_se_confunde_com_os_dias():
 
 def test_todo_mapa_das_semanas_diz_que_e_anomalia():
     assert all(nome.startswith("Anomalia") for nome in previsao.MAPAS_SEMANAIS)
-    assert set(previsao.PADRAO_SEMANAIS) <= set(previsao.MAPAS_SEMANAIS)
 
 
 @pytest.mark.parametrize("niveis", [previsao.NIVEIS_ANOMALIA_TEMPERATURA, previsao.NIVEIS_ANOMALIA_CHUVA])

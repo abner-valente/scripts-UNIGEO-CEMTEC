@@ -226,10 +226,9 @@ MAPAS = {mapa.nome: mapa for mapa in (
                  "h", "YlOrRd", 0, "quantas das 24 horas do dia têm as três condições da regra 30-30-30",
                  risco="horas"),
 )}
-PADRAO_MAPAS = ("Temperatura máxima", "Temperatura mínima", "Chuva do dia")
-
-# Os mapas hora a hora dos mapas interativos: o valor da hora cheia que o modelo dá; a chuva e a
-# rajada são as da hora que termina ali. O risco é o da hora, nas três medidas da hora cheia
+# Os mapas hora a hora (no navegável e, desde a v0.4.5, no boletim): o valor da hora cheia que o
+# modelo dá; a chuva e a rajada são as da hora que termina ali. O risco é o da hora, nas três
+# medidas da hora cheia
 MAPAS_DA_HORA = {mapa.nome: mapa for mapa in (
     MapaPrevisto("Temperatura", "Temperatura prevista", "temperatura", "Temperatura", "°C", "RdYlBu_r", 1,
                  "a temperatura a 2 m na hora cheia"),
@@ -397,7 +396,6 @@ MAPAS_SEMANAIS = {mapa.nome: mapa for mapa in (
     MapaSemanal("Anomalia da chuva", "Anomalia da chuva", "anom_chuva", "mm", "BrBG", NIVEIS_ANOMALIA_CHUVA,
                 "quanto a chuva da semana fica acima (+) ou abaixo (−) da normal do modelo para a mesma semana"),
 )}
-PADRAO_SEMANAIS = ("Anomalia da temperatura média", "Anomalia da chuva")
 
 
 def semanas_inteiras(semanal: pd.DataFrame, rodada: datetime) -> list[date]:
@@ -459,7 +457,6 @@ def carimbo_da_semana(rodada: datetime, semana: date) -> str:
 # UMD_MIN); o modelo dá o valor da hora cheia, que fica um pouco aquém dos extremos. O risco
 # previsto tende a sair um pouco abaixo do que a estação vai medir.
 VARIAVEIS_DO_RISCO = ("temperatura", "umidade", "rajada")
-GRANDEZA_RISCO = "Risco de fogo"   # na página das estações, o calendário dos piores níveis
 CHAVES_DO_DIA = ["modelo", "rodada_utc", "ponto", "latitude", "longitude", "dia_previsto"]
 
 
