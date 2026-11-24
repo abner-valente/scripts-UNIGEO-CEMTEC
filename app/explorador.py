@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
+from streamlit.delta_generator import DeltaGenerator
 from matplotlib import colormaps
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import BoundaryNorm, Normalize
@@ -618,11 +619,38 @@ def linha_do_tempo(rotulo: str, paradas: list, chave: str, formatar, dia_de=None
     return st.select_slider(rotulo, options=paradas, value=paradas[-1], format_func=formatar, key=chave)
 
 
-def botao_do_boletim(medida: str, chave: str, arquivo: str, desenhar) -> None:
-    st.download_button(f"Baixar PNG do boletim — {medida}", lambda: boletim.png(desenhar()),
+# Pedido da equipe (24/11/2026): no observado, os arquivos de cada mapa ficam num botão só, "Baixar",
+# que abre um menu. O nome do mapa já está no título dele, e cada item diz só o formato, com um ícone.
+# A previsão ainda tem os botões soltos, com o nome do mapa no rótulo
+ICONE_PNG = ":material/image:"
+ICONE_BOLETIM = ":material/description:"
+ICONE_GEOTIFF = ":material/grid_on:"
+ICONE_ESTACOES = ":material/location_on:"
+ICONE_GIF = ":material/movie:"
+
+
+def menu_de_baixar(chave: str) -> DeltaGenerator:
+    return st.popover("Baixar", icon=":material/download:", key=f"menu_{chave}")
+
+
+def estilo_do_menu(icone: str, no_menu: bool = True) -> dict:
+    # Dentro do menu, os itens não têm borda e ficam um embaixo do outro, alinhados à esquerda, como numa lista
+    return {"icon": icone, "type": "tertiary"} if no_menu else {}
+
+
+def botao_do_png(png: bytes, chave: str, arquivo: str) -> None:
+    st.download_button("PNG da tela", png, mime="image/png", key=chave, file_name=arquivo, on_click="ignore",
+                       help="O mapa como aparece na tela, sem o título e os logos do boletim.",
+                       **estilo_do_menu(ICONE_PNG))
+
+
+def botao_do_boletim(medida: str, chave: str, arquivo: str, desenhar, no_menu: bool = False) -> None:
+    st.download_button("PNG do boletim (300 dpi)" if no_menu else f"Baixar PNG do boletim — {medida}",
+                       lambda: boletim.png(desenhar()),
                        mime="image/png", key=f"boletim_{chave}", file_name=arquivo, on_click="ignore",
                        help="Como o main.py grava: título, logos do CEMTEC e da SEMADESC, ranking e "
-                            "barra de cores, em 300 dpi. As cores e a escala são as da tela.")
+                            "barra de cores, em 300 dpi. As cores e a escala são as da tela.",
+                       **estilo_do_menu(ICONE_BOLETIM, no_menu))
 
 
 @st.cache_resource(show_spinner=False, max_entries=ESTADOS_NA_MEMORIA)
@@ -636,10 +664,12 @@ def nome_do_geotiff(png: str) -> str:
     return png.removesuffix(".png") + ".tif"
 
 
-def botao_do_geotiff(medida: str, chave: str, arquivo: str, gravar, ajuda: str = AJUDA_DO_GEOTIFF) -> None:
+def botao_do_geotiff(medida: str, chave: str, arquivo: str, gravar, ajuda: str = AJUDA_DO_GEOTIFF,
+                     no_menu: bool = False) -> None:
     # Como o do boletim, o arquivo só é feito no clique
-    st.download_button(f"Baixar GeoTIFF — {medida}", gravar, mime=geotiff.MIME, key=f"geotiff_{chave}",
-                       file_name=arquivo, on_click="ignore", help=ajuda)
+    st.download_button("GeoTIFF" if no_menu else f"Baixar GeoTIFF — {medida}", gravar, mime=geotiff.MIME,
+                       key=f"geotiff_{chave}", file_name=arquivo, on_click="ignore", help=ajuda,
+                       **estilo_do_menu(ICONE_GEOTIFF, no_menu))
 
 
 def geotiff_das_estacoes(valores: pd.Series, apoio: pd.Series | None, nome: str, unidade: str, uf: str,
@@ -672,13 +702,14 @@ def estacoes_do_mapa(valores: pd.Series, apoio: pd.Series | None, nome: str, uni
 
 def botoes_do_sig(medida: str, chave: str, png: str, valores: pd.Series, apoio: pd.Series | None, nome: str,
                   unidade: str, casas: int, uf: str, quando: str) -> None:
-    # Nos mapas de estações, o GeoTIFF e, ao lado dele, os pontos das estações num GeoPackage
+    # Nos mapas de estações, o GeoTIFF e, ao lado dele, os pontos das estações num GeoPackage. Só o
+    # observado tem mapa de estações, e os dois vão sempre no menu "Baixar"
     botao_do_geotiff(medida, chave, nome_do_geotiff(png),
-                     geotiff_das_estacoes(valores, apoio, nome, unidade, uf, quando))
-    st.download_button(f"Baixar estações (GeoPackage) — {medida}",
+                     geotiff_das_estacoes(valores, apoio, nome, unidade, uf, quando), no_menu=True)
+    st.download_button("Estações (GeoPackage)",
                        estacoes_do_mapa(valores, apoio, nome, unidade, casas, uf, quando), mime=gpkg.MIME,
                        key=f"gpkg_{chave}", file_name=png.removesuffix(".png") + "_estacoes.gpkg",
-                       on_click="ignore", help=AJUDA_DAS_ESTACOES)
+                       on_click="ignore", help=AJUDA_DAS_ESTACOES, **estilo_do_menu(ICONE_ESTACOES))
 
 
 def geotiff_previsto(valores: pd.Series, pontos_grade: pd.DataFrame, nome: str, unidade: str, quando: str,
@@ -789,7 +820,9 @@ def credito_do_cemaden(valores: pd.Series) -> str:
 
 
 def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, subtitulo: str,
-                   carimbo: str, rotulos: bool, uf: str, niveis=None, direcoes=None, apoio=None) -> None:
+                   carimbo: str, rotulos: bool, uf: str, niveis=None, direcoes=None,
+                   apoio=None) -> DeltaGenerator | None:
+    # Devolve o menu "Baixar", onde o boletim_da_variavel ainda põe o GIF
     st.markdown(f"**{produto.nome}**")
     medida = produto.nome.lower()
     if valores.dropna().empty:
@@ -813,15 +846,17 @@ def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, 
                f"{estacoes_no_mapa(valores)} · {produto.regra}.{credito_do_cemaden(valores)}"
                + (nota_do_grupo(valores, produto.nome, uf) if chuva else ""))
     arquivo = produto.nome.lower().replace("/", "").replace(" ", "_")
-    st.download_button(f"Baixar PNG — {medida}", png, mime="image/png", key=f"baixar_{produto.nome}",
-                       file_name=f"Mapa_{arquivo}_{carimbo}.png")
-    # O título do boletim pode não ser o nome da tela: "Rajada s/ direção" sai "Rajada máxima em MS"
-    botao_do_boletim(medida, produto.nome, boletim.nome_do_arquivo(produto.nome, uf, carimbo),
-                     desenho_do_boletim(valores, produto.titulo or produto.nome, produto.grandeza,
-                                        produto.unidade, produto.paleta, produto.decimais, subtitulo, uf,
-                                        niveis, direcoes, apoio))
-    botoes_do_sig(medida, produto.nome, boletim.nome_do_arquivo(produto.nome, uf, carimbo), valores, apoio,
-                  produto.nome, produto.unidade, produto.decimais, uf, subtitulo)
+    menu = menu_de_baixar(f"mapa_{produto.nome}")
+    with menu:
+        botao_do_png(png, f"baixar_{produto.nome}", f"Mapa_{arquivo}_{carimbo}.png")
+        # O título do boletim pode não ser o nome da tela: "Rajada s/ direção" sai "Rajada máxima em MS"
+        botao_do_boletim(medida, produto.nome, boletim.nome_do_arquivo(produto.nome, uf, carimbo),
+                         desenho_do_boletim(valores, produto.titulo or produto.nome, produto.grandeza,
+                                            produto.unidade, produto.paleta, produto.decimais, subtitulo, uf,
+                                            niveis, direcoes, apoio), no_menu=True)
+        botoes_do_sig(medida, produto.nome, boletim.nome_do_arquivo(produto.nome, uf, carimbo), valores, apoio,
+                      produto.nome, produto.unidade, produto.decimais, uf, subtitulo)
+    return menu
 
 
 def escala_do_periodo(produto: variaveis.Produto, leituras: pd.DataFrame, horas_janela):
@@ -855,33 +890,32 @@ def gif_do_mapa(nome_produto: str, leituras: pd.DataFrame, modo: str, momentos: 
     return animacao.montar(quadros) if quadros else None
 
 
-def painel_do_gif(produto: variaveis.Produto, leituras: pd.DataFrame, modo: str, paradas: list,
-                  rotulos: bool, horas_janela, uf: str) -> None:
+def painel_do_gif(menu: DeltaGenerator, produto: variaveis.Produto, leituras: pd.DataFrame, modo: str,
+                  paradas: list, rotulos: bool, horas_janela, uf: str) -> None:
+    # No menu "Baixar": o "Gerar GIF" desenha os quadros ali mesmo, com a barra de progresso, e vira
+    # "Baixar GIF"; a animação aparece embaixo do mapa
     momentos = animacao.passos(paradas)
     salto = animacao.intervalo(paradas, momentos)
+    passo = f"{salto} {'dia' if modo == variaveis.DIA else 'hora'}{'s' if salto > 1 else ''}"
     chave = f"gif_{produto.nome}"
-    if st.button(f"Gerar GIF — {produto.nome.lower()}", key=f"botao_{chave}",
-                 help=f"{len(momentos)} quadros, um a cada "
-                      f"{salto} {'dia' if modo == variaveis.DIA else 'hora'}{'s' if salto > 1 else ''}."):
-        st.session_state[chave] = True
-
-    if not st.session_state.get(chave):
-        return
-
-    gif = gif_do_mapa(produto.nome, leituras, modo, tuple(momentos), rotulos, uf,
-                      escala_do_periodo(produto, leituras, horas_janela))
-    if gif is None:
-        st.warning("Não houve dado suficiente para desenhar a sequência.")
-        return
+    with menu:
+        if not st.session_state.get(chave):
+            st.button("Gerar GIF", key=f"botao_{chave}", help=f"{len(momentos)} quadros, um a cada {passo}.",
+                      on_click=lambda: st.session_state.update({chave: True}), **estilo_do_menu(ICONE_GIF))
+            return
+        gif = gif_do_mapa(produto.nome, leituras, modo, tuple(momentos), rotulos, uf,
+                          escala_do_periodo(produto, leituras, horas_janela))
+        if gif is None:
+            st.warning("Não houve dado suficiente para desenhar a sequência.")
+            return
+        st.download_button("Baixar GIF", gif, mime="image/gif", key=f"baixar_{chave}", on_click="ignore",
+                           file_name=f"Animacao_{produto.nome.lower().replace('/', '').replace(' ', '_')}_"
+                                     f"{momentos[0]:%Y%m%d}_a_{momentos[-1]:%Y%m%d}.gif",
+                           **estilo_do_menu(ICONE_GIF))
 
     st.image(gif, width="stretch")
-    passo = f"{salto} {'dia' if modo == variaveis.DIA else 'hora'}{'s' if salto > 1 else ''}"
     st.caption(f"{len(momentos)} quadros, um a cada {passo}, com a escala de cores travada para "
                f"o período inteiro. {len(gif) / 1e6:.1f} MB.")
-    st.download_button(f"Baixar GIF — {produto.nome.lower()}", gif, mime="image/gif",
-                       key=f"baixar_{chave}",
-                       file_name=f"Animacao_{produto.nome.lower().replace('/', '').replace(' ', '_')}_"
-                                 f"{momentos[0]:%Y%m%d}_a_{momentos[-1]:%Y%m%d}.gif")
 
 
 def carimbo_do_momento(modo: str, momento, intervalo: tuple) -> str:
@@ -921,15 +955,15 @@ def painel_da_chuva(rotulo: str, valores: pd.Series, janela: str, subtitulo: str
                + nota_do_grupo(valores, legenda, uf))
     medida = "chuva do período" if rotulo == chuva_calc.PERIODO else f"chuva {rotulo}"
     arquivo = carimbo if rotulo == chuva_calc.PERIODO else rotulo.replace(" ", "")
-    st.download_button(f"Baixar PNG — {medida}", png, mime="image/png",
-                       key=f"baixar_chuva_{rotulo}", file_name=f"Mapa_chuva_{arquivo}.png")
     nome = boletim.nome_da_chuva(rotulo)
-    botao_do_boletim(medida, f"chuva_{rotulo}",
-                     boletim.nome_do_arquivo(nome, uf, carimbo),
-                     desenho_do_boletim(valores, nome, "Chuva", "mm", "Blues", 1, subtitulo, uf, niveis,
-                                        apoio=apoio))
-    botoes_do_sig(medida, f"chuva_{rotulo}", boletim.nome_do_arquivo(nome, uf, carimbo), valores, apoio, legenda,
-                  "mm", 1, uf, subtitulo)
+    with menu_de_baixar(f"chuva_{rotulo}"):
+        botao_do_png(png, f"baixar_chuva_{rotulo}", f"Mapa_chuva_{arquivo}.png")
+        botao_do_boletim(medida, f"chuva_{rotulo}",
+                         boletim.nome_do_arquivo(nome, uf, carimbo),
+                         desenho_do_boletim(valores, nome, "Chuva", "mm", "Blues", 1, subtitulo, uf, niveis,
+                                            apoio=apoio), no_menu=True)
+        botoes_do_sig(medida, f"chuva_{rotulo}", boletim.nome_do_arquivo(nome, uf, carimbo), valores, apoio,
+                      legenda, "mm", 1, uf, subtitulo)
 
 
 @st.cache_data(show_spinner=False, max_entries=2)
@@ -2138,9 +2172,10 @@ def mapa_navegavel_da_variavel(produto: variaveis.Produto, modo: str, momento, r
                  "série do ponto, ou a de uma estação."
                  + nota_das_retiradas(fora))
     carimbo = carimbo_do_momento(modo, momento, intervalo)
-    botoes_do_sig(produto.nome.lower(), f"interativo_{produto.nome}",
-                  boletim.nome_do_arquivo(produto.nome, uf, carimbo), valores, valores_apoio, produto.nome,
-                  produto.unidade, casas, uf, f"{momento:%d/%m/%Y %H:%M}" if modo == variaveis.HORA else rotulo)
+    with menu_de_baixar(f"interativo_{produto.nome}"):
+        botoes_do_sig(produto.nome.lower(), f"interativo_{produto.nome}",
+                      boletim.nome_do_arquivo(produto.nome, uf, carimbo), valores, valores_apoio, produto.nome,
+                      produto.unidade, casas, uf, f"{momento:%d/%m/%Y %H:%M}" if modo == variaveis.HORA else rotulo)
 
     # No período inteiro, a série é a do dia: o produto do período é o diário somado no tempo
     modo_serie = variaveis.DIA if modo == variaveis.PERIODO else modo
@@ -2176,8 +2211,8 @@ def mapa_navegavel_da_variavel(produto: variaveis.Produto, modo: str, momento, r
 def boletim_da_variavel(produto: variaveis.Produto, modo: str, momento, rotulo: str, leituras: pd.DataFrame,
                         apoio: pd.DataFrame, paradas: list, fora: set[str], escritos: bool, niveis,
                         horas_janela: float, uf: str, intervalo: tuple, periodo_painel: config.Periodo) -> None:
-    # A vista do boletim da página Mapas: o PNG do mapa como o main.py desenha, com os botões de
-    # baixar e, no hora a hora e no por dia, o GIF da sequência
+    # A vista do boletim da página Mapas: o PNG do mapa como o main.py desenha, com o menu de baixar,
+    # que no hora a hora e no por dia tem também o GIF da sequência
     carimbo = carimbo_do_momento(modo, momento, intervalo)
     fatia, fatia_apoio = (retiradas.retirar(variaveis.recorte(dados, modo, momento), fora)
                           for dados in (leituras, apoio))
@@ -2185,12 +2220,13 @@ def boletim_da_variavel(produto: variaveis.Produto, modo: str, momento, rotulo: 
     _, meio, _ = st.columns([1, 3, 1])
     with meio:
         with st.spinner("Desenhando o mapa..."):
-            painel_do_mapa(produto, variaveis.por_estacao(produto, fatia), rotulo,
-                           boletim.subtitulo(modo, momento, periodo_painel), carimbo, escritos, uf, niveis,
-                           None if setas.empty else setas, variaveis.por_estacao(produto, fatia_apoio))
+            menu = painel_do_mapa(produto, variaveis.por_estacao(produto, fatia), rotulo,
+                                  boletim.subtitulo(modo, momento, periodo_painel), carimbo, escritos, uf, niveis,
+                                  None if setas.empty else setas, variaveis.por_estacao(produto, fatia_apoio))
         # No período inteiro não há sequência: é um mapa só para a janela toda
-        if modo != variaveis.PERIODO:
-            painel_do_gif(produto, retiradas.retirar(leituras, fora), modo, paradas, escritos, horas_janela, uf)
+        if menu is not None and modo != variaveis.PERIODO:
+            painel_do_gif(menu, produto, retiradas.retirar(leituras, fora), modo, paradas, escritos, horas_janela,
+                          uf)
 
 
 def ponto_clicado(celulas: pd.DataFrame, celula: int, uf: str) -> tuple[pd.Series, float, float] | None:
@@ -2537,8 +2573,9 @@ def mapa_navegavel_da_chuva(produto: variaveis.Produto, valores: pd.Series, do_i
                + nota_das_retiradas(fora)
                + (" **Em laranja, os pluviômetros do CEMADEN**, que entram na superfície como as estações do "
                   f"INMET. Dados: {mapas.CREDITO_COM_CEMADEN}." if not pontos_cemaden.empty else ""))
-    botoes_do_sig(legenda.lower(), "interativo_chuva", boletim.nome_do_arquivo(nome_do_arquivo, uf, carimbo), valores,
-                  valores_apoio, legenda, produto.unidade, produto.decimais, uf, quando_no_arquivo)
+    with menu_de_baixar("interativo_chuva"):
+        botoes_do_sig(legenda.lower(), "interativo_chuva", boletim.nome_do_arquivo(nome_do_arquivo, uf, carimbo),
+                      valores, valores_apoio, legenda, produto.unidade, produto.decimais, uf, quando_no_arquivo)
 
     objetos = evento.selection.get("objects", {}) if evento is not None else {}
     celula_clicada = objetos.get("pontos") or objetos.get(PONTOS_NO_RELEVO)
@@ -2630,11 +2667,12 @@ def mapa_navegavel_do_risco(modo: str, hora, dia, avaliadas: dict, completas: li
                   "botão direito** para inclinar e girar." if em_3d else "")
                + nota_das_retiradas(fora))
     titulo = "Risco de fogo na hora" if modo == variaveis.HORA else f"Risco de fogo: {legenda.lower()}"
-    botao_do_geotiff("risco de fogo", "interativo_risco",
-                     nome_do_geotiff(boletim.nome_do_arquivo("Risco de fogo", uf,
-                                                             carimbo_do_momento(modo, momento, intervalo))),
-                     geotiff_da_grade(grade, uf, titulo, quando, mapas.CREDITO, METODO_DO_RISCO, classes=True),
-                     AJUDA_DO_GEOTIFF_DO_RISCO)
+    with menu_de_baixar("interativo_risco"):
+        botao_do_geotiff("risco de fogo", "interativo_risco",
+                         nome_do_geotiff(boletim.nome_do_arquivo("Risco de fogo", uf,
+                                                                 carimbo_do_momento(modo, momento, intervalo))),
+                         geotiff_da_grade(grade, uf, titulo, quando, mapas.CREDITO, METODO_DO_RISCO, classes=True),
+                         AJUDA_DO_GEOTIFF_DO_RISCO, no_menu=True)
 
     if imovel is not None:
         painel_do_risco_no_imovel(celulas, imovel, avaliadas, uf, legenda, recorte.fuso, hora_local)
@@ -3316,8 +3354,8 @@ def pagina_risco() -> None:
 def boletim_do_risco(modo: str, hora, dia, mostradas: dict, avaliadas: dict, tabela_risco: pd.DataFrame,
                      nomes_do_estado: set[str], fora: set[str], detalhes: bool, mapa_do_periodo: str, uf: str,
                      recorte: config.Recorte, intervalo: tuple, periodo_painel: config.Periodo) -> None:
-    # A vista do boletim da página Risco de Fogo: o PNG do mapa como o main.py desenha, com os botões
-    # de baixar e, no hora a hora, o GIF da sequência
+    # A vista do boletim da página Risco de Fogo: o PNG do mapa como o main.py desenha, com o menu de
+    # baixar, que no hora a hora tem também o GIF da sequência
     _, meio, _ = st.columns([1, 3, 1])
     with meio:
         if modo == variaveis.HORA:
@@ -3334,30 +3372,36 @@ def boletim_do_risco(modo: str, hora, dia, mostradas: dict, avaliadas: dict, tab
             quantas = (do_estado_na_hora[risco_fogo.COLUNA_NIVEL_HORA] == risco.NIVEL_ALTO).sum()
             st.caption(f"{len(do_estado_na_hora)} estações do estado com as três medidas · {quantas} no risco alto · "
                        "as três variáveis são interpoladas separadas e a regra é aplicada célula a célula.")
-            st.download_button("Baixar PNG — risco de fogo", png, mime="image/png", key="baixar_risco",
-                               file_name=f"Mapa_risco_fogo_{local:%Y%m%d_%H}h.png")
             # Com o nível e as condições de cada estação, como o mapa horário do main.py, mesmo com a caixa
             # do nível desligada na tela
             espec_hora = risco_fogo.espec_da_hora(local, uf)
-            botao_do_boletim("risco de fogo", "risco", f"{espec_hora.arquivo}_{local:%Y%m%d_%H}h.png",
-                             desenho_de_classes(avaliada.grade, do_estado_na_hora, risco_fogo.COLUNA_NIVEL_HORA,
-                                                espec_hora, uf, risco_fogo.indicadores_condicoes()))
-            botao_do_geotiff("risco de fogo", "risco", nome_do_geotiff(f"{espec_hora.arquivo}_{local:%Y%m%d_%H}h.png"),
-                             geotiff_da_grade(avaliada.grade, uf, "Risco de fogo na hora", f"{local:%d/%m/%Y %H:%M}",
-                                              mapas.CREDITO, METODO_DO_RISCO, classes=True),
-                             AJUDA_DO_GEOTIFF_DO_RISCO)
-            quando = list(mostradas)
-            if st.button("Gerar GIF — risco de fogo", key="botao_gif_risco",
-                         help=f"{len(animacao.passos(quando))} quadros."):
-                st.session_state["gif_risco"] = True
-            if st.session_state.get("gif_risco"):
-                instantes = tuple(animacao.passos(quando))
-                gif = gif_do_risco(instantes, detalhes, uf, mostradas, nomes_do_estado, tuple(sorted(fora)))
-                if gif is not None:
-                    st.image(gif, width="stretch")
-                    st.caption(f"{len(instantes)} quadros. {len(gif) / 1e6:.1f} MB.")
-                    st.download_button("Baixar GIF — risco de fogo", gif, mime="image/gif", key="baixar_gif_risco",
-                                       file_name=f"Animacao_risco_fogo_{intervalo[0]:%Y%m%d}_a_{intervalo[1]:%Y%m%d}.gif")
+            instantes = tuple(animacao.passos(list(mostradas)))
+            gif = None
+            with menu_de_baixar("risco"):
+                botao_do_png(png, "baixar_risco", f"Mapa_risco_fogo_{local:%Y%m%d_%H}h.png")
+                botao_do_boletim("risco de fogo", "risco", f"{espec_hora.arquivo}_{local:%Y%m%d_%H}h.png",
+                                 desenho_de_classes(avaliada.grade, do_estado_na_hora, risco_fogo.COLUNA_NIVEL_HORA,
+                                                    espec_hora, uf, risco_fogo.indicadores_condicoes()), no_menu=True)
+                botao_do_geotiff("risco de fogo", "risco",
+                                 nome_do_geotiff(f"{espec_hora.arquivo}_{local:%Y%m%d_%H}h.png"),
+                                 geotiff_da_grade(avaliada.grade, uf, "Risco de fogo na hora",
+                                                  f"{local:%d/%m/%Y %H:%M}", mapas.CREDITO, METODO_DO_RISCO,
+                                                  classes=True),
+                                 AJUDA_DO_GEOTIFF_DO_RISCO, no_menu=True)
+                # Como nos Mapas: o "Gerar GIF" desenha ali mesmo e vira "Baixar GIF"
+                if not st.session_state.get("gif_risco"):
+                    st.button("Gerar GIF", key="botao_gif_risco", help=f"{len(instantes)} quadros.",
+                              on_click=lambda: st.session_state.update(gif_risco=True), **estilo_do_menu(ICONE_GIF))
+                else:
+                    gif = gif_do_risco(instantes, detalhes, uf, mostradas, nomes_do_estado, tuple(sorted(fora)))
+                    if gif is not None:
+                        st.download_button("Baixar GIF", gif, mime="image/gif", key="baixar_gif_risco",
+                                           on_click="ignore", **estilo_do_menu(ICONE_GIF),
+                                           file_name=f"Animacao_risco_fogo_{intervalo[0]:%Y%m%d}_a_"
+                                                     f"{intervalo[1]:%Y%m%d}.gif")
+            if gif is not None:
+                st.image(gif, width="stretch")
+                st.caption(f"{len(instantes)} quadros. {len(gif) / 1e6:.1f} MB.")
         elif modo == variaveis.DIA:
             dias = risco.por_dia(avaliadas)
             do_dia = risco.estacoes_do_dia(avaliadas, dia)
@@ -3369,16 +3413,17 @@ def boletim_do_risco(modo: str, hora, dia, mostradas: dict, avaliadas: dict, tab
             st.image(png, width="stretch")
             st.caption("O **pior** nível que cada lugar alcançou no dia — e não o de uma hora específica. Um dia é de "
                        "risco alto se houve uma hora em que as três condições valeram juntas.")
-            st.download_button("Baixar PNG — risco do dia", png, mime="image/png", key="baixar_risco_dia",
-                               file_name=f"Mapa_risco_fogo_{dia:%Y%m%d}.png")
             espec_dia = risco_fogo.espec_nivel_maximo(uf, f"{dia:%d/%m/%Y}")
-            botao_do_boletim("risco do dia", "risco_dia", f"{espec_dia.arquivo}_{dia:%Y%m%d}_interpolado.png",
-                             desenho_de_classes(dias[dia], do_dia, risco_fogo.COLUNA_NIVEL_HORA, espec_dia, uf))
-            botao_do_geotiff("risco do dia", "risco_dia",
-                             nome_do_geotiff(f"{espec_dia.arquivo}_{dia:%Y%m%d}_interpolado.png"),
-                             geotiff_da_grade(dias[dia], uf, "Risco de fogo: pior nível do dia", f"{dia:%d/%m/%Y}",
-                                              mapas.CREDITO, METODO_DO_RISCO, classes=True),
-                             AJUDA_DO_GEOTIFF_DO_RISCO)
+            with menu_de_baixar("risco_dia"):
+                botao_do_png(png, "baixar_risco_dia", f"Mapa_risco_fogo_{dia:%Y%m%d}.png")
+                botao_do_boletim("risco do dia", "risco_dia", f"{espec_dia.arquivo}_{dia:%Y%m%d}_interpolado.png",
+                                 desenho_de_classes(dias[dia], do_dia, risco_fogo.COLUNA_NIVEL_HORA, espec_dia, uf),
+                                 no_menu=True)
+                botao_do_geotiff("risco do dia", "risco_dia",
+                                 nome_do_geotiff(f"{espec_dia.arquivo}_{dia:%Y%m%d}_interpolado.png"),
+                                 geotiff_da_grade(dias[dia], uf, "Risco de fogo: pior nível do dia",
+                                                  f"{dia:%d/%m/%Y}", mapas.CREDITO, METODO_DO_RISCO, classes=True),
+                                 AJUDA_DO_GEOTIFF_DO_RISCO, no_menu=True)
         else:
             # Os pontos dos mapas sem as retiradas; a tabela embaixo, com todas. Os nomes de arquivo são os
             # que o main.py daria a esses mapas, para o mesmo período
@@ -3394,12 +3439,14 @@ def boletim_do_risco(modo: str, hora, dia, mostradas: dict, avaliadas: dict, tab
                 st.image(png, width="stretch")
                 st.caption("O maior nível que cada lugar alcançou em alguma hora da janela.")
                 espec_pior = risco_fogo.espec_nivel_maximo(uf, janela_risco)
-                botao_do_boletim("pior nível", "risco_periodo", f"{espec_pior.arquivo}_{sufixo}",
-                                 desenho_de_classes(pior, pontos_risco, risco_fogo.COLUNA_NIVEL, espec_pior, uf))
-                botao_do_geotiff("pior nível", "risco_periodo", nome_do_geotiff(f"{espec_pior.arquivo}_{sufixo}"),
-                                 geotiff_da_grade(pior, uf, "Risco de fogo: pior nível do período", janela_risco,
-                                                  mapas.CREDITO, METODO_DO_RISCO, classes=True),
-                                 AJUDA_DO_GEOTIFF_DO_RISCO)
+                with menu_de_baixar("risco_periodo"):
+                    botao_do_boletim("pior nível", "risco_periodo", f"{espec_pior.arquivo}_{sufixo}",
+                                     desenho_de_classes(pior, pontos_risco, risco_fogo.COLUNA_NIVEL, espec_pior, uf),
+                                     no_menu=True)
+                    botao_do_geotiff("pior nível", "risco_periodo", nome_do_geotiff(f"{espec_pior.arquivo}_{sufixo}"),
+                                     geotiff_da_grade(pior, uf, "Risco de fogo: pior nível do período", janela_risco,
+                                                      mapas.CREDITO, METODO_DO_RISCO, classes=True),
+                                     AJUDA_DO_GEOTIFF_DO_RISCO, no_menu=True)
             else:
                 exposicao = risco.horas_em_risco_alto(avaliadas)
                 png_horas = mapa_de_horas_altas(exposicao, pontos_risco, periodo_escolhido, detalhes, uf)
@@ -3409,12 +3456,14 @@ def boletim_do_risco(modo: str, hora, dia, mostradas: dict, avaliadas: dict, tab
                 st.caption(f"Em quantas horas cada lugar esteve no risco alto — no máximo {int(exposicao.max())} h em "
                            "alguma célula do estado.")
                 espec_horas = risco_fogo.espec_horas_em_risco_alto(uf, janela_risco)
-                botao_do_boletim("horas em risco alto", "risco_horas", f"{espec_horas.arquivo}_{sufixo}",
-                                 desenho_das_horas(exposicao, pontos_risco, espec_horas, uf))
-                botao_do_geotiff("horas em risco alto", "risco_horas", nome_do_geotiff(f"{espec_horas.arquivo}_{sufixo}"),
-                                 geotiff_da_grade(exposicao, uf, "Horas em risco alto", janela_risco, mapas.CREDITO,
-                                                  METODO_DO_RISCO, classes=False, unidade="h"),
-                                 AJUDA_DO_GEOTIFF_DAS_HORAS)
+                with menu_de_baixar("risco_horas"):
+                    botao_do_boletim("horas em risco alto", "risco_horas", f"{espec_horas.arquivo}_{sufixo}",
+                                     desenho_das_horas(exposicao, pontos_risco, espec_horas, uf), no_menu=True)
+                    botao_do_geotiff("horas em risco alto", "risco_horas",
+                                     nome_do_geotiff(f"{espec_horas.arquivo}_{sufixo}"),
+                                     geotiff_da_grade(exposicao, uf, "Horas em risco alto", janela_risco,
+                                                      mapas.CREDITO, METODO_DO_RISCO, classes=False, unidade="h"),
+                                     AJUDA_DO_GEOTIFF_DAS_HORAS, no_menu=True)
 
 
 # =====================================================
@@ -4393,12 +4442,15 @@ def localizacao_das_estacoes(uf: str) -> None:
         titulo = f"Estações meteorológicas do INMET em {uf}"
         subtitulo = f"{len(tabela)} estações automáticas em operação em {hoje:%d/%m/%Y}"
         arquivo, credito = f"Mapa_Estacoes_INMET_{uf}_{hoje:%Y%m%d}.png", mapas.CREDITO
-    st.download_button("Baixar o mapa de referência (PNG)",
-                       lambda: boletim.png(mapas.mapa_de_referencia(tabela, titulo, subtitulo, base, credito=credito)),
-                       mime="image/png", key="baixar_referencia", on_click="ignore",
-                       file_name=arquivo,
-                       help="As estações numeradas no mapa, com a lista dos nomes ao lado, no padrão do boletim "
-                            "(título e logos), em 300 dpi: para boletins, relatórios e apresentações.")
+    with menu_de_baixar("referencia"):
+        st.download_button("Mapa de referência (PNG)",
+                           lambda: boletim.png(mapas.mapa_de_referencia(tabela, titulo, subtitulo, base,
+                                                                        credito=credito)),
+                           mime="image/png", key="baixar_referencia", on_click="ignore",
+                           file_name=arquivo,
+                           help="As estações numeradas no mapa, com a lista dos nomes ao lado, no padrão do boletim "
+                                "(título e logos), em 300 dpi: para boletins, relatórios e apresentações.",
+                           **estilo_do_menu(ICONE_BOLETIM))
 
 
 # =====================================================
@@ -4661,8 +4713,9 @@ def raios_no_circulo(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, de
                    "boletim. Atualiza sozinho a cada minuto.")
     fim_local = agora.astimezone(recorte.fuso)
     arquivo = f"Mapa_raios_{config.RAIO_DOS_RAIOS_KM}km_{fim_local:%Y%m%d_%H%M}.png"
-    botao_do_boletim(f"raios até {nome}", "raios_circulo", arquivo,
-                     desenho_do_circulo(agora, janela, uf, recorte.fuso, com_aneis, com_municipios))
+    with menu_de_baixar("raios_circulo"):
+        botao_do_boletim(f"raios até {nome}", "raios_circulo", arquivo,
+                         desenho_do_circulo(agora, janela, uf, recorte.fuso, com_aneis, com_municipios), no_menu=True)
 
 
 def camada_de_flashes(pontos: pd.DataFrame) -> pdk.Layer:
@@ -4751,8 +4804,9 @@ def raios_no_estado(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, ago
             st.image(png_do_estado(agora, janela, uf, flashes, recorte.fuso), width="stretch")
         st.caption(f"Os flashes dos últimos {janela} min em {uf} e em volta, um a um, na cor do tempo, como no PNG do "
                    "boletim. Atualiza sozinho a cada minuto.")
-    botao_do_boletim(f"raios em {uf}", "raios_estado", arquivo,
-                     desenho_do_estado(flashes, agora, janela, uf, recorte.fuso))
+    with menu_de_baixar("raios_estado"):
+        botao_do_boletim(f"raios em {uf}", "raios_estado", arquivo,
+                         desenho_do_estado(flashes, agora, janela, uf, recorte.fuso), no_menu=True)
 
 
 def mapa_navegavel_do_estado(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, agora: datetime,
@@ -4883,8 +4937,11 @@ def densidade_de_raios(uf: str, recorte: config.Recorte, intervalo: tuple) -> No
         st.caption(f"{quando}: os flashes por km² em cada célula de 0,1° (~10 km), recortados pelo contorno do "
                    "estado, como no PNG do boletim.")
     arquivo = f"Mapa_densidade_raios_{uf}_{inicio_local:%Y%m%d_%H}h_a_{fim_local:%Y%m%d_%H}h.png"
-    botao_do_boletim("densidade de raios", "raios", arquivo, desenho_da_densidade(por_celula, quando, uf, rodape))
-    botao_do_geotiff("densidade de raios", "raios", nome_do_geotiff(arquivo), geotiff_dos_raios(por_celula, uf, quando))
+    with menu_de_baixar("raios_densidade"):
+        botao_do_boletim("densidade de raios", "raios", arquivo, desenho_da_densidade(por_celula, quando, uf, rodape),
+                         no_menu=True)
+        botao_do_geotiff("densidade de raios", "raios", nome_do_geotiff(arquivo),
+                         geotiff_dos_raios(por_celula, uf, quando), no_menu=True)
 
 
 def pagina_raios() -> None:
