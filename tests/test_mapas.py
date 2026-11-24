@@ -493,3 +493,22 @@ def test_o_mapa_do_circulo_dos_raios(base):
                                       raios.quadro_do_circulo()).axes[0]
     assert len(sem_aneis.lines) == 1
     assert not any(t.get_text().endswith(" km") for t in sem_aneis.texts)
+
+
+def test_o_mapa_dos_flashes_no_quadro_do_estado(base):
+    # O PNG do boletim do Agora com o alcance de MS: os flashes um a um sobre os municípios, no quadro
+    # dos outros mapas do boletim
+    from app import raios
+    # O de -63° fica fora do quadro: não aparece e não entra na contagem
+    flashes = pd.DataFrame({"longitude": [-54.5, -55.0, -53.0, -56.0, -63.0],
+                            "latitude": [-20.5, -21.0, -19.0, -20.0, -20.0], "idade": [1.0, 7.0, 40.0, 50.0, 2.0]})
+    espec = mapas.EspecMapa(tabela="", coluna="", titulo="Raios em MS", subtitulo="Flashes do GLM de 24/11/2026 "
+                            "10:00 a 11:00", arquivo="", cmap="", unidade="", ranking="", credito=raios.CREDITO)
+    eixo = mapas.mapa_de_flashes(flashes, raios.IDADES, [r for _, r in raios.rotulos_das_idades()], espec,
+                                 base).axes[0]
+    assert eixo.get_legend().get_title().get_text() == "Tempo"
+    assert [texto.get_text() for texto in eixo.get_legend().get_texts()] == [
+        "até 5 min (1)", "5 a 15 min (1)", "15 a 30 min (0)", "30 a 60 min (2)"]
+    oeste, leste, sul, norte = base.recorte.limites
+    assert eixo.get_xlim() == pytest.approx((oeste, leste)) and eixo.get_ylim() == pytest.approx((sul, norte))
+    assert "Dados: NOAA (GOES-19/GLM)/SEMADESC" in [t.get_text() for t in eixo.texts]

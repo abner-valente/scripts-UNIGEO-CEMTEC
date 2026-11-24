@@ -4043,6 +4043,31 @@ def desenho_do_circulo(agora: datetime, minutos: int, uf: str, fuso, com_aneis: 
                                      com_aneis)
 
 
+def figura_do_estado(flashes: pd.DataFrame, agora: datetime, minutos: int, uf: str, base: mapas.BaseCartografica,
+                     fuso, tela: mapas.Tela | None = None) -> Figure:
+    # O PNG do boletim do Agora com o alcance do estado: os flashes da caixa, um a um, no quadro do estado
+    inicio, fim = (agora - timedelta(minutes=minutos)).astimezone(fuso), agora.astimezone(fuso)
+    espec = mapas.EspecMapa(tabela="", coluna="", arquivo="", cmap="", unidade="", ranking="", credito=raios.CREDITO,
+                            titulo=f"Raios em {uf}", subtitulo=f"Flashes do GLM de {inicio:%d/%m/%Y %H:%M} a {fim:%H:%M}")
+    return mapas.mapa_de_flashes(raios.flashes_da_janela(flashes, agora, minutos), raios.IDADES,
+                                 [rotulo for _, rotulo in raios.rotulos_das_idades()], espec, base,
+                                 legenda=raios.LEGENDA_DO_TEMPO, tela=tela)
+
+
+@st.cache_data(show_spinner=False, max_entries=6)
+def png_do_estado(agora: datetime, minutos: int, uf: str, _flashes: pd.DataFrame, _fuso) -> bytes:
+    # Os flashes são os de carregar_raios_recentes do mesmo minuto: o "agora" já diz quais são
+    figura = figura_do_estado(_flashes, agora, minutos, uf, base_cartografica(uf), _fuso, tela=mapas.Tela())
+    arquivo = io.BytesIO()
+    figura.savefig(arquivo, format="png", dpi=DPI_MAPA, bbox_inches="tight", facecolor="white")
+    return arquivo.getvalue()
+
+
+def desenho_do_estado(flashes: pd.DataFrame, agora: datetime, minutos: int, uf: str, fuso):
+    base = base_cartografica(uf)
+    return lambda: figura_do_estado(flashes, agora, minutos, uf, base, fuso)
+
+
 def raios_no_circulo(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, dentro: np.ndarray, agora: datetime,
                      janela: int, vista: str, com_aneis: bool) -> None:
     nome = f"{raios.em_km(config.RAIO_DOS_RAIOS_KM)} de {config.NOME_DO_CENTRO_DOS_RAIOS}"
@@ -4134,23 +4159,40 @@ def raios_agora(uf: str, recorte: config.Recorte) -> None:
     janela = dois.segmented_control("Últimos", raios.JANELAS_DO_AGORA, default=raios.JANELAS_DO_AGORA[-1],
                                     format_func=lambda minutos: f"{minutos} min",
                                     key="janela_raios_agora") or raios.JANELAS_DO_AGORA[-1]
+    vista = tres.segmented_control("Mapa", VISTAS_DO_AGORA, default=VISTAS_DO_AGORA[0],
+                                   key="vista_raios_agora") or VISTAS_DO_AGORA[0]
     if alcance == ALCANCES_DO_AGORA[0]:
-        vista = tres.segmented_control("Mapa", VISTAS_DO_AGORA, default=VISTAS_DO_AGORA[0],
-                                       key="vista_raios_agora") or VISTAS_DO_AGORA[0]
         distancias = ", ".join(raios.em_km(km) for km in config.ANEIS_DOS_RAIOS_KM)
         com_aneis = um.checkbox("Anéis de distância", value=True, key="aneis_raios_agora",
                                 help=f"Os círculos de {distancias} em volta de {config.NOME_DO_CENTRO_DOS_RAIOS}, no "
                                      "mapa navegável e no PNG do boletim.")
         raios_no_circulo(uf, recorte, flashes, dentro, agora, janela, vista, com_aneis)
     else:
-        raios_no_estado(uf, recorte, flashes, agora, janela)
+        raios_no_estado(uf, recorte, flashes, agora, janela, vista)
     st.altair_chart(grafico_dos_raios(raios.por_barra(flashes[dentro], agora, recorte.fuso), uf), width="stretch")
     st.caption(f"Os flashes dentro de {uf} a cada {raios.MINUTOS_POR_BARRA} min, nas últimas "
                f"{raios.HORAS_DO_GRAFICO} h: mostra se a atividade cresce ou enfraquece. A última barra está em "
                "andamento.")
 
 
-def raios_no_estado(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, agora: datetime, janela: int) -> None:
+def raios_no_estado(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, agora: datetime, janela: int,
+                    vista: str) -> None:
+    fim_local = agora.astimezone(recorte.fuso)
+    arquivo = f"Mapa_raios_{uf}_{fim_local:%Y%m%d_%H%M}.png"
+    if vista == VISTAS_DO_AGORA[0]:
+        mapa_navegavel_do_estado(uf, recorte, flashes, agora, janela)
+    else:
+        _, meio_da_tela, _ = st.columns([1, 3, 1])
+        with meio_da_tela:
+            st.image(png_do_estado(agora, janela, uf, flashes, recorte.fuso), width="stretch")
+        st.caption(f"Os flashes dos últimos {janela} min em {uf} e em volta, um a um, na cor do tempo, como no PNG do "
+                   "boletim. Atualiza sozinho a cada minuto.")
+    botao_do_boletim(f"raios em {uf}", "raios_estado", arquivo,
+                     desenho_do_estado(flashes, agora, janela, uf, recorte.fuso))
+
+
+def mapa_navegavel_do_estado(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, agora: datetime,
+                             janela: int) -> None:
     # Todos os flashes um a um, até raios.LIMITE_DE_PONTOS; acima disso, em quadradinhos, como fora do
     # estado no círculo (na hora mais ativa desde 05/10/2026, seriam ~12 MB por minuto no navegador)
     pontos = raios.pontos_por_idade(flashes, agora, janela, recorte.fuso)

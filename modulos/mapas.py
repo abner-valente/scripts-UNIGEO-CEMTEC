@@ -380,9 +380,9 @@ def mapa_do_circulo(flashes: pd.DataFrame, idades: list[tuple[int, str]], rotulo
                     centro: tuple[float, float], nome_do_centro: str, limites: tuple[float, float, float, float],
                     legenda: str = "Tempo", caminho: Path | None = None, tela: Tela | None = None) -> Figure:
     # Os flashes recentes num círculo em volta de um centro (os raios até 2.000 km de Campo Grande),
-    # um ponto por flash na cor da idade, o mais novo por cima, com os anéis de distância, os estados
-    # do Brasil e os países em volta. `flashes` tem longitude, latitude e idade (minutos); `limites`
-    # é oeste, leste, sul, norte do quadro
+    # um ponto por flash na cor do tempo, o mais novo por cima, com os anéis de distância (opcionais),
+    # os estados do Brasil e os países em volta. `flashes` tem longitude, latitude e idade (minutos);
+    # `limites` é oeste, leste, sul, norte do quadro
     fig, ax = _nova_figura((14, 14))
     estados, paises = regiao
     paises.boundary.plot(ax=ax, linewidth=0.8, color="#7a7a7a")
@@ -396,8 +396,32 @@ def mapa_do_circulo(flashes: pd.DataFrame, idades: list[tuple[int, str]], rotulo
                 linestyle="-" if ultimo else "--", zorder=3)
         ax.text(anel.lon_rotulo, anel.lat_rotulo + 0.35, anel.rotulo, ha="center", va="bottom",
                 fontsize=_corpo(tela) * 0.9, color="#333333", zorder=6, path_effects=contorno)
-    # Do mais velho ao mais novo: o mais novo fica por cima
-    tamanho = 2.5 if tela is None else 6
+    _flashes_por_tempo(ax, flashes, idades, rotulos, legenda, 2.5 if tela is None else 6, tela)
+    ax.plot(*centro, marker="*", color="black", markeredgecolor="white", markersize=14, zorder=7)
+    ax.text(centro[0] + 0.4, centro[1] + 0.3, nome_do_centro, fontsize=_corpo(tela), weight="bold", zorder=7,
+            path_effects=contorno)
+    ax.set_aspect(1 / np.cos(np.radians(centro[1])))
+    return _finalizar(fig, ax, espec, base, caminho, tela, limites=limites)
+
+
+def mapa_de_flashes(flashes: pd.DataFrame, idades: list[tuple[int, str]], rotulos: list[str], espec: EspecMapa,
+                    base: BaseCartografica, legenda: str = "Tempo", caminho: Path | None = None,
+                    tela: Tela | None = None) -> Figure:
+    # Os flashes recentes no quadro do estado (o Agora com o alcance do estado), um ponto por flash na
+    # cor do tempo, sobre os municípios, como os outros mapas do boletim. Só os de dentro do quadro: a
+    # contagem da legenda é a do que aparece
+    oeste, leste, sul, norte = base.recorte.limites
+    no_quadro = flashes["longitude"].between(oeste, leste) & flashes["latitude"].between(sul, norte)
+    fig, ax = _nova_figura((14, 12))
+    _desenhar_limites(ax, base)
+    _flashes_por_tempo(ax, flashes[no_quadro], idades, rotulos, legenda, 9 if tela is None else 20, tela)
+    return _finalizar(fig, ax, espec, base, caminho, tela)
+
+
+def _flashes_por_tempo(ax, flashes: pd.DataFrame, idades: list[tuple[int, str]], rotulos: list[str], legenda: str,
+                       tamanho: float, tela: Tela | None) -> None:
+    # Um ponto por flash na cor da sua faixa de tempo, do mais velho ao mais novo (o mais novo fica por
+    # cima), e a legenda com quantos flashes há em cada faixa
     marcas, anterior = [], 0
     for (limite, cor), rotulo in zip(idades, rotulos):
         da_faixa = flashes[(flashes["idade"] >= anterior) & (flashes["idade"] < limite)]
@@ -406,15 +430,10 @@ def mapa_do_circulo(flashes: pd.DataFrame, idades: list[tuple[int, str]], rotulo
     for da_faixa, cor, _ in reversed(marcas):
         ax.scatter(da_faixa["longitude"], da_faixa["latitude"], s=tamanho, color=cor, linewidths=0, zorder=4,
                    rasterized=True)
-    ax.plot(*centro, marker="*", color="black", markeredgecolor="white", markersize=14, zorder=7)
-    ax.text(centro[0] + 0.4, centro[1] + 0.3, nome_do_centro, fontsize=_corpo(tela), weight="bold", zorder=7,
-            path_effects=contorno)
     marcas_da_legenda = [Line2D([0], [0], marker="o", linestyle="", color=cor, markersize=9, label=texto)
-               for _, cor, texto in marcas]
+                         for _, cor, texto in marcas]
     ax.legend(handles=marcas_da_legenda, loc="lower right", title=legenda, fontsize=_corpo(tela),
               title_fontsize=_corpo(tela), framealpha=0.9)
-    ax.set_aspect(1 / np.cos(np.radians(centro[1])))
-    return _finalizar(fig, ax, espec, base, caminho, tela, limites=limites)
 
 
 # =====================================================
