@@ -485,3 +485,10 @@ def test_o_mapa_do_circulo_dos_raios(base):
     oeste, leste, sul, norte = raios.quadro_do_circulo()
     assert eixo.get_xlim() == pytest.approx((oeste, leste)) and eixo.get_ylim() == pytest.approx((sul, norte))
     assert "Dados: NOAA (GOES-19/GLM)/SEMADESC" in [t.get_text() for t in eixo.texts]
+    # Os anéis são opcionais: sem eles, fica só a estrela de Campo Grande entre as linhas
+    assert len(eixo.lines) == len(config.ANEIS_DOS_RAIOS_KM) + 1
+    sem_aneis = mapas.mapa_do_circulo(flashes, raios.IDADES, [r for _, r in raios.rotulos_das_idades()], espec, base,
+                                      regiao, raios.aneis().iloc[:0], config.CENTRO_DOS_RAIOS, "Campo Grande",
+                                      raios.quadro_do_circulo()).axes[0]
+    assert len(sem_aneis.lines) == 1
+    assert not any(t.get_text().endswith(" km") for t in sem_aneis.texts)
