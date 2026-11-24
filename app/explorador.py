@@ -1868,12 +1868,16 @@ ESTILO_DOS_ROTULOS = dict(get_size=12, get_color=[20, 20, 20], background=True,
                           get_border_width=1, background_padding=[4, 1, 4, 1], background_border_radius=4,
                           font_weight=600)
 FONTE_DO_PAINEL = "'Source Sans Pro', Arial, sans-serif"
+# Na chuva, o número de quem não é o maior do seu grupo de 15 km vai em metros: ~2 px com o estado
+# inteiro na tela, escondido atrás do maior, e os 12 px de sempre a partir do zoom ~8,7, quando as
+# estações do grupo já ficam a dezenas de px umas das outras
+TAMANHO_DOS_ESCONDIDOS_M = 4000
 
 
 def camada_de_rotulos(dados: pd.DataFrame, coluna: str, posicao: list[str], deslocamento: list[int],
                       **extras) -> pdk.Layer:
     camada = pdk.Layer("TextLayer", data=dados, get_position=posicao, get_text=coluna, get_pixel_offset=deslocamento,
-                       **ESTILO_DOS_ROTULOS, **extras)
+                       **{**ESTILO_DOS_ROTULOS, **extras})
     # Como a imagem dos mapas: passada no construtor, a fonte viraria expressão, e não o nome dela
     camada.font_family = FONTE_DO_PAINEL
     return camada
@@ -1982,6 +1986,15 @@ def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos:
             radius_min_pixels=5, radius_max_pixels=10, pickable=True, **na_frente))
     if escritos:
         escritas = pd.concat([pontos, cemaden], ignore_index=True) if com_cemaden else pontos
+        if "maior_do_grupo" in escritas:
+            # Na chuva (veja mapa_navegavel_da_chuva), quem não é o maior do grupo vem antes, por baixo,
+            # com o número em metros: cresce ao aproximar o mapa. O CollisionFilterExtension do deck.gl,
+            # que esconderia os números que se encostam, apaga todos no Streamlit 1.64 (testado em 24/11/2026)
+            maior = escritas["maior_do_grupo"].astype(bool)
+            camadas.append(camada_de_rotulos(escritas[~maior], "rotulo", posicao, [0, -18], **na_frente,
+                                             get_size=TAMANHO_DOS_ESCONDIDOS_M, size_units="meters",
+                                             size_min_pixels=0, size_max_pixels=ESTILO_DOS_ROTULOS["get_size"]))
+            escritas = escritas[maior]
         camadas.append(camada_de_rotulos(escritas, "rotulo", posicao, [0, -18], **na_frente))
     if "angulo" in pontos:
         # As setas do vento, ao lado de cada estação
@@ -2546,6 +2559,16 @@ def mapa_navegavel_da_chuva(produto: variaveis.Produto, valores: pd.Series, do_i
                                           produto.unidade, produto.decimais)
     pontos_cemaden = interativo.pontos_do_cemaden(_com_coordenadas(valores_cemaden, produto.nome, uf), produto.nome,
                                                   legenda, produto.unidade, produto.decimais)
+    if escritos:
+        # Pedido da equipe (24/11/2026): com o estado inteiro na tela, o agrupamento de 15 km do boletim
+        # (mapas.o_maior_de_cada_grupo, as duas redes juntas); aproximando, o número de cada estação.
+        # O mapa_interativo escreve em metros o de quem não é o maior do grupo
+        juntos = pd.concat(
+            [tabela[["Longitude", "Latitude"]].assign(valor=tabela["Estação"].map(serie).to_numpy(dtype=float))
+             for tabela, serie in ((pontos, do_inmet), (pontos_cemaden, valores_cemaden))], ignore_index=True)
+        maior = juntos.index.isin(mapas.o_maior_de_cada_grupo(juntos, "valor", config.AGRUPAR_CHUVA_KM).index)
+        pontos, pontos_cemaden = (pontos.assign(maior_do_grupo=maior[:len(pontos)]),
+                                  pontos_cemaden.assign(maior_do_grupo=maior[len(pontos):]))
     celulas = celulas_do_ponto(valores, valores_apoio, produto.nome, quando, uf, nome=legenda)
     por_unidade = None
     if em_3d:
@@ -2568,6 +2591,9 @@ def mapa_navegavel_da_chuva(produto: variaveis.Produto, valores: pd.Series, do_i
                "A superfície é a do mapa do boletim (o IDW das estações, com as vizinhas na borda), e abaixo "
                "da primeira classe, onde não choveu, fica branca. **Passe o mouse** em qualquer ponto para ler a chuva interpolada, "
                "e **clique** para ver a chuva do ponto, ou a de uma estação."
+               + (f" Com o estado inteiro na tela, das estações a até {config.AGRUPAR_CHUVA_KM:g} km umas das outras "
+                  "só aparece o número da que mais choveu, como no boletim: **aproxime o mapa** para ver o de "
+                  "cada estação." if escritos else "")
                + (f" No relevo, {interativo.ALTURA_DO_TETO / por_unidade:g} mm sobem 100 km; **arraste com o "
                   "botão direito** para inclinar e girar." if em_3d and por_unidade else "")
                + nota_das_retiradas(fora)
