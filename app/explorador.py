@@ -4634,7 +4634,7 @@ def mapa_das_estacoes(tabela: pd.DataFrame, destacadas: pd.Series, uf: str) -> p
         "cor": [[200, 30, 30, 235] if destacada else cores.get(rede, cores["INMET"])
                 for destacada, rede in zip(destacadas, tabela["Rede"])],
     })
-    nomes = camada_de_rotulos(pontos, "nome", ["Longitude", "Latitude"], [9, 0])
+    nomes = camada_de_rotulos(pontos, "nome", ["Longitude", "Latitude"], [11, 0])
     # Como a imagem dos mapas: passados no construtor, o pydeck trataria os textos como expressões
     nomes.get_text_anchor = "start"
     nomes.get_alignment_baseline = "center"
@@ -4643,9 +4643,12 @@ def mapa_das_estacoes(tabela: pd.DataFrame, destacadas: pd.Series, uf: str) -> p
                   stroked=True, filled=False, get_line_color=[110, 110, 110, 140], line_width_min_pixels=0.5),
         pdk.Layer("GeoJsonLayer", data=base.uf.__geo_interface__, stroked=True, filled=False,
                   get_line_color=[40, 40, 40], line_width_min_pixels=1.5),
+        # O ponto fica do mesmo tamanho na tela em qualquer zoom (pedido da equipe, 24/11/2026): em metros,
+        # sem teto, ele crescia ao aproximar e cobria os vizinhos, como os pluviômetros de Bonito. O nome
+        # começa logo depois dele
         pdk.Layer("ScatterplotLayer", data=pontos, get_position=["Longitude", "Latitude"], get_fill_color="cor",
                   get_line_color=[255, 255, 255], stroked=True, line_width_min_pixels=1, get_radius=2500,
-                  radius_min_pixels=5, pickable=True),
+                  radius_min_pixels=5, radius_max_pixels=6, pickable=True),
         nomes,
     ]
     # O mapa ocupa três quintos da largura: com o zoom do mapa largo, o leste do estado ficaria de fora
