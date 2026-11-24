@@ -3873,7 +3873,10 @@ def inteiro_br(valor: int) -> str:
     return f"{valor:,}".replace(",", ".")
 
 
-@st.cache_resource(show_spinner=False, max_entries=ESTADOS_NA_MEMORIA)
+# cache_data, e não cache_resource: cada chamada recebe a sua cópia. O contains_xy prepara a
+# geometria nela mesma, e duas sessões fazendo isso no mesmo objeto ao mesmo tempo derrubavam o
+# Python dentro do GEOS (o painel caiu assim ao reiniciar, em 24/11/2026)
+@st.cache_data(show_spinner=False, max_entries=ESTADOS_NA_MEMORIA)
 def contorno_do_estado(uf: str):
     return base_cartografica(uf).uf.geometry.union_all()
 
