@@ -480,6 +480,7 @@ def test_o_mapa_do_circulo_dos_raios(base):
                                    regiao, raios.aneis(), config.CENTRO_DOS_RAIOS, "Campo Grande",
                                    raios.quadro_do_circulo())
     eixo = figura.axes[0]
+    assert eixo.get_legend().get_title().get_text() == "Tempo"
     assert [texto.get_text() for texto in eixo.get_legend().get_texts()] == [
         "até 5 min (1)", "5 a 15 min (0)", "15 a 30 min (1)", "30 a 60 min (1)"]
     oeste, leste, sul, norte = raios.quadro_do_circulo()

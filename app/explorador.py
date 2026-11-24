@@ -4022,7 +4022,8 @@ def figura_do_circulo(flashes: pd.DataFrame, agora: datetime, minutos: int, base
                                  [rotulo for _, rotulo in raios.rotulos_das_idades()],
                                  espec_do_circulo(agora, minutos, fuso), base, regiao,
                                  aneis if com_aneis else aneis.iloc[:0], config.CENTRO_DOS_RAIOS,
-                                 config.NOME_DO_CENTRO_DOS_RAIOS, raios.quadro_do_circulo(), tela=tela)
+                                 config.NOME_DO_CENTRO_DOS_RAIOS, raios.quadro_do_circulo(),
+                                 legenda=raios.LEGENDA_DO_TEMPO, tela=tela)
 
 
 @st.cache_data(show_spinner=False, max_entries=6)
@@ -4058,7 +4059,7 @@ def raios_no_circulo(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, de
         st.pydeck_chart(mapa_do_circulo(uf, camada_de_quadradinhos(celulas, "celulas_do_circulo"),
                                         camada_de_flashes(pontos), com_aneis),
                         key="mapa_raios_circulo", height=ALTURA_MAPA)
-        escala_no_mapa("escala_raios_circulo", legenda_de_cores(raios.rotulos_das_idades(), "Idade do flash"))
+        escala_no_mapa("escala_raios_circulo", legenda_de_cores(raios.rotulos_das_idades(), raios.LEGENDA_DO_TEMPO))
         total = len(pontos) + int(celulas["flashes"].sum())
         st.caption(f"{inteiro_br(total)} flashes nos últimos {janela} min até {nome}. "
                    + (f"Com mais de {inteiro_br(raios.LIMITE_DE_PONTOS)} flashes em {uf} na janela, o estado também "
@@ -4070,7 +4071,7 @@ def raios_no_circulo(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, de
         _, meio_da_tela, _ = st.columns([1, 3, 1])
         with meio_da_tela:
             st.image(png, width="stretch")
-        st.caption(f"Os flashes dos últimos {janela} min até {nome}, um a um, na cor da idade, como no PNG do "
+        st.caption(f"Os flashes dos últimos {janela} min até {nome}, um a um, na cor do tempo, como no PNG do "
                    "boletim. Atualiza sozinho a cada minuto.")
     fim_local = agora.astimezone(recorte.fuso)
     arquivo = f"Mapa_raios_{config.RAIO_DOS_RAIOS_KM}km_{fim_local:%Y%m%d_%H%M}.png"
@@ -4160,7 +4161,7 @@ def raios_no_estado(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, ago
     else:
         camada = camada_de_flashes(pontos)
     st.pydeck_chart(mapa_dos_raios(uf, camada, por_cima=True), key="mapa_raios_agora", height=ALTURA_MAPA)
-    escala_no_mapa("escala_raios_agora", legenda_de_cores(raios.rotulos_das_idades(), "Idade do flash"))
+    escala_no_mapa("escala_raios_agora", legenda_de_cores(raios.rotulos_das_idades(), raios.LEGENDA_DO_TEMPO))
     if muitos:
         st.caption(f"{inteiro_br(len(pontos))} flashes nos últimos {janela} min no mapa, de {uf} e de até ~1° em volta. "
                    f"Com mais de {inteiro_br(raios.LIMITE_DE_PONTOS)}, eles vão em quadradinhos de 0,1° (~10 km) na cor "
@@ -4168,7 +4169,7 @@ def raios_no_estado(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, ago
                    f"quantos são. As contagens acima são só de dentro de {uf}. Atualiza sozinho a cada minuto.")
     else:
         st.caption(f"{inteiro_br(len(pontos))} flashes nos últimos {janela} min no mapa, de {uf} e de até ~1° em volta, "
-                   "com a cor da idade: o mais novo por cima. **Passe o mouse** num flash para ver a hora. As contagens "
+                   "com a cor do tempo: o mais novo por cima. **Passe o mouse** num flash para ver a hora. As contagens "
                    f"acima são só de dentro de {uf}. Atualiza sozinho a cada minuto.")
 
 

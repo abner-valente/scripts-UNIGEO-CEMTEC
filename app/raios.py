@@ -22,6 +22,8 @@ from modulos import calculos, config
 CREDITO = "NOAA (GOES-19/GLM)/SEMADESC"
 # As idades do mapa do Agora, do flash mais novo ao mais velho: até tantos minutos, esta cor
 IDADES = [(5, "#fff200"), (15, "#ff9900"), (30, "#ff2a00"), (60, "#a3007d")]
+# O título da legenda dessas cores: "Tempo", e não "Idade do flash" (pedido da equipe, 24/11/2026)
+LEGENDA_DO_TEMPO = "Tempo"
 JANELAS_DO_AGORA = [15, 30, 60]   # minutos no mapa (cada uma termina numa das idades)
 # No círculo, os flashes de dentro do estado vão um a um até este tanto na janela (~1,5 MB no
 # navegador, que recebe o mapa de novo a cada minuto); acima disso o estado também vai em

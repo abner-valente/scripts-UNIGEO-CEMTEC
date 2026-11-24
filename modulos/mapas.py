@@ -378,7 +378,7 @@ def carregar_brasil_e_vizinhos() -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
 def mapa_do_circulo(flashes: pd.DataFrame, idades: list[tuple[int, str]], rotulos: list[str], espec: EspecMapa,
                     base: BaseCartografica, regiao: tuple[gpd.GeoDataFrame, gpd.GeoDataFrame], aneis: pd.DataFrame,
                     centro: tuple[float, float], nome_do_centro: str, limites: tuple[float, float, float, float],
-                    caminho: Path | None = None, tela: Tela | None = None) -> Figure:
+                    legenda: str = "Tempo", caminho: Path | None = None, tela: Tela | None = None) -> Figure:
     # Os flashes recentes num círculo em volta de um centro (os raios até 2.000 km de Campo Grande),
     # um ponto por flash na cor da idade, o mais novo por cima, com os anéis de distância, os estados
     # do Brasil e os países em volta. `flashes` tem longitude, latitude e idade (minutos); `limites`
@@ -409,9 +409,9 @@ def mapa_do_circulo(flashes: pd.DataFrame, idades: list[tuple[int, str]], rotulo
     ax.plot(*centro, marker="*", color="black", markeredgecolor="white", markersize=14, zorder=7)
     ax.text(centro[0] + 0.4, centro[1] + 0.3, nome_do_centro, fontsize=_corpo(tela), weight="bold", zorder=7,
             path_effects=contorno)
-    legenda = [Line2D([0], [0], marker="o", linestyle="", color=cor, markersize=9, label=texto)
+    marcas_da_legenda = [Line2D([0], [0], marker="o", linestyle="", color=cor, markersize=9, label=texto)
                for _, cor, texto in marcas]
-    ax.legend(handles=legenda, loc="lower right", title="Idade do flash", fontsize=_corpo(tela),
+    ax.legend(handles=marcas_da_legenda, loc="lower right", title=legenda, fontsize=_corpo(tela),
               title_fontsize=_corpo(tela), framealpha=0.9)
     ax.set_aspect(1 / np.cos(np.radians(centro[1])))
     return _finalizar(fig, ax, espec, base, caminho, tela, limites=limites)
