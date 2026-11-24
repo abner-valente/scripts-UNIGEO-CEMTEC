@@ -4916,7 +4916,7 @@ def pagina_raios() -> None:
 # Mapas interativos e a Localização das estações viraram Mapas, Chuva e Risco de Fogo
 lembrar_filtros()
 pagina = st.navigation({
-    "Observado (INMET)": [
+    "Observado": [
         st.Page(pagina_mapas, title="Mapas", icon=":material/map:", default=True),
         st.Page(pagina_chuva, title="Chuva", icon=":material/rainy:", url_path="chuva"),
         st.Page(pagina_risco, title="Risco de Fogo", icon=":material/local_fire_department:", url_path="risco-de-fogo"),
