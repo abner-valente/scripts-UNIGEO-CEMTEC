@@ -41,7 +41,7 @@ CUIABA = (-56.10, -15.60)          # fora da caixa (ao norte)
 ASSUNCAO = (-57.63, -25.28)        # fora da caixa (ao sul), a ~620 km: a célula (-577, -253)
 PORTO_ALEGRE = (-51.23, -30.03)    # a ~1.120 km: a célula (-513, -301)
 LIMA = (-77.04, -12.05)            # fora até da caixa do círculo
-NO_CANTO = (-72.0, -36.0)          # dentro da caixa do círculo, mas a ~2.400 km
+NO_CANTO = (-68.0, -32.0)          # dentro da caixa do círculo de 1.500 km, mas a ~1.850 km
 
 
 def hora(texto: str) -> pd.Timestamp:
@@ -270,7 +270,7 @@ def test_sem_nada_contado_o_alcance_e_vazio(glm, conexao):
 # =====================================================
 # O CÍRCULO DE 2.000 KM DE CAMPO GRANDE
 # =====================================================
-def test_os_quadradinhos_do_circulo_ficam_fora_da_caixa_e_dentro_dos_2000_km(glm, conexao):
+def test_os_quadradinhos_do_circulo_ficam_fora_da_caixa_e_dentro_do_raio(glm, conexao):
     quatorze = TREZE + timedelta(hours=1)
     glm.arquivo(TREZE + timedelta(minutes=10), [ASSUNCAO])                               # ~50 min antes
     glm.arquivo(TREZE + timedelta(minutes=30), [CAMPO_GRANDE, ASSUNCAO, PORTO_ALEGRE, LIMA, NO_CANTO])

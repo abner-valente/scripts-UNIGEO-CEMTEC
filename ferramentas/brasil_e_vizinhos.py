@@ -1,5 +1,5 @@
 """Prepara `shp/brasil_e_vizinhos.gpkg`: os estados do Brasil e os países em volta, para os mapas
-largos dos raios (o círculo de 2.000 km de Campo Grande vai do norte da Patagônia à Amazônia).
+largos dos raios (o círculo de config.RAIO_DOS_RAIOS_KM em volta de Campo Grande).
 
 São duas camadas, recortadas por uma caixa de -82° a -28° de longitude e de -46° a 6° de latitude:
 

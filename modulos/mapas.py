@@ -378,15 +378,18 @@ def carregar_brasil_e_vizinhos() -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
 def mapa_do_circulo(flashes: pd.DataFrame, idades: list[tuple[int, str]], rotulos: list[str], espec: EspecMapa,
                     base: BaseCartografica, regiao: tuple[gpd.GeoDataFrame, gpd.GeoDataFrame], aneis: pd.DataFrame,
                     centro: tuple[float, float], nome_do_centro: str, limites: tuple[float, float, float, float],
-                    legenda: str = "Tempo", caminho: Path | None = None, tela: Tela | None = None) -> Figure:
-    # Os flashes recentes num círculo em volta de um centro (os raios até 2.000 km de Campo Grande),
-    # um ponto por flash na cor do tempo, o mais novo por cima, com os anéis de distância (opcionais),
-    # os estados do Brasil e os países em volta. `flashes` tem longitude, latitude e idade (minutos);
-    # `limites` é oeste, leste, sul, norte do quadro
+                    legenda: str = "Tempo", com_municipios: bool = True, caminho: Path | None = None,
+                    tela: Tela | None = None) -> Figure:
+    # Os flashes recentes num círculo em volta de um centro (os raios até 1.500 km de Campo Grande),
+    # um ponto por flash na cor do tempo, o mais novo por cima, com os anéis de distância e os
+    # municípios do estado da base (os dois opcionais), os estados do Brasil e os países em volta.
+    # `flashes` tem longitude, latitude e idade (minutos); `limites` é oeste, leste, sul, norte do quadro
     fig, ax = _nova_figura((14, 14))
     estados, paises = regiao
     paises.boundary.plot(ax=ax, linewidth=0.8, color="#7a7a7a")
     estados.boundary.plot(ax=ax, linewidth=0.5, color="#a0a0a0")
+    if com_municipios:
+        base.municipios.boundary.plot(ax=ax, linewidth=0.3, color="gray")
     base.uf.boundary.plot(ax=ax, linewidth=1.8, color="black")
     contorno = [withStroke(linewidth=3, foreground="white")]
     for anel in aneis.itertuples():
@@ -396,7 +399,7 @@ def mapa_do_circulo(flashes: pd.DataFrame, idades: list[tuple[int, str]], rotulo
                 linestyle="-" if ultimo else "--", zorder=3)
         ax.text(anel.lon_rotulo, anel.lat_rotulo + 0.35, anel.rotulo, ha="center", va="bottom",
                 fontsize=_corpo(tela) * 0.9, color="#333333", zorder=6, path_effects=contorno)
-    _flashes_por_tempo(ax, flashes, idades, rotulos, legenda, 2.5 if tela is None else 6, tela)
+    _flashes_por_tempo(ax, flashes, idades, rotulos, legenda, 3 if tela is None else 7, tela)
     ax.plot(*centro, marker="*", color="black", markeredgecolor="white", markersize=14, zorder=7)
     ax.text(centro[0] + 0.4, centro[1] + 0.3, nome_do_centro, fontsize=_corpo(tela), weight="bold", zorder=7,
             path_effects=contorno)

@@ -3863,10 +3863,9 @@ VISTAS_DOS_RAIOS = ("Agora", "Densidade")
 JANELAS_DA_DENSIDADE = {"24 h": 24, "48 h": 48, "72 h": 72, "Período": None}
 VISTAS_DA_DENSIDADE = ("Navegável", "Boletim")
 VISTAS_DO_AGORA = VISTAS_DA_DENSIDADE
-# O Agora mostra o círculo de 2.000 km de Campo Grande (pedido da equipe, 24/11/2026) ou só MS e ~1° em
-# volta, como era: lá, todos os flashes vão um a um
+# O Agora mostra o círculo de config.RAIO_DOS_RAIOS_KM em volta de Campo Grande (pedido da equipe,
+# 24/11/2026) ou só MS e ~1° em volta, como era: lá, todos os flashes vão um a um
 ALCANCES_DO_AGORA = (f"Até {raios.em_km(config.RAIO_DOS_RAIOS_KM)}", config.UF)
-ZOOM_DO_CIRCULO = 3.8      # o círculo inteiro nos 900 px de altura do mapa (~4,0 enche; visto em 24/11/2026)
 # Os estados do Brasil e os países em volta vão ao navegador a cada minuto, com o resto do mapa, e só
 # sem o mapa de fundo (que já tem as fronteiras): simplificados a ~5 km e com 3 casas, ficam leves
 SIMPLIFICACAO_DA_REGIAO = 0.05
@@ -3948,12 +3947,13 @@ def regiao_do_boletim() -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     return mapas.carregar_brasil_e_vizinhos()
 
 
-def mapa_do_circulo(uf: str, celulas: pdk.Layer, pontos: pdk.Layer, com_aneis: bool = True) -> pdk.Deck:
-    # O círculo de Campo Grande: os quadradinhos por baixo dos limites e dos anéis (que se podem
-    # tirar), e os flashes do estado por cima de tudo. Sem o mapa de fundo, os estados do Brasil e os
-    # países vêm daqui
+def mapa_do_circulo(uf: str, celulas: pdk.Layer, pontos: pdk.Layer, com_aneis: bool = True,
+                    com_municipios: bool = True) -> pdk.Deck:
+    # O círculo de Campo Grande: os quadradinhos por baixo dos limites, dos municípios do estado e dos
+    # anéis (esses dois se podem tirar), e os flashes do estado por cima de tudo. Sem o mapa de fundo,
+    # os estados do Brasil e os países vêm daqui
     com_fundo = st.session_state.get("fundo_interativo", True)
-    estado, _ = contornos_interativos(uf)
+    estado, municipios_do_estado = contornos_interativos(uf)
     lon, lat = config.CENTRO_DOS_RAIOS
     linhas_dos_aneis = []
     if com_aneis:
@@ -3974,8 +3974,13 @@ def mapa_do_circulo(uf: str, celulas: pdk.Layer, pontos: pdk.Layer, com_aneis: b
                             get_line_color=[90, 90, 90, 200], line_width_min_pixels=1),
                   pdk.Layer("GeoJsonLayer", data=estados, id="estados_do_brasil", stroked=True, filled=False,
                             get_line_color=[110, 110, 110, 150], line_width_min_pixels=0.6)]
+    # Os municípios do estado, como no mapa do alcance do estado (só eles: pedido da equipe, 24/11/2026)
+    municipios = ([pdk.Layer("GeoJsonLayer", data=municipios_do_estado, id="municipios", stroked=True,
+                             filled=False, get_line_color=[70, 70, 70, 150], line_width_min_pixels=0.6)]
+                  if com_municipios else [])
     camadas = [
         celulas,
+        *municipios,
         *regiao,
         pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[235, 235, 235, 220],
                   line_width_min_pixels=3.5),
@@ -3988,7 +3993,8 @@ def mapa_do_circulo(uf: str, celulas: pdk.Layer, pontos: pdk.Layer, com_aneis: b
                   stroked=True, line_width_min_pixels=2, get_radius=6000, radius_min_pixels=5),
     ]
     _, sul, _, norte = calculos.caixa_do_circulo(config.CENTRO_DOS_RAIOS, config.RAIO_DOS_RAIOS_KM)
-    visao = pdk.ViewState(latitude=raios.latitude_do_meio(sul, norte), longitude=lon, zoom=ZOOM_DO_CIRCULO)
+    visao = pdk.ViewState(latitude=raios.latitude_do_meio(sul, norte), longitude=lon,
+                          zoom=round(raios.zoom_para_caber(sul, norte, ALTURA_MAPA), 2))
     if com_fundo:
         return pdk.Deck(layers=camadas, map_style=None, initial_view_state=visao, tooltip=interativo.BALAO)
     return pdk.Deck(layers=camadas, map_provider=None, map_style=interativo.ESTILO_SEM_FUNDO,
@@ -4016,31 +4022,31 @@ def espec_do_circulo(agora: datetime, minutos: int, fuso) -> mapas.EspecMapa:
 
 
 def figura_do_circulo(flashes: pd.DataFrame, agora: datetime, minutos: int, base: mapas.BaseCartografica, regiao,
-                      fuso, com_aneis: bool, tela: mapas.Tela | None = None) -> Figure:
+                      fuso, com_aneis: bool, com_municipios: bool, tela: mapas.Tela | None = None) -> Figure:
     aneis = raios.aneis()
     return mapas.mapa_do_circulo(raios.flashes_da_janela(flashes, agora, minutos), raios.IDADES,
                                  [rotulo for _, rotulo in raios.rotulos_das_idades()],
                                  espec_do_circulo(agora, minutos, fuso), base, regiao,
                                  aneis if com_aneis else aneis.iloc[:0], config.CENTRO_DOS_RAIOS,
                                  config.NOME_DO_CENTRO_DOS_RAIOS, raios.quadro_do_circulo(),
-                                 legenda=raios.LEGENDA_DO_TEMPO, tela=tela)
+                                 legenda=raios.LEGENDA_DO_TEMPO, com_municipios=com_municipios, tela=tela)
 
 
 @st.cache_data(show_spinner=False, max_entries=6)
-def png_do_circulo(agora: datetime, minutos: int, uf: str, com_aneis: bool, _fuso) -> bytes:
+def png_do_circulo(agora: datetime, minutos: int, uf: str, com_aneis: bool, com_municipios: bool, _fuso) -> bytes:
     figura = figura_do_circulo(carregar_raios_do_circulo(agora), agora, minutos, base_cartografica(uf),
-                               regiao_do_boletim(), _fuso, com_aneis, tela=mapas.Tela())
+                               regiao_do_boletim(), _fuso, com_aneis, com_municipios, tela=mapas.Tela())
     arquivo = io.BytesIO()
     figura.savefig(arquivo, format="png", dpi=DPI_MAPA, bbox_inches="tight", facecolor="white")
     return arquivo.getvalue()
 
 
-def desenho_do_circulo(agora: datetime, minutos: int, uf: str, fuso, com_aneis: bool):
+def desenho_do_circulo(agora: datetime, minutos: int, uf: str, fuso, com_aneis: bool, com_municipios: bool):
     # Como o da densidade: a base pronta antes, e os flashes lidos só no clique
     base, regiao = base_cartografica(uf), regiao_do_boletim()
     inicio = agora - timedelta(minutes=raios.IDADES[-1][0])
     return lambda: figura_do_circulo(fonte.raios_do_circulo(inicio, agora), agora, minutos, base, regiao, fuso,
-                                     com_aneis)
+                                     com_aneis, com_municipios)
 
 
 def figura_do_estado(flashes: pd.DataFrame, agora: datetime, minutos: int, uf: str, base: mapas.BaseCartografica,
@@ -4069,20 +4075,20 @@ def desenho_do_estado(flashes: pd.DataFrame, agora: datetime, minutos: int, uf: 
 
 
 def raios_no_circulo(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, dentro: np.ndarray, agora: datetime,
-                     janela: int, vista: str, com_aneis: bool) -> None:
+                     janela: int, vista: str, com_aneis: bool, com_municipios: bool) -> None:
     nome = f"{raios.em_km(config.RAIO_DOS_RAIOS_KM)} de {config.NOME_DO_CENTRO_DOS_RAIOS}"
     try:
         if vista == VISTAS_DO_AGORA[0]:
             pontos, celulas, muitos = raios.agora_no_circulo(flashes, dentro, carregar_celulas_do_circulo(agora),
                                                              agora, janela, recorte.fuso)
         else:
-            png = png_do_circulo(agora, janela, uf, com_aneis, recorte.fuso)
+            png = png_do_circulo(agora, janela, uf, com_aneis, com_municipios, recorte.fuso)
     except fonte.ErroFonte as erro:
         st.error(f"Não foi possível ler os raios do círculo no banco ({erro}). A página tenta de novo a cada minuto.")
         return
     if vista == VISTAS_DO_AGORA[0]:
         st.pydeck_chart(mapa_do_circulo(uf, camada_de_quadradinhos(celulas, "celulas_do_circulo"),
-                                        camada_de_flashes(pontos), com_aneis),
+                                        camada_de_flashes(pontos), com_aneis, com_municipios),
                         key="mapa_raios_circulo", height=ALTURA_MAPA)
         escala_no_mapa("escala_raios_circulo", legenda_de_cores(raios.rotulos_das_idades(), raios.LEGENDA_DO_TEMPO))
         total = len(pontos) + int(celulas["flashes"].sum())
@@ -4101,7 +4107,7 @@ def raios_no_circulo(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, de
     fim_local = agora.astimezone(recorte.fuso)
     arquivo = f"Mapa_raios_{config.RAIO_DOS_RAIOS_KM}km_{fim_local:%Y%m%d_%H%M}.png"
     botao_do_boletim(f"raios até {nome}", "raios_circulo", arquivo,
-                     desenho_do_circulo(agora, janela, uf, recorte.fuso, com_aneis))
+                     desenho_do_circulo(agora, janela, uf, recorte.fuso, com_aneis, com_municipios))
 
 
 def camada_de_flashes(pontos: pd.DataFrame) -> pdk.Layer:
@@ -4166,7 +4172,10 @@ def raios_agora(uf: str, recorte: config.Recorte) -> None:
         com_aneis = um.checkbox("Anéis de distância", value=True, key="aneis_raios_agora",
                                 help=f"Os círculos de {distancias} em volta de {config.NOME_DO_CENTRO_DOS_RAIOS}, no "
                                      "mapa navegável e no PNG do boletim.")
-        raios_no_circulo(uf, recorte, flashes, dentro, agora, janela, vista, com_aneis)
+        com_municipios = um.checkbox(f"Municípios de {uf}", value=True, key="municipios_raios_agora",
+                                     help=f"As divisas dos municípios de {uf}, no mapa navegável e no PNG do "
+                                          "boletim.")
+        raios_no_circulo(uf, recorte, flashes, dentro, agora, janela, vista, com_aneis, com_municipios)
     else:
         raios_no_estado(uf, recorte, flashes, agora, janela, vista)
     st.altair_chart(grafico_dos_raios(raios.por_barra(flashes[dentro], agora, recorte.fuso), uf), width="stretch")

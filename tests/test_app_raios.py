@@ -192,7 +192,8 @@ def test_no_circulo_o_estado_vai_um_a_um_e_o_resto_em_quadradinhos(monkeypatch):
 def test_os_aneis_de_distancia_em_volta_de_campo_grande():
     aneis = raios.aneis()
     assert list(aneis["km"]) == list(config.ANEIS_DOS_RAIOS_KM)
-    assert list(aneis["rotulo"]) == ["500 km", "1.000 km", "1.500 km", "2.000 km"]
+    assert config.RAIO_DOS_RAIOS_KM == 1500                  # a equipe preferiu 1.500 km a 2.000 km
+    assert list(aneis["rotulo"]) == ["500 km", "1.000 km", "1.500 km"]
     lon, lat = config.CENTRO_DOS_RAIOS
     for anel in aneis.itertuples():
         caminho = np.asarray(anel.caminho)
@@ -217,3 +218,12 @@ def test_os_flashes_da_janela_para_o_png():
     assert list(janela.columns) == ["longitude", "latitude", "idade"]
     assert janela["idade"].round(3).tolist() == [1.0, 20.0]
     assert raios.flashes_da_janela(flashes((1, -54.5, -20.5)).iloc[:0], AGORA, 30).empty
+
+
+def test_o_zoom_que_poe_o_circulo_inteiro_na_altura_do_mapa():
+    # Com 2.000 km, 3,8 foi o que se viu caber nos 900 px (24/11/2026); com menos, aproxima mais
+    assert raios.zoom_para_caber(-38.456, -2.483, 900) == pytest.approx(3.81, abs=0.01)
+    _, sul, _, norte = calculos.caixa_do_circulo(config.CENTRO_DOS_RAIOS, config.RAIO_DOS_RAIOS_KM)
+    assert raios.zoom_para_caber(sul, norte, 900) > raios.zoom_para_caber(-38.456, -2.483, 900)
+    assert raios.zoom_para_caber(sul, norte, 1800) == pytest.approx(raios.zoom_para_caber(sul, norte, 900) + 1)
+

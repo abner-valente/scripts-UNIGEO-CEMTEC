@@ -471,7 +471,7 @@ def test_o_mapa_do_circulo_dos_raios(base):
     from app import raios
     flashes = pd.DataFrame({"longitude": [-54.5, -57.6, -51.2], "latitude": [-20.5, -25.3, -30.0],
                             "idade": [1.0, 20.0, 50.0]})
-    espec = mapas.EspecMapa(tabela="", coluna="", titulo="Raios até 2.000 km de Campo Grande",
+    espec = mapas.EspecMapa(tabela="", coluna="", titulo="Raios até 1.500 km de Campo Grande",
                             subtitulo="Flashes do GLM de 24/11/2026 06:00 a 07:00", arquivo="", cmap="", unidade="",
                             ranking="", credito=raios.CREDITO)
     regiao = mapas.carregar_brasil_e_vizinhos()
@@ -493,6 +493,11 @@ def test_o_mapa_do_circulo_dos_raios(base):
                                       raios.quadro_do_circulo()).axes[0]
     assert len(sem_aneis.lines) == 1
     assert not any(t.get_text().endswith(" km") for t in sem_aneis.texts)
+    # Os municípios de MS também são opcionais: sem eles, uma coleção de linhas a menos
+    sem_municipios = mapas.mapa_do_circulo(flashes, raios.IDADES, [r for _, r in raios.rotulos_das_idades()], espec,
+                                           base, regiao, raios.aneis(), config.CENTRO_DOS_RAIOS, "Campo Grande",
+                                           raios.quadro_do_circulo(), com_municipios=False).axes[0]
+    assert len(sem_municipios.collections) == len(eixo.collections) - 1
 
 
 def test_o_mapa_dos_flashes_no_quadro_do_estado(base):
@@ -512,3 +517,4 @@ def test_o_mapa_dos_flashes_no_quadro_do_estado(base):
     oeste, leste, sul, norte = base.recorte.limites
     assert eixo.get_xlim() == pytest.approx((oeste, leste)) and eixo.get_ylim() == pytest.approx((sul, norte))
     assert "Dados: NOAA (GOES-19/GLM)/SEMADESC" in [t.get_text() for t in eixo.texts]
+

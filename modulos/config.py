@@ -220,12 +220,14 @@ CAIXA_RAIOS = (-59.2, -25.1, -49.9, -16.1)
 CELULAS_POR_GRAU_RAIOS = 10
 ARQUIVOS_GLM_POR_HORA = 180
 # O Agora também mostra o que vem de longe, num círculo em volta de Campo Grande: dá margem para ver
-# o que se forma no sul (Paraguai, norte da Argentina, Sul do Brasil). Pedido da equipe, 24/11/2026
+# o que se forma no sul (Paraguai, norte da Argentina, Sul do Brasil). Pedido da equipe, 24/11/2026:
+# começou com 2.000 km e, no mesmo dia, a equipe preferiu 1.500 km
 RAIO_DA_TERRA_KM = 6371.0088               # o raio médio, o mesmo do ST_DistanceSphere do PostGIS
 CENTRO_DOS_RAIOS = (-54.6201, -20.4697)    # Campo Grande: longitude, latitude
 NOME_DO_CENTRO_DOS_RAIOS = "Campo Grande"
-RAIO_DOS_RAIOS_KM = 2000
-ANEIS_DOS_RAIOS_KM = (500, 1000, 1500, 2000)
+RAIO_DOS_RAIOS_KM = 1500
+ANEIS_DOS_RAIOS_KM = (500, 1000, 1500)
+MARGEM_DO_QUADRO_DOS_RAIOS = 1.0           # graus em volta do círculo, no PNG do boletim
 # Os estados do Brasil e os países em volta, para os mapas do círculo (ferramentas/brasil_e_vizinhos.py)
 SHAPE_BRASIL_E_VIZINHOS = PASTA_SHP / "brasil_e_vizinhos.gpkg"
 

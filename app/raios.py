@@ -1,7 +1,7 @@
 """Os raios do GOES-19 (GLM) no painel: as contas da página Raios, sem tela, para poder ser testado.
 
 - **Agora**: os flashes recentes, cada um com a cor da idade, e a contagem a cada 5 minutos. No
-  círculo de 2.000 km de Campo Grande, os de dentro do estado vão um a um e os de fora em
+  círculo de 1.500 km de Campo Grande, os de dentro do estado vão um a um e os de fora em
   quadradinhos de 0,1°: um ponto por flash pesaria ~10 a 25 MB por minuto no navegador;
 - **Densidade**: os flashes de um período por km², nas células de 0,1° que o coletor conta.
 
@@ -288,7 +288,7 @@ def nos_pixels(por_celula: pd.DataFrame, lon: np.ndarray, lat: np.ndarray) -> np
 
 
 def quadro_do_circulo(centro: tuple[float, float] = config.CENTRO_DOS_RAIOS, km: float = config.RAIO_DOS_RAIOS_KM,
-                      margem: float = 1.0) -> tuple[float, float, float, float]:
+                      margem: float = config.MARGEM_DO_QUADRO_DOS_RAIOS) -> tuple[float, float, float, float]:
     # Oeste, leste, sul e norte do PNG do círculo: a caixa dele com `margem` graus em volta
     oeste, sul, leste, norte = calculos.caixa_do_circulo(centro, km)
     return oeste - margem, leste + margem, sul - margem, norte + margem
@@ -309,3 +309,11 @@ def latitude_do_meio(sul: float, norte: float) -> float:
     def y(latitude: float) -> float:
         return math.log(math.tan(math.pi / 4 + math.radians(latitude) / 2))
     return math.degrees(2 * math.atan(math.exp((y(sul) + y(norte)) / 2)) - math.pi / 2)
+
+
+def zoom_para_caber(sul: float, norte: float, altura_px: int, folga: float = 0.2) -> float:
+    # O zoom do mapa navegável (Web Mercator, ladrilhos de 512 px) em que de `sul` a `norte` cabe em
+    # `altura_px` pixels, com uma folga: o círculo inteiro na altura do mapa
+    def y(latitude: float) -> float:
+        return math.log(math.tan(math.pi / 4 + math.radians(latitude) / 2))
+    return math.log2(altura_px * 2 * math.pi / ((y(norte) - y(sul)) * 512)) - folga
