@@ -518,3 +518,31 @@ def test_o_mapa_dos_flashes_no_quadro_do_estado(base):
     assert eixo.get_xlim() == pytest.approx((oeste, leste)) and eixo.get_ylim() == pytest.approx((sul, norte))
     assert "Dados: NOAA (GOES-19/GLM)/SEMADESC" in [t.get_text() for t in eixo.texts]
 
+
+
+def test_no_mapa_do_circulo_os_logos_vao_embaixo_e_a_legenda_acima_deles(base):
+    # Pedido da equipe: no círculo dos raios, os logos ficam no canto de baixo à direita (sobre o
+    # oceano), e não em cima do Brasil; nos outros mapas do boletim, continuam em cima
+    from app import boletim, raios
+    if not base.logos:
+        pytest.skip("sem os logos em img/")
+    flashes = pd.DataFrame({"longitude": [-54.5], "latitude": [-20.5], "idade": [1.0]})
+    espec = mapas.EspecMapa(tabela="", coluna="", titulo="Raios", subtitulo="Agora", arquivo="", cmap="",
+                            unidade="", ranking="", credito=raios.CREDITO)
+    rotulos = [r for _, r in raios.rotulos_das_idades()]
+    figura = mapas.mapa_do_circulo(flashes, raios.IDADES, rotulos, espec, base, mapas.carregar_brasil_e_vizinhos(),
+                                   raios.aneis(), config.CENTRO_DOS_RAIOS, "Campo Grande", raios.quadro_do_circulo())
+    # Medido depois de gravar como o boletim grava (no primeiro desenho os logos ainda não acompanham
+    # o quadro, que se ajusta à proporção do mapa)
+    boletim.png(figura)
+    eixo = figura.axes[0]
+    quadro = eixo.get_window_extent()
+    logos = [filho.get_window_extent() for filho in eixo.child_axes]
+    assert len(logos) == len(base.logos)
+    assert all(logo.y1 < quadro.y0 + 0.3 * quadro.height for logo in logos)
+    assert eixo.get_legend().get_window_extent().y0 >= max(logo.y1 for logo in logos)
+    # No mapa de MS, em cima, como sempre
+    estado = mapas.mapa_de_flashes(flashes, raios.IDADES, rotulos, espec, base)
+    boletim.png(estado)
+    quadro = estado.axes[0].get_window_extent()
+    assert all(filho.get_window_extent().y0 > quadro.y0 + 0.6 * quadro.height for filho in estado.axes[0].child_axes)

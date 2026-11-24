@@ -36,6 +36,9 @@ MAX_CLASSES = 12
 CREDITO = "INMET/SEMADESC"
 # O do mapa que tem estação do CEMADEN (decisão da equipe, 16/11/2026, no lugar da citação em inglês da PED)
 CREDITO_COM_CEMADEN = "INMET/SEMADESC/CEMADEN"
+# No mapa do círculo dos raios os logos vão para o canto de baixo à direita, sobre o oceano, e não em
+# cima do Brasil (pedido da equipe, 24/11/2026): a esta distância da borda de baixo
+MARGEM_DOS_LOGOS_EMBAIXO = 0.015
 
 
 @dataclass(frozen=True)
@@ -399,12 +402,15 @@ def mapa_do_circulo(flashes: pd.DataFrame, idades: list[tuple[int, str]], rotulo
                 linestyle="-" if ultimo else "--", zorder=3)
         ax.text(anel.lon_rotulo, anel.lat_rotulo + 0.35, anel.rotulo, ha="center", va="bottom",
                 fontsize=_corpo(tela) * 0.9, color="#333333", zorder=6, path_effects=contorno)
-    _flashes_por_tempo(ax, flashes, idades, rotulos, legenda, 3 if tela is None else 7, tela)
+    # Com os logos embaixo à direita (só no do relatório: na tela eles não saem), a legenda fica acima deles
+    _, topo_dos_logos = _logos_embaixo(base) if tela is None else (0.0, 0.0)
+    _flashes_por_tempo(ax, flashes, idades, rotulos, legenda, 3 if tela is None else 7, tela,
+                       acima_de=topo_dos_logos + MARGEM_DOS_LOGOS_EMBAIXO if topo_dos_logos else 0.0)
     ax.plot(*centro, marker="*", color="black", markeredgecolor="white", markersize=14, zorder=7)
     ax.text(centro[0] + 0.4, centro[1] + 0.3, nome_do_centro, fontsize=_corpo(tela), weight="bold", zorder=7,
             path_effects=contorno)
     ax.set_aspect(1 / np.cos(np.radians(centro[1])))
-    return _finalizar(fig, ax, espec, base, caminho, tela, limites=limites)
+    return _finalizar(fig, ax, espec, base, caminho, tela, limites=limites, logos_embaixo=True)
 
 
 def mapa_de_flashes(flashes: pd.DataFrame, idades: list[tuple[int, str]], rotulos: list[str], espec: EspecMapa,
@@ -422,9 +428,10 @@ def mapa_de_flashes(flashes: pd.DataFrame, idades: list[tuple[int, str]], rotulo
 
 
 def _flashes_por_tempo(ax, flashes: pd.DataFrame, idades: list[tuple[int, str]], rotulos: list[str], legenda: str,
-                       tamanho: float, tela: Tela | None) -> None:
+                       tamanho: float, tela: Tela | None, acima_de: float = 0.0) -> None:
     # Um ponto por flash na cor da sua faixa de tempo, do mais velho ao mais novo (o mais novo fica por
-    # cima), e a legenda com quantos flashes há em cada faixa
+    # cima), e a legenda com quantos flashes há em cada faixa: no canto de baixo à direita, ou, com
+    # `acima_de` (fração da altura do mapa), logo acima disso
     marcas, anterior = [], 0
     for (limite, cor), rotulo in zip(idades, rotulos):
         da_faixa = flashes[(flashes["idade"] >= anterior) & (flashes["idade"] < limite)]
@@ -436,7 +443,17 @@ def _flashes_por_tempo(ax, flashes: pd.DataFrame, idades: list[tuple[int, str]],
     marcas_da_legenda = [Line2D([0], [0], marker="o", linestyle="", color=cor, markersize=9, label=texto)
                          for _, cor, texto in marcas]
     ax.legend(handles=marcas_da_legenda, loc="lower right", title=legenda, fontsize=_corpo(tela),
-              title_fontsize=_corpo(tela), framealpha=0.9)
+              title_fontsize=_corpo(tela), framealpha=0.9,
+              **({"bbox_to_anchor": (1.0, acima_de)} if acima_de else {}))
+
+
+def _logos_embaixo(base: BaseCartografica) -> tuple[float, float]:
+    # Quanto descer os logos para o canto de baixo (mantendo o arranjo deles) e onde fica o topo deles
+    # depois disso, em fração da altura do mapa
+    if not base.logos:
+        return 0.0, 0.0
+    descida = min(retangulo[1] for _, retangulo in base.logos) - MARGEM_DOS_LOGOS_EMBAIXO
+    return descida, max(retangulo[1] + retangulo[3] for _, retangulo in base.logos) - descida
 
 
 # =====================================================
@@ -591,7 +608,8 @@ def _corpo_rotulo(tamanho: float, tela: "Tela | None") -> float:
 
 
 def _finalizar(fig, ax, espec, base: BaseCartografica, caminho: Path | None,
-               tela: "Tela | None" = None, limites: tuple[float, float, float, float] | None = None) -> Figure:
+               tela: "Tela | None" = None, limites: tuple[float, float, float, float] | None = None,
+               logos_embaixo: bool = False) -> Figure:
     if tela is None:
         # O título e o subtítulo dizem o quê e quando; de quem é o dado vai numa linha miúda embaixo
         # do mapa, à direita (até a 0.3.7, o crédito do INMET ia no fim do subtítulo). O rodapé da
@@ -613,9 +631,12 @@ def _finalizar(fig, ax, espec, base: BaseCartografica, caminho: Path | None,
         # e não se lê. Quem precisa de coordenada está olhando o mapa do relatório.
         ax.set_axis_off()
 
-    # Logos posicionados pela moldura do mapa: mesmo lugar e proporção em qualquer tamanho de figura
+    # Logos posicionados pela moldura do mapa: mesmo lugar e proporção em qualquer tamanho de figura. Em
+    # cima à direita, ou (logos_embaixo) no canto de baixo à direita, no mesmo arranjo
+    descida = _logos_embaixo(base)[0] if logos_embaixo else 0.0
     for imagem, retangulo in (base.logos if tela is None else []):
-        eixo_logo = ax.inset_axes(retangulo, zorder=10)
+        x, y, largura, altura = retangulo
+        eixo_logo = ax.inset_axes([x, y - descida, largura, altura], zorder=10)
         eixo_logo.imshow(imagem)
         eixo_logo.set_anchor("NE")
         eixo_logo.axis("off")
