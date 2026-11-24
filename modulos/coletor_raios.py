@@ -16,7 +16,6 @@ que apaga e grava a hora inteira: rodar de novo não duplica nada.
 """
 import time
 from dataclasses import dataclass, field
-from datetime import timedelta
 
 import pandas as pd
 import psycopg

@@ -57,7 +57,7 @@ def superficie_png(pontos: pd.DataFrame, coluna: str, grade_fina: Malha, paleta:
 def png_da_grade(grade: np.ndarray, grade_fina: Malha, paleta: str, niveis=None, medidas: pd.Series | None = None,
                  opacidade: float = OPACIDADE) -> bytes:
     # Uma superfície já calculada na malha fina: a do IDW das estações, ou a do modelo na previsão
-    pintura, vazio = cores(grade, paleta, niveis, medidas, opacidade)
+    pintura, _ = cores(grade, paleta, niveis, medidas, opacidade)
     pintura[~grade_fina.dentro | np.isnan(grade)] = 0  # transparente fora do estado
 
     # A primeira linha da imagem é o norte; a grade começa no sul
