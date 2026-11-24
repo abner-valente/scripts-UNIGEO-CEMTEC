@@ -181,6 +181,7 @@ def chuva_cemaden(estacoes: pd.DataFrame, inicio: datetime, fim: datetime,
 COLUNAS_RAIOS_RECENTES = ["hora_utc", "longitude", "latitude"]
 COLUNAS_RAIOS_POR_CELULA = ["lon_celula", "lat_celula", "flashes"]
 COLUNAS_COBERTURA_RAIOS = ["hora_utc", "arquivos", "sem_arquivo", "flashes"]
+COLUNAS_CELULAS_DO_CIRCULO = ["lon_celula", "lat_celula", "faixa", "flashes", "mais_novo"]
 
 
 def tem_raios() -> bool:
@@ -194,6 +195,23 @@ def raios_recentes(desde: datetime, ate: datetime) -> tuple[pd.DataFrame, pd.Tim
         return pd.DataFrame(columns=COLUNAS_RAIOS_RECENTES), None
     with _conexao() as conexao:
         return banco.ler_raios_recentes(conexao, desde, ate), banco.ultimo_arquivo_do_glm(conexao, desde)
+
+
+def celulas_do_circulo(desde: datetime, ate: datetime, idades: list[int]) -> pd.DataFrame:
+    # Os flashes de [desde, ate) no círculo de Campo Grande e fora da caixa do estado, por célula de
+    # 0,1° e faixa de idade
+    if not _do_banco():
+        return pd.DataFrame(columns=COLUNAS_CELULAS_DO_CIRCULO)
+    with _conexao() as conexao:
+        return banco.ler_celulas_do_circulo(conexao, desde, ate, idades)
+
+
+def raios_do_circulo(desde: datetime, ate: datetime) -> pd.DataFrame:
+    # Os flashes de [desde, ate) no círculo inteiro, um a um (para o PNG do boletim)
+    if not _do_banco():
+        return pd.DataFrame(columns=COLUNAS_RAIOS_RECENTES)
+    with _conexao() as conexao:
+        return banco.ler_raios_do_circulo(conexao, desde, ate)
 
 
 def raios_do_periodo(inicio: datetime, fim: datetime) -> tuple[pd.DataFrame, pd.DataFrame]:

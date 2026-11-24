@@ -37,6 +37,11 @@ TREZE = datetime(2026, 11, 18, 13, tzinfo=UTC)
 CAMPO_GRANDE = (-54.57, -20.43)    # a célula (-546, -205)
 DOURADOS = (-54.81, -22.22)        # a célula (-549, -223)
 CUIABA = (-56.10, -15.60)          # fora da caixa (ao norte)
+# Para o círculo de 2.000 km de Campo Grande
+ASSUNCAO = (-57.63, -25.28)        # fora da caixa (ao sul), a ~620 km: a célula (-577, -253)
+PORTO_ALEGRE = (-51.23, -30.03)    # a ~1.120 km: a célula (-513, -301)
+LIMA = (-77.04, -12.05)            # fora até da caixa do círculo
+NO_CANTO = (-72.0, -36.0)          # dentro da caixa do círculo, mas a ~2.400 km
 
 
 def hora(texto: str) -> pd.Timestamp:
@@ -260,3 +265,23 @@ def test_a_soma_por_celula_e_o_alcance(glm, conexao):
 def test_sem_nada_contado_o_alcance_e_vazio(glm, conexao):
     assert banco.alcance_dos_raios(conexao) == (None, None)
     assert banco.ler_raios_por_celula(conexao, TREZE, TREZE + timedelta(hours=1)).empty
+
+
+# =====================================================
+# O CÍRCULO DE 2.000 KM DE CAMPO GRANDE
+# =====================================================
+def test_os_quadradinhos_do_circulo_ficam_fora_da_caixa_e_dentro_dos_2000_km(glm, conexao):
+    quatorze = TREZE + timedelta(hours=1)
+    glm.arquivo(TREZE + timedelta(minutes=10), [ASSUNCAO])                               # ~50 min antes
+    glm.arquivo(TREZE + timedelta(minutes=30), [CAMPO_GRANDE, ASSUNCAO, PORTO_ALEGRE, LIMA, NO_CANTO])
+    glm.arquivo(TREZE + timedelta(minutes=56), [ASSUNCAO, ASSUNCAO])                     # ~4 min antes
+    celulas = banco.ler_celulas_do_circulo(conexao, TREZE, quatorze, [5, 15, 30, 60])
+    # Campo Grande está na caixa (vem um a um, em ler_raios_recentes); Lima e o canto, longe demais
+    assert {(l.lon_celula, l.lat_celula, l.faixa): l.flashes for l in celulas.itertuples()} == {
+        (-577, -253, 0): 2, (-577, -253, 2): 1, (-577, -253, 3): 1, (-513, -301, 2): 1}
+    mais_novo = celulas.set_index(["lon_celula", "lat_celula", "faixa"]).loc[(-577, -253, 0), "mais_novo"]
+    assert mais_novo == pd.Timestamp(TREZE + timedelta(minutes=56, seconds=5))
+    todos = banco.ler_raios_do_circulo(conexao, TREZE, quatorze)
+    assert len(todos) == 6                                   # Campo Grande, Porto Alegre e 4 em Assunção
+    assert list(todos.columns) == ["hora_utc", "longitude", "latitude"]
+    assert banco.ler_celulas_do_circulo(conexao, quatorze, quatorze + timedelta(hours=1), [5, 60]).empty

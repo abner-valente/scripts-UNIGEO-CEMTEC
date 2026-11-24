@@ -1,6 +1,8 @@
 """Os raios do GOES-19 (GLM) no painel: as contas da página Raios, sem tela, para poder ser testado.
 
-- **Agora**: os flashes recentes, cada um com a cor da idade, e a contagem a cada 5 minutos;
+- **Agora**: os flashes recentes, cada um com a cor da idade, e a contagem a cada 5 minutos. No
+  círculo de 2.000 km de Campo Grande, os de dentro do estado vão um a um e os de fora em
+  quadradinhos de 0,1°: um ponto por flash pesaria ~10 a 25 MB por minuto no navegador;
 - **Densidade**: os flashes de um período por km², nas células de 0,1° que o coletor conta.
 
 O GLM é um sensor óptico em órbita: vê os raios dentro da nuvem e os que chegam ao solo, sem
@@ -15,13 +17,17 @@ import pandas as pd
 import shapely
 
 from app import interativo
-from modulos import config
+from modulos import calculos, config
 
 CREDITO = "NOAA (GOES-19/GLM)/SEMADESC"
-RAIO_DA_TERRA_KM = 6371.0088
 # As idades do mapa do Agora, do flash mais novo ao mais velho: até tantos minutos, esta cor
 IDADES = [(5, "#fff200"), (15, "#ff9900"), (30, "#ff2a00"), (60, "#a3007d")]
-JANELAS_DO_AGORA = [15, 30, 60]   # minutos no mapa
+JANELAS_DO_AGORA = [15, 30, 60]   # minutos no mapa (cada uma termina numa das idades)
+# No círculo, os flashes de dentro do estado vão um a um até este tanto na janela (~1,5 MB no
+# navegador, que recebe o mapa de novo a cada minuto); acima disso o estado também vai em
+# quadradinhos. Na hora mais ativa em MS desde 05/10/2026, foram ~48 mil flashes
+LIMITE_DE_PONTOS = 5_000
+COLUNAS_DAS_CELULAS = ["lon_celula", "lat_celula", "faixa", "flashes", "mais_novo"]
 HORAS_DO_GRAFICO = 3
 MINUTOS_POR_BARRA = 5
 # Flashes por km² no período: a célula sem flash fica sem cor; a primeira classe pega qualquer
@@ -59,9 +65,11 @@ def pontos_por_idade(flashes: pd.DataFrame, agora: datetime, minutos: int, fuso)
     dentro = (idade >= 0) & (idade < minutos)
     pontos = flashes.loc[dentro, ["hora_utc", "longitude", "latitude"]].assign(idade=idade[dentro])
     pontos = pontos.sort_values("idade", ascending=False, kind="stable").reset_index(drop=True)
+    # 4 casas (~10 m, e o GLM vê a ~8 km): menos texto no mapa que vai ao navegador a cada minuto
+    pontos[["longitude", "latitude"]] = pontos[["longitude", "latitude"]].round(4)
     pontos["cor"] = [interativo.rgba(cor_da_idade(valor)) for valor in pontos["idade"]]
     pontos["titulo"] = [f"Flash às {hora:%H:%M:%S}" for hora in pontos["hora_utc"].dt.tz_convert(fuso)]
-    pontos["detalhe"] = [f"há {int(valor)} min" if valor >= 1 else "há menos de 1 min" for valor in pontos["idade"]]
+    pontos["detalhe"] = [_ha(valor) for valor in pontos["idade"]]
     return pontos.drop(columns=["hora_utc"])
 
 
@@ -69,6 +77,86 @@ def no_estado(flashes: pd.DataFrame, estado) -> np.ndarray:
     if flashes.empty:
         return np.zeros(0, dtype=bool)
     return shapely.contains_xy(estado, flashes["longitude"].to_numpy(), flashes["latitude"].to_numpy())
+
+
+def faixa_da_idade(minutos) -> np.ndarray:
+    # 0 até a primeira idade (5 min), 1 até a segunda... como o width_bucket do banco
+    return np.searchsorted([limite for limite, _ in IDADES[:-1]], np.asarray(minutos, dtype=float), side="right")
+
+
+def em_celulas(flashes: pd.DataFrame, agora: datetime) -> pd.DataFrame:
+    # Os flashes da última hora contados por célula de 0,1° e faixa de idade, como o banco conta os
+    # do círculo (banco.ler_celulas_do_circulo)
+    idade = idade_em_minutos(flashes["hora_utc"], agora) if not flashes.empty else pd.Series(dtype=float)
+    dentro = (idade >= 0) & (idade < IDADES[-1][0])
+    if not dentro.any():
+        return pd.DataFrame(columns=COLUNAS_DAS_CELULAS)
+    celulas = config.CELULAS_POR_GRAU_RAIOS
+    tabela = pd.DataFrame({"lon_celula": np.floor(flashes.loc[dentro, "longitude"] * celulas).astype(int),
+                           "lat_celula": np.floor(flashes.loc[dentro, "latitude"] * celulas).astype(int),
+                           "faixa": faixa_da_idade(idade[dentro]), "hora_utc": flashes.loc[dentro, "hora_utc"]})
+    return tabela.groupby(["lon_celula", "lat_celula", "faixa"], as_index=False).agg(
+        flashes=("hora_utc", "size"), mais_novo=("hora_utc", "max"))
+
+
+def celulas_da_janela(celulas: pd.DataFrame, agora: datetime, minutos: int, fuso) -> pd.DataFrame:
+    # Um quadradinho por célula com os flashes dos últimos `minutos` (as faixas de idade até ali),
+    # na cor da idade do mais novo, com o balão do mapa
+    faixas = [faixa for faixa, (limite, _) in enumerate(IDADES) if limite <= minutos]
+    tabela = celulas[celulas["faixa"].isin(faixas)]
+    if tabela.empty:
+        return pd.DataFrame(columns=["lon_celula", "lat_celula", "flashes", "mais_novo", "Longitude", "Latitude",
+                                     "cor", "titulo", "detalhe"])
+    tabela = tabela.groupby(["lon_celula", "lat_celula"], as_index=False).agg(flashes=("flashes", "sum"),
+                                                                             mais_novo=("mais_novo", "max"))
+    idade = idade_em_minutos(tabela["mais_novo"], agora)
+    tabela = tabela.assign(idade=idade).sort_values("idade", ascending=False, kind="stable").reset_index(drop=True)
+    passo = 1 / config.CELULAS_POR_GRAU_RAIOS
+    tabela["Longitude"] = ((tabela["lon_celula"] + 0.5) * passo).round(4)
+    tabela["Latitude"] = ((tabela["lat_celula"] + 0.5) * passo).round(4)
+    tabela["cor"] = [interativo.rgba(cor_da_idade(valor), 230) for valor in tabela["idade"]]
+    tabela["titulo"] = [f"{n} flash" + ("es" if n != 1 else "") for n in tabela["flashes"]]
+    tabela["detalhe"] = [f"o mais novo às {hora:%H:%M:%S} ({_ha(valor)})\nCélula de 0,1° em {abs(lat):.2f}° S, "
+                         f"{abs(lon):.2f}° O".replace(".", ",")
+                         for hora, valor, lon, lat in zip(tabela["mais_novo"].dt.tz_convert(fuso), tabela["idade"],
+                                                          tabela["Longitude"], tabela["Latitude"])]
+    return tabela.drop(columns=["idade"])
+
+
+def _ha(minutos: float) -> str:
+    return f"há {int(minutos)} min" if minutos >= 1 else "há menos de 1 min"
+
+
+def agora_no_circulo(flashes: pd.DataFrame, dentro: np.ndarray, de_fora: pd.DataFrame, agora: datetime,
+                     minutos: int, fuso) -> tuple[pd.DataFrame, pd.DataFrame, bool]:
+    # O mapa do círculo: os flashes de dentro do estado um a um, e o resto em quadradinhos (os da
+    # caixa que ficam fora do estado, contados aqui, e os de fora da caixa, já contados no banco).
+    # Com mais de LIMITE_DE_PONTOS no estado, ele também vai em quadradinhos (o True do fim)
+    pontos = pontos_por_idade(flashes[dentro], agora, minutos, fuso)
+    muitos = len(pontos) > LIMITE_DE_PONTOS
+    da_caixa = flashes if muitos else flashes[~dentro]
+    if muitos:
+        pontos = pontos.iloc[:0]
+    contadas = [tabela for tabela in (em_celulas(da_caixa, agora), de_fora) if not tabela.empty]
+    celulas = pd.concat(contadas, ignore_index=True) if contadas else pd.DataFrame(columns=COLUNAS_DAS_CELULAS)
+    return pontos, celulas_da_janela(celulas, agora, minutos, fuso), muitos
+
+
+def aneis(centro: tuple[float, float] = config.CENTRO_DOS_RAIOS,
+          distancias: tuple[int, ...] = config.ANEIS_DOS_RAIOS_KM) -> pd.DataFrame:
+    # Os anéis de distância em volta do centro: o caminho de cada um e onde vai o rótulo (no sul dele,
+    # o lado que a equipe mais olha)
+    linhas = []
+    for km in distancias:
+        lon, lat = calculos.circulo(centro, km)
+        sul = int(np.argmin(lat))
+        linhas.append({"km": km, "caminho": np.column_stack([lon, lat]).round(4).tolist(), "rotulo": em_km(km),
+                       "lon_rotulo": float(lon[sul]), "lat_rotulo": float(lat[sul])})
+    return pd.DataFrame(linhas)
+
+
+def em_km(km: float) -> str:
+    return f"{km:,.0f} km".replace(",", ".")
 
 
 def por_barra(flashes: pd.DataFrame, agora: datetime, fuso, horas: int = HORAS_DO_GRAFICO,
@@ -98,7 +186,7 @@ def area_da_celula_km2(lat_celula) -> np.ndarray:
     passo = 1 / config.CELULAS_POR_GRAU_RAIOS
     sul = np.radians(np.asarray(lat_celula, dtype=float) * passo)
     norte = np.radians((np.asarray(lat_celula, dtype=float) + 1) * passo)
-    return RAIO_DA_TERRA_KM ** 2 * math.radians(passo) * (np.sin(norte) - np.sin(sul))
+    return config.RAIO_DA_TERRA_KM ** 2 * math.radians(passo) * (np.sin(norte) - np.sin(sul))
 
 
 def densidade(por_celula: pd.DataFrame) -> pd.DataFrame:
@@ -195,3 +283,27 @@ def nos_pixels(por_celula: pd.DataFrame, lon: np.ndarray, lat: np.ndarray) -> np
     campo = np.full(np.shape(lon), np.nan)
     campo[dentro] = valores[linha[dentro], coluna[dentro]]
     return campo
+
+
+def quadro_do_circulo(centro: tuple[float, float] = config.CENTRO_DOS_RAIOS, km: float = config.RAIO_DOS_RAIOS_KM,
+                      margem: float = 1.0) -> tuple[float, float, float, float]:
+    # Oeste, leste, sul e norte do PNG do círculo: a caixa dele com `margem` graus em volta
+    oeste, sul, leste, norte = calculos.caixa_do_circulo(centro, km)
+    return oeste - margem, leste + margem, sul - margem, norte + margem
+
+
+def flashes_da_janela(flashes: pd.DataFrame, agora: datetime, minutos: int) -> pd.DataFrame:
+    # Os flashes dos últimos `minutos`, com a idade, para o PNG do boletim
+    if flashes.empty:
+        return pd.DataFrame(columns=["longitude", "latitude", "idade"])
+    idade = idade_em_minutos(flashes["hora_utc"], agora)
+    dentro = (idade >= 0) & (idade < minutos)
+    return flashes.loc[dentro, ["longitude", "latitude"]].assign(idade=idade[dentro]).reset_index(drop=True)
+
+
+def latitude_do_meio(sul: float, norte: float) -> float:
+    # A latitude que fica no meio da tela entre `sul` e `norte`, no Mercator do mapa navegável: o
+    # sul do círculo estica mais que o norte, e o meio fica abaixo do centro dele
+    def y(latitude: float) -> float:
+        return math.log(math.tan(math.pi / 4 + math.radians(latitude) / 2))
+    return math.degrees(2 * math.atan(math.exp((y(sul) + y(norte)) / 2)) - math.pi / 2)

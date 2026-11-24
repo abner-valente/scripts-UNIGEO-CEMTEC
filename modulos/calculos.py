@@ -126,3 +126,29 @@ def _em_km(lons, lats, lon_centro: float, lat_centro: float) -> np.ndarray:
     x, y = transformador.transform(np.ravel(np.asarray(lons, dtype=float)).tolist(),
                                    np.ravel(np.asarray(lats, dtype=float)).tolist())
     return np.column_stack([x, y])
+
+
+def distancia_km(lon1, lat1, lon2, lat2) -> np.ndarray:
+    # A distância na esfera (haversine), a mesma conta do ST_DistanceSphere do PostGIS
+    lon1, lat1, lon2, lat2 = (np.radians(np.asarray(valor, dtype=float)) for valor in (lon1, lat1, lon2, lat2))
+    a = np.sin((lat2 - lat1) / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin((lon2 - lon1) / 2) ** 2
+    return 2 * config.RAIO_DA_TERRA_KM * np.arcsin(np.sqrt(a))
+
+
+def circulo(centro: tuple[float, float], km: float, pontos: int = 181) -> tuple[np.ndarray, np.ndarray]:
+    # Os pontos a `km` do centro (longitude, latitude), na esfera, de rumo em rumo e fechando o anel
+    lon0, lat0 = np.radians(centro[0]), np.radians(centro[1])
+    angulo = km / config.RAIO_DA_TERRA_KM
+    rumo = np.radians(np.linspace(0, 360, pontos))
+    lat = np.arcsin(np.sin(lat0) * np.cos(angulo) + np.cos(lat0) * np.sin(angulo) * np.cos(rumo))
+    lon = lon0 + np.arctan2(np.sin(rumo) * np.sin(angulo) * np.cos(lat0), np.cos(angulo) - np.sin(lat0) * np.sin(lat))
+    return np.degrees(lon), np.degrees(lat)
+
+
+def caixa_do_circulo(centro: tuple[float, float], km: float) -> tuple[float, float, float, float]:
+    # Oeste, sul, leste e norte do círculo (que não chegue a um polo). Na esfera, o círculo vai ao
+    # norte e ao sul na mesma longitude do centro, e mais a leste e a oeste numa latitude mais perto
+    # do polo, com asin(sen d / cos φ) de longitude para cada lado
+    angulo = km / config.RAIO_DA_TERRA_KM
+    lado = np.degrees(np.arcsin(np.sin(angulo) / np.cos(np.radians(centro[1]))))
+    return (centro[0] - lado, centro[1] - np.degrees(angulo), centro[0] + lado, centro[1] + np.degrees(angulo))

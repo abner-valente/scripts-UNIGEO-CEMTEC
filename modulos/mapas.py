@@ -369,6 +369,54 @@ def mapa_de_celulas(lon_bordas: np.ndarray, lat_bordas: np.ndarray, valores: np.
     return _finalizar(fig, ax, espec, base, caminho, tela)
 
 
+def carregar_brasil_e_vizinhos() -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    # Os estados do Brasil e os países em volta (ferramentas/brasil_e_vizinhos.py), para os mapas largos
+    return (gpd.read_file(config.SHAPE_BRASIL_E_VIZINHOS, layer="estados"),
+            gpd.read_file(config.SHAPE_BRASIL_E_VIZINHOS, layer="paises"))
+
+
+def mapa_do_circulo(flashes: pd.DataFrame, idades: list[tuple[int, str]], rotulos: list[str], espec: EspecMapa,
+                    base: BaseCartografica, regiao: tuple[gpd.GeoDataFrame, gpd.GeoDataFrame], aneis: pd.DataFrame,
+                    centro: tuple[float, float], nome_do_centro: str, limites: tuple[float, float, float, float],
+                    caminho: Path | None = None, tela: Tela | None = None) -> Figure:
+    # Os flashes recentes num círculo em volta de um centro (os raios até 2.000 km de Campo Grande),
+    # um ponto por flash na cor da idade, o mais novo por cima, com os anéis de distância, os estados
+    # do Brasil e os países em volta. `flashes` tem longitude, latitude e idade (minutos); `limites`
+    # é oeste, leste, sul, norte do quadro
+    fig, ax = _nova_figura((14, 14))
+    estados, paises = regiao
+    paises.boundary.plot(ax=ax, linewidth=0.8, color="#7a7a7a")
+    estados.boundary.plot(ax=ax, linewidth=0.5, color="#a0a0a0")
+    base.uf.boundary.plot(ax=ax, linewidth=1.8, color="black")
+    contorno = [withStroke(linewidth=3, foreground="white")]
+    for anel in aneis.itertuples():
+        caminho_do_anel = np.asarray(anel.caminho)
+        ultimo = anel.Index == len(aneis) - 1
+        ax.plot(caminho_do_anel[:, 0], caminho_do_anel[:, 1], color="#4d4d4d", linewidth=1.3 if ultimo else 0.8,
+                linestyle="-" if ultimo else "--", zorder=3)
+        ax.text(anel.lon_rotulo, anel.lat_rotulo + 0.35, anel.rotulo, ha="center", va="bottom",
+                fontsize=_corpo(tela) * 0.9, color="#333333", zorder=6, path_effects=contorno)
+    # Do mais velho ao mais novo: o mais novo fica por cima
+    tamanho = 2.5 if tela is None else 6
+    marcas, anterior = [], 0
+    for (limite, cor), rotulo in zip(idades, rotulos):
+        da_faixa = flashes[(flashes["idade"] >= anterior) & (flashes["idade"] < limite)]
+        marcas.append((da_faixa, cor, f"{rotulo} ({len(da_faixa):,})".replace(",", ".")))
+        anterior = limite
+    for da_faixa, cor, _ in reversed(marcas):
+        ax.scatter(da_faixa["longitude"], da_faixa["latitude"], s=tamanho, color=cor, linewidths=0, zorder=4,
+                   rasterized=True)
+    ax.plot(*centro, marker="*", color="black", markeredgecolor="white", markersize=14, zorder=7)
+    ax.text(centro[0] + 0.4, centro[1] + 0.3, nome_do_centro, fontsize=_corpo(tela), weight="bold", zorder=7,
+            path_effects=contorno)
+    legenda = [Line2D([0], [0], marker="o", linestyle="", color=cor, markersize=9, label=texto)
+               for _, cor, texto in marcas]
+    ax.legend(handles=legenda, loc="lower right", title="Idade do flash", fontsize=_corpo(tela),
+              title_fontsize=_corpo(tela), framealpha=0.9)
+    ax.set_aspect(1 / np.cos(np.radians(centro[1])))
+    return _finalizar(fig, ax, espec, base, caminho, tela, limites=limites)
+
+
 # =====================================================
 # ELEMENTOS COMUNS DOS MAPAS
 # =====================================================
@@ -521,7 +569,7 @@ def _corpo_rotulo(tamanho: float, tela: "Tela | None") -> float:
 
 
 def _finalizar(fig, ax, espec, base: BaseCartografica, caminho: Path | None,
-               tela: "Tela | None" = None) -> Figure:
+               tela: "Tela | None" = None, limites: tuple[float, float, float, float] | None = None) -> Figure:
     if tela is None:
         # O título e o subtítulo dizem o quê e quando; de quem é o dado vai numa linha miúda embaixo
         # do mapa, à direita (até a 0.3.7, o crédito do INMET ia no fim do subtítulo). O rodapé da
@@ -530,8 +578,9 @@ def _finalizar(fig, ax, espec, base: BaseCartografica, caminho: Path | None,
         linhas = [f"Dados: {espec.credito}"] + ([espec.rodape] if getattr(espec, "rodape", "") else [])
         ax.annotate("\n".join(linhas), xy=(1, 0), xycoords="axes fraction", xytext=(0, -30),
                     textcoords="offset points", ha="right", va="top", fontsize=9, color="#555555")
-    # O enquadramento vem da base, e não do módulo: é a base que sabe de que recorte ela é
-    oeste, leste, sul, norte = base.recorte.limites
+    # O enquadramento vem da base, e não do módulo: é a base que sabe de que recorte ela é. Os mapas
+    # largos (o círculo dos raios) trazem o seu
+    oeste, leste, sul, norte = limites if limites is not None else base.recorte.limites
     ax.set_xlim(oeste, leste)
     ax.set_ylim(sul, norte)
     if tela is None:

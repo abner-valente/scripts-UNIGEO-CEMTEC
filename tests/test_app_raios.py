@@ -7,7 +7,7 @@ import pytest
 import shapely
 
 from app import raios
-from modulos import config, fonte
+from modulos import calculos, config, fonte
 
 AGORA = datetime(2026, 11, 18, 17, 2, 30, tzinfo=timezone.utc)
 MS = config.FUSO_MS
@@ -136,3 +136,84 @@ def test_sem_banco_a_fonte_nao_tem_raios():
     por_celula, cobertura = fonte.raios_do_periodo(AGORA, AGORA)
     assert list(por_celula.columns) == fonte.COLUNAS_RAIOS_POR_CELULA and cobertura.empty
     assert fonte.alcance_dos_raios() == (None, None)
+    assert list(fonte.celulas_do_circulo(AGORA, AGORA, [5, 60]).columns) == fonte.COLUNAS_CELULAS_DO_CIRCULO
+    assert fonte.raios_do_circulo(AGORA, AGORA).empty
+
+
+# =====================================================
+# O CÍRCULO DE 2.000 KM DE CAMPO GRANDE
+# =====================================================
+def test_os_flashes_da_ultima_hora_em_quadradinhos_por_faixa_de_idade():
+    celulas = raios.em_celulas(flashes((1, -54.55, -20.45), (3, -54.56, -20.44), (10, -54.55, -20.45),
+                                       (70, -54.55, -20.45), (-1, -54.55, -20.45)), AGORA)
+    # As de 70 min (fora da hora) e a do futuro ficam de fora
+    assert {(l.lon_celula, l.lat_celula, l.faixa): l.flashes for l in celulas.itertuples()} == {
+        (-546, -205, 0): 2, (-546, -205, 1): 1}
+    assert celulas.loc[celulas["faixa"] == 0, "mais_novo"].iloc[0] == pd.Timestamp(AGORA) - pd.Timedelta(minutes=1)
+    assert list(raios.faixa_da_idade([0, 4.9, 5, 14.9, 15, 29, 30, 59])) == [0, 0, 1, 1, 2, 2, 3, 3]
+    assert list(raios.em_celulas(flashes((1, -54.5, -20.5)).iloc[:0], AGORA).columns) == raios.COLUNAS_DAS_CELULAS
+
+
+def test_cada_quadradinho_soma_as_faixas_da_janela_e_tem_a_cor_do_mais_novo():
+    do_banco = pd.DataFrame({"lon_celula": [-600], "lat_celula": [-300], "faixa": [3], "flashes": [4],
+                             "mais_novo": [pd.Timestamp(AGORA) - pd.Timedelta(minutes=40)]})
+    celulas = pd.concat([raios.em_celulas(flashes((1, -54.55, -20.45), (10, -54.55, -20.45)), AGORA), do_banco])
+    quinze = raios.celulas_da_janela(celulas, AGORA, 15, MS)
+    assert len(quinze) == 1
+    assert (quinze.loc[0, "Longitude"], quinze.loc[0, "Latitude"], quinze.loc[0, "flashes"]) == (-54.55, -20.45, 2)
+    assert quinze.loc[0, "cor"] == [255, 242, 0, 230]
+    assert quinze.loc[0, "titulo"] == "2 flashes"
+    assert quinze.loc[0, "detalhe"] == "o mais novo às 13:01:30 (há 1 min)\nCélula de 0,1° em 20,45° S, 54,55° O"
+    hora = raios.celulas_da_janela(celulas, AGORA, 60, MS)
+    # O mais velho primeiro, como os pontos
+    assert list(hora["titulo"]) == ["4 flashes", "2 flashes"]
+    assert hora.loc[0, "cor"] == [163, 0, 125, 230]
+    assert raios.celulas_da_janela(celulas.iloc[:0], AGORA, 60, MS).empty
+
+
+def test_no_circulo_o_estado_vai_um_a_um_e_o_resto_em_quadradinhos(monkeypatch):
+    caixa = flashes((2, -54.5, -20.5), (2, -57.55, -20.45), (20, -57.55, -20.45))
+    dentro = raios.no_estado(caixa, ESTADO)
+    de_fora = pd.DataFrame({"lon_celula": [-600], "lat_celula": [-300], "faixa": [1], "flashes": [5],
+                            "mais_novo": [pd.Timestamp(AGORA) - pd.Timedelta(minutes=6)]})
+    pontos, celulas, muitos = raios.agora_no_circulo(caixa, dentro, de_fora, AGORA, 60, MS)
+    assert (len(pontos), muitos) == (1, False)
+    assert {(l.lon_celula, l.lat_celula): l.flashes for l in celulas.itertuples()} == {(-576, -205): 2, (-600, -300): 5}
+    pontos, celulas, _ = raios.agora_no_circulo(caixa, dentro, de_fora, AGORA, 15, MS)
+    assert len(pontos) + celulas["flashes"].sum() == 7
+    # Com flashes demais no estado, ele também vai em quadradinhos, e nenhum flash se perde
+    monkeypatch.setattr(raios, "LIMITE_DE_PONTOS", 0)
+    pontos, celulas, muitos = raios.agora_no_circulo(caixa, dentro, de_fora, AGORA, 60, MS)
+    assert (len(pontos), muitos, celulas["flashes"].sum()) == (0, True, 8)
+    vazio = raios.agora_no_circulo(caixa.iloc[:0], dentro[:0], de_fora.iloc[:0], AGORA, 60, MS)
+    assert vazio[0].empty and vazio[1].empty and not vazio[2]
+
+
+def test_os_aneis_de_distancia_em_volta_de_campo_grande():
+    aneis = raios.aneis()
+    assert list(aneis["km"]) == list(config.ANEIS_DOS_RAIOS_KM)
+    assert list(aneis["rotulo"]) == ["500 km", "1.000 km", "1.500 km", "2.000 km"]
+    lon, lat = config.CENTRO_DOS_RAIOS
+    for anel in aneis.itertuples():
+        caminho = np.asarray(anel.caminho)
+        distancias = calculos.distancia_km(lon, lat, caminho[:, 0], caminho[:, 1])
+        assert distancias == pytest.approx(anel.km, abs=0.05)
+        assert caminho[0].tolist() == caminho[-1].tolist()          # fecha o anel
+        assert anel.lat_rotulo == pytest.approx(caminho[:, 1].min())   # o rótulo vai no sul
+    assert raios.em_km(500) == "500 km"
+
+
+def test_o_quadro_do_png_e_o_meio_da_tela_do_circulo():
+    oeste, leste, sul, norte = raios.quadro_do_circulo(margem=1.0)
+    c_oeste, c_sul, c_leste, c_norte = calculos.caixa_do_circulo(config.CENTRO_DOS_RAIOS, config.RAIO_DOS_RAIOS_KM)
+    assert (oeste, leste, sul, norte) == pytest.approx((c_oeste - 1, c_leste + 1, c_sul - 1, c_norte + 1))
+    assert raios.latitude_do_meio(-10, 10) == pytest.approx(0)
+    # No Mercator o sul estica mais: o meio da tela fica ao sul do centro do círculo
+    assert c_sul < raios.latitude_do_meio(c_sul, c_norte) < config.CENTRO_DOS_RAIOS[1]
+
+
+def test_os_flashes_da_janela_para_o_png():
+    janela = raios.flashes_da_janela(flashes((1, -54.5, -20.5), (20, -60.0, -30.0), (70, -54.5, -20.5)), AGORA, 30)
+    assert list(janela.columns) == ["longitude", "latitude", "idade"]
+    assert janela["idade"].round(3).tolist() == [1.0, 20.0]
+    assert raios.flashes_da_janela(flashes((1, -54.5, -20.5)).iloc[:0], AGORA, 30).empty

@@ -221,3 +221,16 @@ def test_estacoes_a_ate_15_km_em_cadeia_viram_um_grupo_so():
 def test_sem_raio_ou_com_uma_estacao_cada_uma_e_o_proprio_grupo():
     assert calculos.grupos_de_vizinhas([-54.6, -54.6], [-20.0, -20.01], 0).tolist() == [0, 1]
     assert calculos.grupos_de_vizinhas([-54.6], [-20.0], 15).tolist() == [0]
+
+
+def test_a_distancia_e_o_circulo_na_esfera():
+    # Um grau de meridiano tem ~111,2 km na esfera de raio médio
+    assert calculos.distancia_km(-54.0, -20.0, -54.0, -21.0) == pytest.approx(111.195, abs=0.01)
+    centro = (-54.6201, -20.4697)
+    lon, lat = calculos.circulo(centro, 2000, pontos=3601)
+    assert calculos.distancia_km(*centro, lon, lat) == pytest.approx(2000, abs=1e-6)
+    oeste, sul, leste, norte = calculos.caixa_do_circulo(centro, 2000)
+    assert (oeste, sul, leste, norte) == pytest.approx((lon.min(), lat.min(), lon.max(), lat.max()), abs=1e-4)
+    # A caixa é simétrica em longitude, e não em latitude no mapa: ~18° de latitude para cada lado
+    assert centro[0] - oeste == pytest.approx(leste - centro[0])
+    assert norte - centro[1] == pytest.approx(2000 / 111.195, abs=0.01)

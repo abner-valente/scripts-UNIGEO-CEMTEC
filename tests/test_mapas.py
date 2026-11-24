@@ -464,3 +464,24 @@ def test_o_mapa_de_referencia_numera_as_estacoes_e_lista_os_nomes(base):
     assert "Dados: INMET/SEMADESC" in {texto.get_text() for texto in mapa.texts}
     assert {"1", "2"} <= {texto.get_text() for texto in mapa.texts}
     assert {"ESTAÇÕES", "1", "Corumba", "2", "Dourados"} <= {texto.get_text() for texto in lista.texts}
+
+
+def test_o_mapa_do_circulo_dos_raios(base):
+    # O PNG do boletim do Agora: os flashes na cor da idade, com a contagem de cada faixa na legenda
+    from app import raios
+    flashes = pd.DataFrame({"longitude": [-54.5, -57.6, -51.2], "latitude": [-20.5, -25.3, -30.0],
+                            "idade": [1.0, 20.0, 50.0]})
+    espec = mapas.EspecMapa(tabela="", coluna="", titulo="Raios até 2.000 km de Campo Grande",
+                            subtitulo="Flashes do GLM de 24/11/2026 06:00 a 07:00", arquivo="", cmap="", unidade="",
+                            ranking="", credito=raios.CREDITO)
+    regiao = mapas.carregar_brasil_e_vizinhos()
+    assert len(regiao[0]) == 27 and "Paraguai" in set(regiao[1]["pais"])
+    figura = mapas.mapa_do_circulo(flashes, raios.IDADES, [r for _, r in raios.rotulos_das_idades()], espec, base,
+                                   regiao, raios.aneis(), config.CENTRO_DOS_RAIOS, "Campo Grande",
+                                   raios.quadro_do_circulo())
+    eixo = figura.axes[0]
+    assert [texto.get_text() for texto in eixo.get_legend().get_texts()] == [
+        "até 5 min (1)", "5 a 15 min (0)", "15 a 30 min (1)", "30 a 60 min (1)"]
+    oeste, leste, sul, norte = raios.quadro_do_circulo()
+    assert eixo.get_xlim() == pytest.approx((oeste, leste)) and eixo.get_ylim() == pytest.approx((sul, norte))
+    assert "Dados: NOAA (GOES-19/GLM)/SEMADESC" in [t.get_text() for t in eixo.texts]

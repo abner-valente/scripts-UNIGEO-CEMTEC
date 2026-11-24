@@ -33,7 +33,7 @@ import psycopg
 from psycopg import sql
 from psycopg.pq import TransactionStatus
 
-from . import cemaden, config, openmeteo
+from . import calculos, cemaden, config, openmeteo
 
 # Como cada tabela particionada é dividida, e por qual coluna (decisão de 09/10/2026)
 PARTICOES = {
@@ -527,6 +527,14 @@ NA_CAIXA = sql.SQL("r.flash_lon >= %(oeste)s AND r.flash_lon < %(leste)s "
                    "AND r.flash_lat >= %(sul)s AND r.flash_lat < %(norte)s")
 ARQUIVOS_DO_TRECHO = ("WITH c AS MATERIALIZED (SELECT id, data_hora_referencia FROM {} "
                       "WHERE data_hora_referencia >= %(de)s AND data_hora_referencia < %(ate)s) ")
+# O círculo do Agora (config.RAIO_DOS_RAIOS_KM em volta de config.CENTRO_DOS_RAIOS): primeiro a caixa
+# dele, que é só comparar números, e a distância na esfera do PostGIS só para quem está dentro dela.
+# Para o banco, o círculo custa o mesmo que a caixa do estado: o caro é ler os arquivos do disco
+# inteiro, e isso acontece de qualquer jeito (medido em 24/11/2026)
+NO_CIRCULO = sql.SQL("r.flash_lon >= %(c_oeste)s AND r.flash_lon <= %(c_leste)s AND r.flash_lat >= %(c_sul)s "
+                     "AND r.flash_lat <= %(c_norte)s AND ST_DistanceSphere(ST_SetSRID(ST_MakePoint(r.flash_lon, "
+                     "r.flash_lat), 4326), ST_SetSRID(ST_MakePoint(%(c_lon)s, %(c_lat)s), 4326)) <= %(c_metros)s")
+FOLGA_DA_CAIXA_DO_CIRCULO = 0.01   # graus: quem decide é a distância
 
 
 def _do_glm(tabela: str) -> sql.Identifier:
@@ -536,6 +544,14 @@ def _do_glm(tabela: str) -> sql.Identifier:
 def _caixa_dos_raios() -> dict:
     oeste, sul, leste, norte = config.CAIXA_RAIOS
     return {"oeste": oeste, "sul": sul, "leste": leste, "norte": norte}
+
+
+def _circulo_dos_raios() -> dict:
+    oeste, sul, leste, norte = calculos.caixa_do_circulo(config.CENTRO_DOS_RAIOS, config.RAIO_DOS_RAIOS_KM)
+    folga = FOLGA_DA_CAIXA_DO_CIRCULO
+    lon, lat = config.CENTRO_DOS_RAIOS
+    return {"c_oeste": oeste - folga, "c_sul": sul - folga, "c_leste": leste + folga, "c_norte": norte + folga,
+            "c_lon": lon, "c_lat": lat, "c_metros": config.RAIO_DOS_RAIOS_KM * 1000.0}
 
 
 @_sem_deixar_transacao
@@ -652,6 +668,37 @@ def ler_raios_recentes(conexao: psycopg.Connection, desde, ate) -> pd.DataFrame:
         "WHERE r.time_utc >= %(desde)s AND r.time_utc < %(ate)s AND {} ORDER BY r.time_utc")
         .format(_do_glm("controle_processamento_glm"), _do_glm("relampagos_glm_rt"), NA_CAIXA),
         {"de": desde - timedelta(minutes=1), "desde": desde, "ate": ate, **_caixa_dos_raios()})
+    return _numeros(_horas_em_utc(tabela, ["hora_utc"]), ["longitude", "latitude"])
+
+
+@_sem_deixar_transacao
+def ler_celulas_do_circulo(conexao: psycopg.Connection, desde, ate, idades: list[int]) -> pd.DataFrame:
+    # Os flashes de [desde, ate) no círculo e fora da caixa do estado, contados por célula de 0,1° e
+    # por faixa de idade (a 0 vai até idades[0] minutos antes de `ate`, a 1 até idades[1]...), com o
+    # horário do mais novo. O Agora desenha um quadradinho por célula, e não um ponto por flash: no
+    # pico são ~80 mil flashes por hora no círculo. Os da caixa vêm um a um, em ler_raios_recentes
+    desde, ate = _em_utc(desde), _em_utc(ate)
+    tabela = _tabela(conexao, sql.SQL(ARQUIVOS_DO_TRECHO +
+        "SELECT floor(r.flash_lon * %(celulas)s)::int AS lon_celula, floor(r.flash_lat * %(celulas)s)::int AS lat_celula, "
+        "width_bucket(extract(epoch FROM %(ate)s - r.time_utc) / 60, %(idades)s::float8[]) AS faixa, "
+        "count(*)::int AS flashes, max(r.time_utc) AS mais_novo FROM c JOIN {} r ON r.id_cena = c.id "
+        "WHERE r.time_utc >= %(desde)s AND r.time_utc < %(ate)s AND {} AND NOT ({}) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3")
+        .format(_do_glm("controle_processamento_glm"), _do_glm("relampagos_glm_rt"), NO_CIRCULO, NA_CAIXA),
+        {"de": desde - timedelta(minutes=1), "desde": desde, "ate": ate, "celulas": config.CELULAS_POR_GRAU_RAIOS,
+         "idades": [float(minutos) for minutos in idades[:-1]], **_caixa_dos_raios(), **_circulo_dos_raios()})
+    tabela = _horas_em_utc(tabela, ["mais_novo"])
+    return tabela.astype({"lon_celula": int, "lat_celula": int, "faixa": int, "flashes": int})
+
+
+@_sem_deixar_transacao
+def ler_raios_do_circulo(conexao: psycopg.Connection, desde, ate) -> pd.DataFrame:
+    # Os flashes de [desde, ate) no círculo inteiro, um a um: o PNG do boletim desenha todos
+    desde, ate = _em_utc(desde), _em_utc(ate)
+    tabela = _tabela(conexao, sql.SQL(ARQUIVOS_DO_TRECHO +
+        "SELECT r.time_utc AS hora_utc, r.flash_lon AS longitude, r.flash_lat AS latitude "
+        "FROM c JOIN {} r ON r.id_cena = c.id WHERE r.time_utc >= %(desde)s AND r.time_utc < %(ate)s AND {} "
+        "ORDER BY r.time_utc").format(_do_glm("controle_processamento_glm"), _do_glm("relampagos_glm_rt"), NO_CIRCULO),
+        {"de": desde - timedelta(minutes=1), "desde": desde, "ate": ate, **_circulo_dos_raios()})
     return _numeros(_horas_em_utc(tabela, ["hora_utc"]), ["longitude", "latitude"])
 
 

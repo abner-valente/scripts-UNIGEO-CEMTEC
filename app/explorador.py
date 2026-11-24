@@ -40,7 +40,7 @@ from app import referencia
 from app import risco
 from app import superficie
 from app import variaveis
-from modulos import config, fonte, geotiff, gpkg, mapas, openmeteo, retiradas
+from modulos import calculos, config, fonte, geotiff, gpkg, mapas, openmeteo, retiradas
 from modulos.produtos import risco_fogo
 
 # A API manda o vento em m/s; os produtos trabalham em km/h, e aqui seguimos a mesma unidade
@@ -3862,6 +3862,15 @@ FALTA_QUE_AVISA = 0.01
 VISTAS_DOS_RAIOS = ("Agora", "Densidade")
 JANELAS_DA_DENSIDADE = {"24 h": 24, "48 h": 48, "72 h": 72, "Período": None}
 VISTAS_DA_DENSIDADE = ("Navegável", "Boletim")
+VISTAS_DO_AGORA = VISTAS_DA_DENSIDADE
+# O Agora mostra o círculo de 2.000 km de Campo Grande (pedido da equipe, 24/11/2026) ou só MS e ~1° em
+# volta, como era: lá, todos os flashes vão um a um
+ALCANCES_DO_AGORA = (f"Até {raios.em_km(config.RAIO_DOS_RAIOS_KM)}", config.UF)
+ZOOM_DO_CIRCULO = 3.8      # o círculo inteiro nos 900 px de altura do mapa (~4,0 enche; visto em 24/11/2026)
+# Os estados do Brasil e os países em volta vão ao navegador a cada minuto, com o resto do mapa, e só
+# sem o mapa de fundo (que já tem as fronteiras): simplificados a ~5 km e com 3 casas, ficam leves
+SIMPLIFICACAO_DA_REGIAO = 0.05
+PRECISAO_DA_REGIAO = 0.001
 SOBRE_O_GLM = ("O GLM é o sensor de raios do satélite GOES-19: vê os raios dentro da nuvem e os que chegam ao solo, "
                "sem separar uns dos outros, com ~8 a 10 km de resolução, e não pega todos. Cada flash marca onde "
                "houve atividade elétrica, e não o lugar exato de uma descarga.")
@@ -3927,6 +3936,154 @@ def mapa_dos_raios(uf: str, camada: pdk.Layer, por_cima: bool) -> pdk.Deck:
                     initial_view_state=visao, tooltip=interativo.BALAO)
 
 
+@st.cache_resource(show_spinner=False, max_entries=1)
+def regiao_interativa() -> tuple[dict, dict]:
+    estados, paises = mapas.carregar_brasil_e_vizinhos()
+    return tuple(camada.assign(geometry=camada.geometry.simplify(SIMPLIFICACAO_DA_REGIAO).set_precision(
+        PRECISAO_DA_REGIAO)).__geo_interface__ for camada in (estados, paises))
+
+
+@st.cache_resource(show_spinner=False, max_entries=1)
+def regiao_do_boletim() -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    return mapas.carregar_brasil_e_vizinhos()
+
+
+def mapa_do_circulo(uf: str, celulas: pdk.Layer, pontos: pdk.Layer) -> pdk.Deck:
+    # O círculo de Campo Grande: os quadradinhos por baixo dos limites e dos anéis, e os flashes do
+    # estado por cima de tudo. Sem o mapa de fundo, os estados do Brasil e os países vêm daqui
+    com_fundo = st.session_state.get("fundo_interativo", True)
+    estado, _ = contornos_interativos(uf)
+    aneis = raios.aneis()
+    lon, lat = config.CENTRO_DOS_RAIOS
+    regiao = []
+    if not com_fundo:
+        estados, paises = regiao_interativa()
+        regiao = [pdk.Layer("GeoJsonLayer", data=paises, id="paises", stroked=True, filled=False,
+                            get_line_color=[90, 90, 90, 200], line_width_min_pixels=1),
+                  pdk.Layer("GeoJsonLayer", data=estados, id="estados_do_brasil", stroked=True, filled=False,
+                            get_line_color=[110, 110, 110, 150], line_width_min_pixels=0.6)]
+    camadas = [
+        celulas,
+        *regiao,
+        pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[235, 235, 235, 220],
+                  line_width_min_pixels=3.5),
+        pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[25, 25, 25],
+                  line_width_min_pixels=1.6),
+        # Os anéis como o contorno do estado, claro por baixo e escuro por cima: aparecem com e sem o fundo
+        pdk.Layer("PathLayer", data=aneis[["caminho"]], id="aneis_fundo", get_path="caminho",
+                  get_color=[235, 235, 235, 150], width_min_pixels=3),
+        pdk.Layer("PathLayer", data=aneis[["caminho"]], id="aneis", get_path="caminho", get_color=[40, 40, 40, 220],
+                  width_min_pixels=1.2),
+        camada_de_rotulos(aneis[["lon_rotulo", "lat_rotulo", "rotulo"]], "rotulo", ["lon_rotulo", "lat_rotulo"],
+                          [0, -10], id="rotulos_dos_aneis"),
+        pontos,
+        pdk.Layer("ScatterplotLayer", data=pd.DataFrame({"lon": [lon], "lat": [lat]}), id="centro",
+                  get_position=["lon", "lat"], get_fill_color=[0, 0, 0], get_line_color=[255, 255, 255],
+                  stroked=True, line_width_min_pixels=2, get_radius=6000, radius_min_pixels=5),
+    ]
+    _, sul, _, norte = calculos.caixa_do_circulo(config.CENTRO_DOS_RAIOS, config.RAIO_DOS_RAIOS_KM)
+    visao = pdk.ViewState(latitude=raios.latitude_do_meio(sul, norte), longitude=lon, zoom=ZOOM_DO_CIRCULO)
+    if com_fundo:
+        return pdk.Deck(layers=camadas, map_style=None, initial_view_state=visao, tooltip=interativo.BALAO)
+    return pdk.Deck(layers=camadas, map_provider=None, map_style=interativo.ESTILO_SEM_FUNDO,
+                    initial_view_state=visao, tooltip=interativo.BALAO)
+
+
+@st.cache_data(ttl=ATUALIZACAO_DOS_RAIOS, show_spinner=False, max_entries=3)
+def carregar_celulas_do_circulo(agora: datetime) -> pd.DataFrame:
+    # Pelo mesmo "agora" dos flashes da caixa (carregar_raios_recentes), um por minuto
+    return fonte.celulas_do_circulo(agora - timedelta(minutes=raios.IDADES[-1][0]), agora,
+                                    [limite for limite, _ in raios.IDADES])
+
+
+@st.cache_data(ttl=ATUALIZACAO_DOS_RAIOS, show_spinner=False, max_entries=2)
+def carregar_raios_do_circulo(agora: datetime) -> pd.DataFrame:
+    return fonte.raios_do_circulo(agora - timedelta(minutes=raios.IDADES[-1][0]), agora)
+
+
+def espec_do_circulo(agora: datetime, minutos: int, fuso) -> mapas.EspecMapa:
+    inicio, fim = (agora - timedelta(minutes=minutos)).astimezone(fuso), agora.astimezone(fuso)
+    return mapas.EspecMapa(tabela="", coluna="", arquivo="", cmap="", unidade="", ranking="", credito=raios.CREDITO,
+                           titulo=f"Raios até {raios.em_km(config.RAIO_DOS_RAIOS_KM)} de "
+                                  f"{config.NOME_DO_CENTRO_DOS_RAIOS}",
+                           subtitulo=f"Flashes do GLM de {inicio:%d/%m/%Y %H:%M} a {fim:%H:%M}")
+
+
+def figura_do_circulo(flashes: pd.DataFrame, agora: datetime, minutos: int, base: mapas.BaseCartografica, regiao,
+                      fuso, tela: mapas.Tela | None = None) -> Figure:
+    return mapas.mapa_do_circulo(raios.flashes_da_janela(flashes, agora, minutos), raios.IDADES,
+                                 [rotulo for _, rotulo in raios.rotulos_das_idades()],
+                                 espec_do_circulo(agora, minutos, fuso), base, regiao, raios.aneis(),
+                                 config.CENTRO_DOS_RAIOS, config.NOME_DO_CENTRO_DOS_RAIOS, raios.quadro_do_circulo(),
+                                 tela=tela)
+
+
+@st.cache_data(show_spinner=False, max_entries=6)
+def png_do_circulo(agora: datetime, minutos: int, uf: str, _fuso) -> bytes:
+    figura = figura_do_circulo(carregar_raios_do_circulo(agora), agora, minutos, base_cartografica(uf),
+                               regiao_do_boletim(), _fuso, tela=mapas.Tela())
+    arquivo = io.BytesIO()
+    figura.savefig(arquivo, format="png", dpi=DPI_MAPA, bbox_inches="tight", facecolor="white")
+    return arquivo.getvalue()
+
+
+def desenho_do_circulo(agora: datetime, minutos: int, uf: str, fuso):
+    # Como o da densidade: a base pronta antes, e os flashes lidos só no clique
+    base, regiao = base_cartografica(uf), regiao_do_boletim()
+    inicio = agora - timedelta(minutes=raios.IDADES[-1][0])
+    return lambda: figura_do_circulo(fonte.raios_do_circulo(inicio, agora), agora, minutos, base, regiao, fuso)
+
+
+def raios_no_circulo(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, dentro: np.ndarray, agora: datetime,
+                     janela: int, vista: str) -> None:
+    nome = f"{raios.em_km(config.RAIO_DOS_RAIOS_KM)} de {config.NOME_DO_CENTRO_DOS_RAIOS}"
+    try:
+        if vista == VISTAS_DO_AGORA[0]:
+            pontos, celulas, muitos = raios.agora_no_circulo(flashes, dentro, carregar_celulas_do_circulo(agora),
+                                                             agora, janela, recorte.fuso)
+        else:
+            png = png_do_circulo(agora, janela, uf, recorte.fuso)
+    except fonte.ErroFonte as erro:
+        st.error(f"Não foi possível ler os raios do círculo no banco ({erro}). A página tenta de novo a cada minuto.")
+        return
+    if vista == VISTAS_DO_AGORA[0]:
+        st.pydeck_chart(mapa_do_circulo(uf, camada_de_quadradinhos(celulas, "celulas_do_circulo"),
+                                        camada_de_flashes(pontos)), key="mapa_raios_circulo", height=ALTURA_MAPA)
+        escala_no_mapa("escala_raios_circulo", legenda_de_cores(raios.rotulos_das_idades(), "Idade do flash"))
+        total = len(pontos) + int(celulas["flashes"].sum())
+        st.caption(f"{inteiro_br(total)} flashes nos últimos {janela} min até {nome}. "
+                   + (f"Com mais de {inteiro_br(raios.LIMITE_DE_PONTOS)} flashes em {uf} na janela, o estado também "
+                      "vai em quadradinhos, para o mapa não pesar no navegador. " if muitos else
+                      f"Os de {uf} vão um a um ({inteiro_br(len(pontos))}); ")
+                   + "os de fora, em quadradinhos de 0,1° (~10 km) na cor do flash mais novo. **Passe o mouse** "
+                     "num flash ou num quadradinho para ver a hora e quantos são. Atualiza sozinho a cada minuto.")
+    else:
+        _, meio_da_tela, _ = st.columns([1, 3, 1])
+        with meio_da_tela:
+            st.image(png, width="stretch")
+        st.caption(f"Os flashes dos últimos {janela} min até {nome}, um a um, na cor da idade, como no PNG do "
+                   "boletim. Atualiza sozinho a cada minuto.")
+    fim_local = agora.astimezone(recorte.fuso)
+    arquivo = f"Mapa_raios_{config.RAIO_DOS_RAIOS_KM}km_{fim_local:%Y%m%d_%H%M}.png"
+    botao_do_boletim(f"raios até {nome}", "raios_circulo", arquivo, desenho_do_circulo(agora, janela, uf, recorte.fuso))
+
+
+def camada_de_flashes(pontos: pd.DataFrame) -> pdk.Layer:
+    return pdk.Layer("ScatterplotLayer", data=pontos[["longitude", "latitude", "cor", "titulo", "detalhe"]],
+                     id="flashes", get_position=["longitude", "latitude"], get_fill_color="cor",
+                     get_line_color=[40, 40, 40, 200], stroked=True, line_width_min_pixels=0.5, get_radius=1500,
+                     radius_min_pixels=2.5, radius_max_pixels=8, pickable=True)
+
+
+def camada_de_quadradinhos(celulas: pd.DataFrame, nome: str) -> pdk.Layer:
+    # As células de 0,1° com flash (raios.celulas_da_janela), cada uma um quadrado na cor do mais novo
+    meio = 0.5 / config.CELULAS_POR_GRAU_RAIOS
+    quadrado = (f"[[Longitude - {meio}, Latitude - {meio}], [Longitude + {meio}, Latitude - {meio}], "
+                f"[Longitude + {meio}, Latitude + {meio}], [Longitude - {meio}, Latitude + {meio}]]")
+    return pdk.Layer("PolygonLayer", data=celulas[["Longitude", "Latitude", "cor", "titulo", "detalhe"]], id=nome,
+                     get_polygon=quadrado, filled=True, stroked=False, get_fill_color="cor", pickable=True)
+
+
 def grafico_dos_raios(barras: pd.DataFrame, uf: str) -> alt.Chart:
     return alt.Chart(barras).mark_bar(color="#ff9900").encode(
         x=alt.X("inicio:T", title=None, axis=alt.Axis(format="%H:%M", labelFontSize=FONTE_DOS_EIXOS, grid=True,
@@ -3958,23 +4115,47 @@ def raios_agora(uf: str, recorte: config.Recorte) -> None:
     colunas[3].metric("Dados até", f"{ultimo.tz_convert(recorte.fuso):%H:%M:%S}" if ultimo is not None else "—",
                       help="O começo do arquivo de 20 s mais novo do GLM no banco. Ele chega uns 40 s depois; a "
                            "página se atualiza sozinha a cada minuto.")
-    janela = st.segmented_control("Mapa", raios.JANELAS_DO_AGORA, default=raios.JANELAS_DO_AGORA[-1],
-                                  format_func=lambda minutos: f"Últimos {minutos} min",
-                                  key="janela_raios_agora") or raios.JANELAS_DO_AGORA[-1]
-    pontos = raios.pontos_por_idade(flashes, agora, janela, recorte.fuso)
-    camada = pdk.Layer("ScatterplotLayer", data=pontos[["longitude", "latitude", "cor", "titulo", "detalhe"]],
-                       id="flashes", get_position=["longitude", "latitude"], get_fill_color="cor",
-                       get_line_color=[40, 40, 40, 200], stroked=True, line_width_min_pixels=0.5, get_radius=1500,
-                       radius_min_pixels=2.5, radius_max_pixels=8, pickable=True)
-    st.pydeck_chart(mapa_dos_raios(uf, camada, por_cima=True), key="mapa_raios_agora", height=ALTURA_MAPA)
-    escala_no_mapa("escala_raios_agora", legenda_de_cores(raios.rotulos_das_idades(), "Idade do flash"))
-    st.caption(f"{inteiro_br(len(pontos))} flashes nos últimos {janela} min no mapa, de {uf} e de até ~1° em volta, "
-               "com a cor da idade: o mais novo por cima. **Passe o mouse** num flash para ver a hora. As contagens "
-               f"acima são só de dentro de {uf}. Atualiza sozinho a cada minuto.")
+    um, dois, tres = st.columns([1.1, 1.4, 1])
+    alcance = um.segmented_control("Alcance", ALCANCES_DO_AGORA, default=ALCANCES_DO_AGORA[0], key="alcance_raios_agora",
+                                   help=f"Até {raios.em_km(config.RAIO_DOS_RAIOS_KM)} de "
+                                        f"{config.NOME_DO_CENTRO_DOS_RAIOS}, para ver o que vem do sul, ou só {uf} e "
+                                        "~1° em volta, com os flashes um a um.") or ALCANCES_DO_AGORA[0]
+    janela = dois.segmented_control("Últimos", raios.JANELAS_DO_AGORA, default=raios.JANELAS_DO_AGORA[-1],
+                                    format_func=lambda minutos: f"{minutos} min",
+                                    key="janela_raios_agora") or raios.JANELAS_DO_AGORA[-1]
+    if alcance == ALCANCES_DO_AGORA[0]:
+        vista = tres.segmented_control("Mapa", VISTAS_DO_AGORA, default=VISTAS_DO_AGORA[0],
+                                       key="vista_raios_agora") or VISTAS_DO_AGORA[0]
+        raios_no_circulo(uf, recorte, flashes, dentro, agora, janela, vista)
+    else:
+        raios_no_estado(uf, recorte, flashes, agora, janela)
     st.altair_chart(grafico_dos_raios(raios.por_barra(flashes[dentro], agora, recorte.fuso), uf), width="stretch")
     st.caption(f"Os flashes dentro de {uf} a cada {raios.MINUTOS_POR_BARRA} min, nas últimas "
                f"{raios.HORAS_DO_GRAFICO} h: mostra se a atividade cresce ou enfraquece. A última barra está em "
                "andamento.")
+
+
+def raios_no_estado(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, agora: datetime, janela: int) -> None:
+    # Todos os flashes um a um, até raios.LIMITE_DE_PONTOS; acima disso, em quadradinhos, como fora do
+    # estado no círculo (na hora mais ativa desde 05/10/2026, seriam ~12 MB por minuto no navegador)
+    pontos = raios.pontos_por_idade(flashes, agora, janela, recorte.fuso)
+    muitos = len(pontos) > raios.LIMITE_DE_PONTOS
+    if muitos:
+        celulas = raios.celulas_da_janela(raios.em_celulas(flashes, agora), agora, janela, recorte.fuso)
+        camada = camada_de_quadradinhos(celulas, "celulas_do_estado")
+    else:
+        camada = camada_de_flashes(pontos)
+    st.pydeck_chart(mapa_dos_raios(uf, camada, por_cima=True), key="mapa_raios_agora", height=ALTURA_MAPA)
+    escala_no_mapa("escala_raios_agora", legenda_de_cores(raios.rotulos_das_idades(), "Idade do flash"))
+    if muitos:
+        st.caption(f"{inteiro_br(len(pontos))} flashes nos últimos {janela} min no mapa, de {uf} e de até ~1° em volta. "
+                   f"Com mais de {inteiro_br(raios.LIMITE_DE_PONTOS)}, eles vão em quadradinhos de 0,1° (~10 km) na cor "
+                   "do flash mais novo, para o mapa não pesar no navegador. **Passe o mouse** num quadradinho para ver "
+                   f"quantos são. As contagens acima são só de dentro de {uf}. Atualiza sozinho a cada minuto.")
+    else:
+        st.caption(f"{inteiro_br(len(pontos))} flashes nos últimos {janela} min no mapa, de {uf} e de até ~1° em volta, "
+                   "com a cor da idade: o mais novo por cima. **Passe o mouse** num flash para ver a hora. As contagens "
+                   f"acima são só de dentro de {uf}. Atualiza sozinho a cada minuto.")
 
 
 def espec_da_densidade(quando: str, uf: str, rodape: str) -> mapas.EspecMapa:
@@ -4092,12 +4273,13 @@ def pagina_raios() -> None:
         uf, recorte, intervalo = filtros_de_estado_e_periodo()
         st.checkbox("Mapa de fundo", value=True, key="fundo_interativo",
                     help="Países, cidades, estradas e rios, da internet. Desligado, ficam só os limites do estado e "
-                         "dos municípios.")
+                         "dos municípios (no círculo do Agora, os estados do Brasil e os países em volta).")
     if uf != config.UF:
         st.info(f"Os raios são contados só em {config.NOME_UF} e em volta: escolha {config.UF} na barra lateral.")
         st.stop()
-    st.caption(SOBRE_O_GLM + " O **Agora** mostra os flashes da última hora e se atualiza sozinho; a **Densidade**, os "
-               "de um período, por km².")
+    st.caption(SOBRE_O_GLM + f" O **Agora** mostra os flashes da última hora até "
+               f"{raios.em_km(config.RAIO_DOS_RAIOS_KM)} de {config.NOME_DO_CENTRO_DOS_RAIOS} e se atualiza sozinho; a "
+               "**Densidade**, os de um período, por km².")
     vista = st.segmented_control("Ver", VISTAS_DOS_RAIOS, default=VISTAS_DOS_RAIOS[0], key="vista_raios",
                                  label_visibility="collapsed") or VISTAS_DOS_RAIOS[0]
     if vista == VISTAS_DOS_RAIOS[0]:
