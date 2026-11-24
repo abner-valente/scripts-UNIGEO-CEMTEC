@@ -3856,6 +3856,9 @@ def pagina_estacoes() -> None:
 # com todos os flashes, de qualquer qualidade, espalhados pelo estado (sem a conta por estação)
 ATUALIZACAO_DOS_RAIOS = 60     # segundos
 ATRASO_ACEITO_DOS_RAIOS = timedelta(minutes=10)
+# O tempo real do GLM perde uns 8 dos 4.320 arquivos de 20 s por dia (0,2%, visto em 24/11/2026):
+# abaixo de 1% faltando o mapa não muda, e o aviso só apareceria sempre
+FALTA_QUE_AVISA = 0.01
 VISTAS_DOS_RAIOS = ("Agora", "Densidade")
 JANELAS_DA_DENSIDADE = {"24 h": 24, "48 h": 48, "72 h": 72, "Período": None}
 VISTAS_DA_DENSIDADE = ("Navegável", "Boletim")
@@ -4017,10 +4020,11 @@ def densidade_de_raios(uf: str, recorte: config.Recorte, intervalo: tuple) -> No
         return
     rotulo = st.segmented_control("Janela", list(JANELAS_DA_DENSIDADE), default="24 h", key="janela_raios_densidade",
                                   help="As de 24 a 72 h terminam na última hora contada; a do período vai do primeiro "
-                                       "ao último dia da barra lateral.") or "24 h"
+                                       "ao último dia da barra lateral, até a última hora contada.") or "24 h"
     horas = JANELAS_DA_DENSIDADE[rotulo]
     if horas is None:
         inicio, fim = janela_do_periodo(intervalo, recorte)
+        fim = min(fim, ultima.to_pydatetime())     # as horas que ainda não passaram não faltam
     else:
         fim = ultima.to_pydatetime()
         inicio = fim - timedelta(hours=horas)
@@ -4031,15 +4035,19 @@ def densidade_de_raios(uf: str, recorte: config.Recorte, intervalo: tuple) -> No
         return
     inicio_local, fim_local = inicio.astimezone(recorte.fuso), fim.astimezone(recorte.fuso)
     quando = f"{inicio_local:%d/%m/%Y %H:%M} a {fim_local:%d/%m/%Y %H:%M}"
-    faltam = raios.horas_que_faltam(cobertura, inicio, fim)
+    faltam = raios.horas_que_faltam(cobertura, inicio, fim, chegando=fim >= ultima.to_pydatetime())
     if faltam["ausentes"]:
         de, ate = (primeira - pd.Timedelta(hours=1)).tz_convert(recorte.fuso), ultima.tz_convert(recorte.fuso)
         st.warning(f"{faltam['ausentes']} das {faltam['esperadas']} horas de {quando} não estão na contagem: o GLM no "
                    f"banco vai de {de:%d/%m/%Y %H:%M} a {ate:%d/%m/%Y %H:%M}. O histórico chega aos poucos, de trás "
                    "para frente, até 2018. O mapa soma só as horas contadas.")
-    elif faltam["incompletas"]:
-        st.info(f"{faltam['incompletas']} das {faltam['esperadas']} horas estão sem todos os arquivos de 20 s do GLM "
-                "(a hora corrente, ou um arquivo atrasado): entram com o que já chegou.")
+    elif faltam["previstos"] and faltam["faltando"] / faltam["previstos"] >= FALTA_QUE_AVISA:
+        parte = f"{100 * faltam['faltando'] / faltam['previstos']:.1f}%".replace(".", ",")
+        st.info(f"Faltam {inteiro_br(faltam['faltando'])} dos {inteiro_br(faltam['previstos'])} arquivos de 20 s do "
+                f"GLM nas horas de {quando} ({parte}): o mapa soma só os flashes que estão no banco.")
+    if faltam["ultima"] is not None:
+        st.caption(f"A última hora ({fim_local - timedelta(hours=1):%H:%M} às {fim_local:%H:%M}) ainda está "
+                   f"chegando: {faltam['ultima']} dos {config.ARQUIVOS_GLM_POR_HORA} arquivos de 20 s.")
     total = raios.total_no_estado(por_celula, contorno_do_estado(uf))
     rodape = f"{inteiro_br(total)} flashes no estado, contados em células de 0,1°"
     um, dois = st.columns(2)

@@ -87,7 +87,7 @@ def coletar(conexao: psycopg.Connection) -> ColetaDeRaios:
             flashes = banco.contar_raios(conexao, de, ate, atuais)
             coleta.flashes += flashes
             horas = round((ate - de) / UMA_HORA)
-            print(f"   {de + UMA_HORA:%d/%m %H:%M} a {ate:%d/%m %H:%M} UTC: {horas} h, {flashes} flashes "
+            print(f"   {de:%d/%m %H:%M} a {ate:%d/%m %H:%M} UTC: {horas} h, {flashes} flashes "
                   f"({time.monotonic() - antes:.1f} s)", flush=True)
     if not novos.empty:
         banco.guardar_ultimo_id_dos_raios(conexao, max(int(novos["id"].max()), ultimo))
@@ -103,4 +103,5 @@ def relatar(conexao: psycopg.Connection, coleta: ColetaDeRaios, segundos: float)
     print(f"✅ {len(coleta.horas)} horas recontadas, {coleta.flashes} flashes na caixa ({segundos:.0f} s){alcance}")
     if coleta.incompletas:
         print(f"   ⏳ {coleta.incompletas} horas sem os {config.ARQUIVOS_GLM_POR_HORA} arquivos (a hora corrente, "
-              "o começo do histórico e os arquivos pendentes): são recontadas quando o arquivo chegar")
+              "o começo do histórico, os pendentes e os que o tempo real do GLM perdeu): são conferidas a cada "
+              "execução e recontadas se o arquivo chegar")

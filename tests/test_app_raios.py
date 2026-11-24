@@ -1,5 +1,5 @@
 """As contas da página Raios: a idade dos flashes, a contagem a cada 5 minutos e a densidade por km²."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
@@ -103,10 +103,18 @@ def test_as_horas_que_faltam_na_contagem():
     fim = datetime(2026, 11, 18, 14, tzinfo=timezone.utc)
     cobertura = pd.DataFrame({"hora_utc": pd.to_datetime(["2026-11-18 12:00", "2026-11-18 13:00",
                                                           "2026-11-18 14:00"], utc=True),
-                              "arquivos": [180, 179, 40], "sem_arquivo": [0, 1, 0], "flashes": [1, 1, 1]})
-    assert raios.horas_que_faltam(cobertura, inicio, fim) == {"esperadas": 4, "ausentes": 1, "incompletas": 1}
-    assert raios.horas_que_faltam(cobertura.iloc[:0], inicio, fim) == {"esperadas": 4, "ausentes": 4,
-                                                                      "incompletas": 0}
+                              "arquivos": [180, 177, 40], "sem_arquivo": [0, 1, 0], "flashes": [1, 1, 1]})
+    # As 11:00 não estão; as 13:00 perderam 2 arquivos; as 14:00 têm 40
+    assert raios.horas_que_faltam(cobertura, inicio, fim) == {"esperadas": 4, "ausentes": 1, "faltando": 142,
+                                                              "previstos": 540, "ultima": None}
+    # Com a última hora ainda chegando, ela fica à parte
+    assert raios.horas_que_faltam(cobertura, inicio, fim, chegando=True) == {
+        "esperadas": 4, "ausentes": 1, "faltando": 2, "previstos": 360, "ultima": 40}
+    # Uma última hora completa entra com as outras
+    assert raios.horas_que_faltam(cobertura, inicio, fim - timedelta(hours=2), chegando=True) == {
+        "esperadas": 2, "ausentes": 1, "faltando": 0, "previstos": 180, "ultima": None}
+    assert raios.horas_que_faltam(cobertura.iloc[:0], inicio, fim, chegando=True) == {
+        "esperadas": 4, "ausentes": 4, "faltando": 0, "previstos": 0, "ultima": None}
 
 
 def test_o_total_no_estado_e_os_pixels_do_geotiff():

@@ -156,17 +156,22 @@ def celulas_do_mapa(por_celula: pd.DataFrame, minimo: float = 0.0) -> pd.DataFra
     return tabela
 
 
-def horas_que_faltam(cobertura: pd.DataFrame, inicio: datetime, fim: datetime) -> dict[str, int]:
-    # As horas de (início, fim] que não estão na contagem, e as que estão sem todos os arquivos
+def horas_que_faltam(cobertura: pd.DataFrame, inicio: datetime, fim: datetime,
+                     chegando: bool = False) -> dict[str, int | None]:
+    # As horas de (início, fim] que não estão na contagem e os arquivos de 20 s que faltam nas que
+    # estão. A última hora, se ainda está chegando, fica à parte, com os arquivos que já tem
     esperadas = pd.date_range(pd.Timestamp(inicio).tz_convert("UTC") + pd.Timedelta(hours=1),
                               pd.Timestamp(fim).tz_convert("UTC"), freq="h")
-    contadas = cobertura.set_index("hora_utc") if not cobertura.empty else None
-    if contadas is None:
-        return {"esperadas": len(esperadas), "ausentes": len(esperadas), "incompletas": 0}
-    presentes = esperadas.isin(contadas.index)
-    completas = contadas["arquivos"] + contadas["sem_arquivo"] >= config.ARQUIVOS_GLM_POR_HORA
-    incompletas = int((~completas.reindex(esperadas[presentes]).fillna(False)).sum())
-    return {"esperadas": len(esperadas), "ausentes": int((~presentes).sum()), "incompletas": incompletas}
+    por_hora = (cobertura.set_index("hora_utc")[["arquivos", "sem_arquivo"]].sum(axis=1)
+                if not cobertura.empty else pd.Series(dtype=float))
+    tem = por_hora.reindex(esperadas)
+    ultima = None
+    if chegando and len(tem) and pd.notna(tem.iloc[-1]) and tem.iloc[-1] < config.ARQUIVOS_GLM_POR_HORA:
+        ultima, tem = int(tem.iloc[-1]), tem.iloc[:-1]
+    contadas = tem.dropna()
+    return {"esperadas": len(esperadas), "ausentes": int(tem.isna().sum()),
+            "faltando": int((config.ARQUIVOS_GLM_POR_HORA - contadas).clip(lower=0).sum()),
+            "previstos": config.ARQUIVOS_GLM_POR_HORA * len(contadas), "ultima": ultima}
 
 
 def total_no_estado(por_celula: pd.DataFrame, estado) -> int:

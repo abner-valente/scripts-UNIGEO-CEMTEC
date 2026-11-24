@@ -217,6 +217,7 @@ def test_coletar_py_raios_no_banco_de_teste(glm, conexao, capsys):
     glm.arquivo(TREZE, [CAMPO_GRANDE])
     assert coletar.main(["raios", "--teste"]) == 0
     saida = capsys.readouterr().out
+    assert "18/11 13:00 a 18/11 14:00 UTC: 1 h, 1 flashes" in saida
     assert "1 horas recontadas, 1 flashes" in saida
     assert "o banco tem de 18/11/2026 13:00 a 18/11/2026 14:00 UTC" in saida
 
