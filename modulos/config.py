@@ -31,17 +31,6 @@ PASTA_SAIDA = RAIZ / "saida"
 # =====================================================
 @dataclass(frozen=True)
 class Recorte:
-    """Quem é o estado, onde ele fica e em que hora ele vive.
-
-    Existe para a UF deixar de ser uma constante do módulo. O painel serve várias pessoas no
-    mesmo processo: se a escolha de uma trocasse um valor global, a outra veria o mapa do estado
-    errado no meio da própria consulta. Então o recorte **anda junto com a chamada**, e quem não
-    passa nenhum recebe o padrão.
-
-    `limites` é (oeste, leste, sul, norte) em graus, com folga sobre o contorno real: é o
-    enquadramento do desenho, não a divisa.
-    """
-
     uf: str
     nome: str
     shape_uf: Path
@@ -95,16 +84,10 @@ ILHA_DISTANTE = 1.0            # graus (~110 km)
 
 
 def shapes_de(uf: str) -> tuple[Path, Path]:
-    """Os dois shapefiles de uma UF, na convenção de nome da pasta shp/."""
     return PASTA_SHP / f"{uf}_UF_2022.shp", PASTA_SHP / f"{uf}_mun_simplificado.shp"
 
 
 def ufs_disponiveis() -> list[str]:
-    """As UFs que têm shapefile na pasta — é o que limita quais estados dá para mapear.
-
-    Os arquivos saem da ferramenta `ferramentas/simplificar_municipios.py`, sob demanda: carregar
-    os 5.570 municípios do país a cada mapa pesaria na máquina sem servir para nada.
-    """
     disponiveis = []
     for uf in sorted(ESTADOS):
         contorno, municipios = shapes_de(uf)
@@ -115,12 +98,6 @@ def ufs_disponiveis() -> list[str]:
 
 @lru_cache(maxsize=None)
 def recorte_de(uf: str) -> Recorte:
-    """O recorte de uma UF: escrito à mão quando existe, derivado do shapefile quando não.
-
-    MS é escrito à mão de propósito — derivar o enquadramento da geometria mudaria os números
-    por arredondamento, e com eles todo mapa já publicado. Para as demais, o enquadramento sai do
-    contorno mais uma margem, que é como os de MS foram escolhidos na origem.
-    """
     if uf in RECORTES:
         return RECORTES[uf]
     if uf not in ESTADOS:
@@ -164,30 +141,49 @@ FUSO_MS = RECORTE.fuso
 load_dotenv(RAIZ / ".env")
 TOKEN_INMET = os.getenv("TOKEN_INMET", "").strip()
 TOKEN_EXEMPLO = "seu_token_aqui"  # valor do .env.example, tratado como "não configurado"
+# A conta da PED do CEMADEN (os pluviômetros): só a máquina do coletor precisa dela. A senha vai como
+# está, sem tirar espaços
+CEMADEN_EMAIL = os.getenv("CEMADEN_EMAIL", "").strip()
+CEMADEN_SENHA = os.getenv("CEMADEN_SENHA", "")
 
 # De onde vêm os dados (modulos/fonte.py), escolhido por instalação: no .env do servidor ou nos
-# Secrets do Streamlit Cloud. Por enquanto só existe "apis", as APIs públicas; o banco da UNIGEO
-# e a API de leitura chegam nas próximas versões (docs/plano_arquitetura.md).
+# Secrets do Streamlit Cloud: "apis", as APIs públicas, ou "banco", o banco da UNIGEO (com a conexão
+# BANCO_LEITURA). A API de leitura chega na v0.5 (docs/plano_arquitetura.md).
 FONTE_DADOS = os.getenv("FONTE_DADOS", "apis").strip().lower()
+
+# O banco da UNIGEO (PostgreSQL 16, com PostGIS): o schema das tabelas e o nome da variável do .env
+# com a conexão de cada papel. As conexões em si nunca ficam no código (modelo: .env.example).
+BANCO_SCHEMA = os.getenv("BANCO_SCHEMA", "climageo").strip()
+BANCO_CONEXOES = {"gravacao": "BANCO_GRAVACAO", "leitura": "BANCO_LEITURA", "teste": "BANCO_TESTE"}
+BANCO_ESQUEMA = RAIZ / "banco" / "esquema.sql"
+# Os raios do GOES-19 (GLM) vêm de tabelas que um colega da unidade alimenta no mesmo banco, neste
+# schema: a dos flashes (relampagos_glm_rt) e a de controle dos arquivos (controle_processamento_glm)
+GLM_SCHEMA = os.getenv("GLM_SCHEMA", "eventos_atmosfericos_rt").strip()
 
 # =====================================================
 # API DO INMET
 # =====================================================
 URL_ESTACOES = "https://apitempo.inmet.gov.br/estacoes/T"
 URL_DADOS = "https://apitempo.inmet.gov.br/token/estacao/{inicio}/{fim}/{codigo}/{token}"
+# Todas as estações de uma hora (UTC) numa consulta só: é o que o coletor do banco usa. Não é
+# documentado; foi conferido contra a consulta por estação em 09/10/2026 (plano, passo 4).
+URL_DADOS_DA_HORA = "https://apitempo.inmet.gov.br/token/estacao/dados/{data}/{hora}/{token}"
 TIMEOUT_ESTACOES = 20          # segundos
 TIMEOUT_DADOS = 60             # segundos
 PAUSA_ENTRE_REQUISICOES = 0.1  # segundos
 # O INMET limita as consultas a 100 por minuto, contadas por endereço de rede, e não por token: a
 # lista de estações, que nem usa token, é recusada junto (medido em 09/10/2026). Tudo o que sai do
-# mesmo endereço divide as 100 — o painel e o main.py de quem estiver na mesma rede. Passado o
-# limite, ele responde HTTP 200 com este aviso no lugar do JSON, por até um minuto. A recusa não
-# gasta tentativa: espera-se e pede-se de novo, com a espera dobrando (1, 2, 4, 8, 16, 16... s),
-# até RECUSAS_NO_LIMITE vezes por consulta (~2 min).
+# mesmo endereço divide as 100 — o painel, o main.py, o coletor. Passado o limite, ele responde
+# HTTP 200 com este aviso no lugar do JSON, por até um minuto. A recusa não gasta tentativa:
+# espera-se e pede-se de novo, com a espera dobrando (1, 2, 4, 8, 16, 16... s), até
+# RECUSAS_NO_LIMITE vezes por consulta (~2 min).
 AVISO_DE_LIMITE = "limite de requisi"
 PAUSA_NO_LIMITE = 1            # segundos, a primeira espera
 PAUSA_MAXIMA_NO_LIMITE = 16    # segundos
 RECUSAS_NO_LIMITE = 12
+# O coletor do banco faz no máximo uma consulta por segundo: 60 das 100 do minuto, e sobram 40
+# para a equipe, se ela sair pelo mesmo endereço.
+INTERVALO_DO_COLETOR = 1.0     # segundos entre o começo de uma consulta e o da seguinte
 # Quantas consultas podem correr juntas, no processo inteiro. Medido contra a API: com 8 as
 # 62 estações de uma semana saem em ~8 s (em fila levavam ~50 s); com 16 o INMET derruba a
 # conexão. O limite é global de propósito — o painel é público, e cada pessoa que abre
@@ -198,16 +194,57 @@ PAUSA_ENTRE_TENTATIVAS = 2     # segundos antes de repetir; dobra a cada tentati
 HORAS_BUSCA_TEMPO_REAL = 96    # histórico baixado no modo tempo real (cobre o acumulado de 72 h)
 
 # =====================================================
+# PED DO CEMADEN (PLUVIÔMETROS)
+# =====================================================
+# O token sai da conta (e-mail e senha) e vale 4 horas; ele carrega o usuário e a senha dentro, então
+# nunca vai para log nem para arquivo. Conferido contra a API em 03/11/2026
+URL_CEMADEN_TOKEN = "https://sgaa.cemaden.gov.br/SGAA/rest/controle-token/tokens"
+URL_CEMADEN = "https://sws.cemaden.gov.br/PED/rest"
+REDE_CEMADEN = "11"                  # a rede do CEMADEN, a única homologada na PED
+SENSOR_CHUVA_CEMADEN = "chuva"       # a chuva desde a leitura anterior, em mm
+VALIDADE_TOKEN_CEMADEN = 3.5 * 3600  # segundos: renova antes das 4 horas, numa carga longa
+TIMEOUT_CEMADEN = 120                # segundos: um dia do estado inteiro vem em ~1 s, mas pode demorar
+# O usuário externo da PED pode fazer até 12 consultas por minuto (o parceiro institucional, 180): o
+# coletor faz no máximo 10, uma a cada 6 s. Recusado pelo limite (HTTP 429), espera o minuto virar
+INTERVALO_CEMADEN = 6.0              # segundos entre o começo de uma consulta e o da seguinte
+PAUSA_NO_LIMITE_CEMADEN = 60         # segundos
+RECUSAS_NO_LIMITE_CEMADEN = 3
+
+# =====================================================
+# RAIOS DO GOES (GLM)
+# =====================================================
+# O GLM manda um arquivo a cada 20 s, com os flashes do disco inteiro (raios dentro da nuvem e até o
+# solo). O banco guarda a contagem por hora em células de 0,1° (~10 km, perto da resolução do GLM),
+# na caixa do estado com ~1° de folga: oeste, sul, leste, norte, em múltiplos da célula
+CAIXA_RAIOS = (-59.2, -25.1, -49.9, -16.1)
+CELULAS_POR_GRAU_RAIOS = 10
+ARQUIVOS_GLM_POR_HORA = 180
+# O Agora também mostra o que vem de longe, num círculo em volta de Campo Grande: dá margem para ver
+# o que se forma no sul (Paraguai, norte da Argentina, Sul do Brasil). Pedido da equipe, 24/11/2026:
+# começou com 2.000 km e, no mesmo dia, a equipe preferiu 1.500 km
+RAIO_DA_TERRA_KM = 6371.0088               # o raio médio, o mesmo do ST_DistanceSphere do PostGIS
+CENTRO_DOS_RAIOS = (-54.6201, -20.4697)    # Campo Grande: longitude, latitude
+NOME_DO_CENTRO_DOS_RAIOS = "Campo Grande"
+RAIO_DOS_RAIOS_KM = 1500
+ANEIS_DOS_RAIOS_KM = (500, 1000, 1500)
+MARGEM_DO_QUADRO_DOS_RAIOS = 1.0           # graus em volta do círculo, no PNG do boletim
+# Os estados do Brasil e os países em volta, para os mapas do círculo (ferramentas/brasil_e_vizinhos.py)
+SHAPE_BRASIL_E_VIZINHOS = PASTA_SHP / "brasil_e_vizinhos.gpkg"
+
+# =====================================================
 # PREVISÃO (OPEN-METEO)
 # =====================================================
 # As decisões por trás destes números estão em docs/escopo_v0.3.1.md.
 URL_OPENMETEO = "https://api.open-meteo.com/v1/forecast"
 URL_OPENMETEO_RODADA = "https://api.open-meteo.com/data/{modelo}/static/meta.json"
+# A rodada pela hora dela, e não só a mais recente: o ECMWF desde 2024, os outros desde abril de 2026
+URL_OPENMETEO_RODADA_AVULSA = "https://single-runs-api.open-meteo.com/v1/forecast"
 TIMEOUT_OPENMETEO = 120        # segundos: um pedido de centenas de pontos leva uns 2 s, mas pode demorar
 # Os modelos que a equipe de meteorologia prefere (07/10/2026). O ICON só vai até o dia 7,5.
 MODELOS_PREVISAO = ("ecmwf_ifs025", "gfs_seamless", "icon_seamless")
 DIAS_PREVISAO = 14             # o 15º dia faria cada ponto pesar 15/14 na cota
-GRADE_PREVISAO = 0.5           # graus entre os pontos da grade; 0,25 quando a busca for agendada
+GRADE_PREVISAO = 0.5           # graus entre os pontos da grade, na busca sob demanda
+GRADE_PREVISAO_BANCO = 0.25    # a do coletor, que o banco guarda (modulos/coletor_previsao.py)
 OPENMETEO_POR_MINUTO = 600     # limite gratuito de chamadas por minuto
 # As semanas: a anomalia semanal do EC46, a previsão estendida do ECMWF, na média dos membros
 URL_OPENMETEO_SAZONAL = "https://seasonal-api.open-meteo.com/v1/seasonal"
@@ -242,6 +279,14 @@ RESOLUCAO_GRADE = 100          # pontos por eixo
 IDW_VIZINHOS = 8
 IDW_POTENCIA = 2
 MIN_ESTACOES_INTERPOLACAO = 3
+# Nos mapas de chuva em PNG do painel, as estações a até isso umas das outras (em cadeia) mostram só
+# o maior valor: o ponto, o número e o ranking. A superfície continua com todas. Pedido da equipe em
+# 13/11/2026, para os pluviômetros do CEMADEN, que se juntam nas cidades (Campo Grande tem cinco
+# estações num raio de 15 km), não se cobrirem no mapa
+AGRUPAR_CHUVA_KM = 15.0
+# O começo do nome das estações do CEMADEN nas listas que juntam as duas redes ("CEMADEN · Bonito
+# (Centro)"). O ranking do mapa do boletim o tira: ali o nome longo cobria o mapa do estado
+PREFIXO_CEMADEN = "CEMADEN · "
 # Folga da poda das estações de apoio: quantas mais próximas olhar ao decidir se uma
 # estação de fora pode entrar na conta de alguma célula. O IDW usa 8; olhar o dobro
 # guarda a que só vira vizinha quando outra falta naquela hora — e falta: num dia comum
@@ -271,26 +316,11 @@ NOMES_MODO = {"dia": "Data específica", "periodo": "Período", "tempo_real": "T
 
 
 def _gmt(momento: datetime) -> str:
-    """O fuso como ele aparece nos subtítulos: GMT-04 em MS, GMT-03 no Paraná."""
     return f"GMT{momento.utcoffset().total_seconds() / 3600:+03.0f}"
 
 
 @dataclass(frozen=True)
 class Periodo:
-    """Janela de tempo de uma consulta.
-
-    Crie com um dos construtores:
-        Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30))  -> data específica
-        Periodo.de_datas(date(2026, 8, 1), date(2026, 8, 31))   -> período
-        Periodo.de_datas(date(2026, 9, 14), date(2026, 9, 15), 8, 8)  -> das 08 h de 14/09 às 08 h de 15/09
-        Periodo.tempo_real()                                     -> últimas 24 h
-
-    Os dias seguem o horário de MS (da 00 h às 24 h locais); início e fim ficam guardados em
-    UTC, como as leituras do INMET. Cada leitura horária se refere à hora que termina no horário
-    indicado, então a janela (início, fim) reúne as leituras com início < horário <= fim.
-    Regras que valem só para um produto ficam no arquivo do produto, em modulos/produtos/.
-    """
-
     inicio: datetime  # UTC
     fim: datetime     # UTC
     modo: str         # "dia", "periodo" ou "tempo_real"
@@ -302,10 +332,6 @@ class Periodo:
     @classmethod
     def de_datas(cls, data_inicial: date, data_final: date, hora_inicial: int = 0, hora_final: int = 24,
                  fuso: ZoneInfo = FUSO_MS) -> "Periodo":
-        """Da hora inicial da data inicial até a hora final da data final, no horário do recorte.
-
-        Sem horas, são dias inteiros: da 00 h da data inicial às 24 h da data final.
-        """
         for hora in (hora_inicial, hora_final):
             if not 0 <= hora <= 24:
                 raise ValueError(f"Hora inválida: {hora} (use uma hora cheia de 0 a 24).")
@@ -320,7 +346,6 @@ class Periodo:
 
     @classmethod
     def tempo_real(cls, agora: datetime | None = None, fuso: ZoneInfo = FUSO_MS) -> "Periodo":
-        """Últimas 24 horas até o momento atual."""
         agora = (agora or datetime.now(FUSO_UTC)).astimezone(FUSO_UTC)
         return cls(agora - timedelta(hours=24), agora, "tempo_real", fuso)
 
@@ -330,12 +355,10 @@ class Periodo:
 
     @property
     def primeiro_dia(self) -> date:
-        """Primeiro dia da consulta, no horário de MS."""
         return self.inicio.astimezone(self.fuso).date()
 
     @property
     def ultimo_dia(self) -> date:
-        """Último dia da consulta, no horário de MS."""
         return (self.fim.astimezone(self.fuso) - timedelta(microseconds=1)).date()
 
     @property
@@ -344,17 +367,14 @@ class Periodo:
 
     @property
     def horas(self) -> int:
-        """Duração da consulta, em horas."""
         return round((self.fim - self.inicio).total_seconds() / 3600)
 
     @property
     def dias_inteiros(self) -> bool:
-        """True quando a consulta começa e termina à 00 h de MS (sem horários informados)."""
         return all(momento.astimezone(self.fuso).time() == time.min for momento in (self.inicio, self.fim))
 
     @property
     def inicio_do_dia(self) -> datetime:
-        """00 h (horário de MS) do dia em que a consulta termina, em UTC. No tempo real: a 00 h de hoje."""
         fim_local = self.fim.astimezone(self.fuso)
         return fim_local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(FUSO_UTC)
 
@@ -362,12 +382,10 @@ class Periodo:
 
     @property
     def janela(self) -> tuple[datetime, datetime]:
-        """Intervalo da consulta: (início, fim]."""
         return self.inicio, self.fim
 
     @property
     def janela_busca(self) -> tuple[datetime, datetime]:
-        """Intervalo baixado da API (no tempo real, inclui o histórico usado nos acumulados)."""
         if self.modo == "tempo_real":
             return self.fim - timedelta(hours=HORAS_BUSCA_TEMPO_REAL), self.fim
         return self.inicio, self.fim
@@ -376,7 +394,6 @@ class Periodo:
 
     @property
     def identificador(self) -> str:
-        """Trecho usado nos nomes de pastas e arquivos."""
         if self.modo == "tempo_real":
             return f"{self.fim.astimezone(self.fuso):%Y%m%d_%H%M}"
         if not self.dias_inteiros:
@@ -401,11 +418,6 @@ class Periodo:
         )
 
     def descrever_janela(self, inicio: datetime, fim: datetime) -> str:
-        """Texto de uma janela para os subtítulos dos mapas, igual em todos os produtos.
-
-        Só as datas quando a janela cobre dias inteiros; com horário e fuso (GMT-04, o horário
-        de MS) quando começa ou termina no meio de um dia, que é quando a hora faz diferença.
-        """
         inicio, fim = inicio.astimezone(self.fuso), fim.astimezone(self.fuso)
         if inicio.time() == time.min and fim.time() == time.min:
             primeiro, ultimo = inicio.date(), (fim - timedelta(microseconds=1)).date()
@@ -413,5 +425,4 @@ class Periodo:
         return f"{inicio:%d/%m/%Y %H:%M} a {fim:%d/%m/%Y %H:%M} {_gmt(inicio)}"
 
     def pasta_saida(self, produto: str) -> Path:
-        """Pasta dos resultados: saida/<produto>/<modo>/<identificador>/."""
         return PASTA_SAIDA / produto / self.modo / self.identificador

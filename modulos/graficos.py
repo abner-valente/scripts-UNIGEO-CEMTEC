@@ -23,7 +23,6 @@ GRADE = "#e3e3e0"
 
 
 def nova_figura(titulo: str, subtitulo: str, largura: float, altura: float):
-    """Figura com o título, o subtítulo e os eixos discretos usados em todos os gráficos."""
     fig, ax = plt.subplots(figsize=(largura, altura))
     fig.patch.set_facecolor("white")
     ax.set_facecolor("white")
@@ -47,11 +46,6 @@ def salvar(fig, caminho: Path) -> None:
 
 def barras_empilhadas(tabela: pd.DataFrame, cores: list[str], rotulos: list[str], titulo: str, subtitulo: str,
                       eixo: str, caminho: Path, cores_do_texto: list[str] | None = None) -> None:
-    """Uma barra horizontal por linha da tabela, dividida nas colunas dela.
-
-    Cada trecho leva o seu valor dentro, e o total fica no fim da barra. Trechos pequenos demais
-    para caber o número ficam sem ele, para o gráfico não virar um amontoado.
-    """
     fig, ax = nova_figura(titulo, subtitulo, 11, 0.23 * len(tabela) + 2)
     cores_do_texto = cores_do_texto or [TINTA] * len(tabela.columns)
     limite = max(tabela.sum(axis=1).max(), 1) * 0.035  # trecho mínimo para caber um número
@@ -78,7 +72,6 @@ def barras_empilhadas(tabela: pd.DataFrame, cores: list[str], rotulos: list[str]
 
 def barras_agrupadas(tabela: pd.DataFrame, cores: list[str], rotulos: list[str], titulo: str, subtitulo: str,
                      eixo: str, caminho: Path) -> None:
-    """Uma barra por coluna, lado a lado, para cada linha da tabela."""
     fig, ax = nova_figura(titulo, subtitulo, 11, 0.30 * len(tabela) + 2)
     posicoes = np.arange(len(tabela))
     espessura = 0.24
@@ -95,12 +88,6 @@ def barras_agrupadas(tabela: pd.DataFrame, cores: list[str], rotulos: list[str],
 
 def calendario(tabela: pd.DataFrame, cores: list[str], rotulos: list[str], titulo: str, subtitulo: str,
                caminho: Path, sem_dado: str | None = None) -> None:
-    """Um quadrado para cada cruzamento de linha (ex.: estação) e coluna (ex.: dia), colorido pela classe.
-
-    A classe i tem a cor `cores[i]`, e a legenda vai da classe mais alta para a mais baixa: a que
-    mais pesa vem primeiro. O cruzamento sem valor fica em branco; com `sem_dado`, a legenda diz o
-    que o branco quer dizer.
-    """
     fig, ax = nova_figura(titulo, subtitulo, 11, 0.21 * len(tabela) + 2)
     paleta = ListedColormap(cores).with_extremes(bad="white")
     ax.imshow(tabela.to_numpy(dtype=float), aspect="auto", cmap=paleta, vmin=-0.5, vmax=len(cores) - 0.5)

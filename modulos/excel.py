@@ -9,7 +9,6 @@ LARGURA_COLUNA = 25
 
 
 def salvar_relatorio(tabelas: dict[str, pd.DataFrame], caminho: Path) -> None:
-    """Grava cada tabela em uma aba do .xlsx, com cabeçalho formatado."""
     if not tabelas:
         print("⚠️ Nenhum dado foi coletado. O arquivo Excel não será gerado.")
         return

@@ -11,7 +11,6 @@ def utc(texto):
 
 
 def test_recorte_segue_a_hora_que_termina_na_leitura(serie):
-    """A leitura das HH:00 fecha a hora anterior: entra a do fim da janela, não a do início."""
     dados = serie("2026-07-30", "2026-08-01")
     recorte = calculos.recortar(dados, utc("2026-07-30 04:00"), utc("2026-07-31 04:00"))
     assert len(recorte) == 24
@@ -48,11 +47,6 @@ def test_indice_do_extremo_e_data_hora(serie):
 
 
 def test_a_coluna_de_horario_local_leva_a_sigla_do_estado(serie):
-    """O valor sempre saiu do fuso certo; o rótulo é que dizia (MS) em qualquer estado.
-
-    Uma planilha de SC com a coluna "Data/Hora (MS)" faz quem lê entender horário de Campo
-    Grande onde está o de Florianópolis.
-    """
     dados = serie("2026-07-30", "2026-07-31")
     indice = calculos.indice_extremo(dados, "TEM_MAX", minimo=False)
 
@@ -73,8 +67,6 @@ def test_idw_reproduz_o_valor_na_posicao_da_estacao():
 
 
 def test_idw_mede_a_distancia_em_quilometros():
-    """Estação A fica 1° a leste do ponto e B 1° ao norte: em graus, a mesma distância. Em MS,
-    1° de longitude (~104 km) é mais curto que 1° de latitude (~111 km), então A pesa mais."""
     resultado = calculos.interpolar_idw([-54.0, -55.0], [-21.0, -20.0], [10.0, 0.0], np.array([[-55.0]]), np.array([[-21.0]]))
     assert resultado[0, 0] == pytest.approx(10 * 110.6**2 / (103.9**2 + 110.6**2), abs=0.02)  # ≈ 5,3 (em graus seria 5,0)
 
@@ -95,21 +87,55 @@ def test_idw_de_campo_constante_e_constante():
 
 
 # =====================================================
+# O VALOR DE UM PONTO SÓ, AO LONGO DO TEMPO
+# =====================================================
+def test_o_idw_do_ponto_no_tempo_e_o_idw_de_cada_instante():
+    rng = np.random.default_rng(1)
+    lons, lats = rng.uniform(-58, -51, 15), rng.uniform(-24, -17.5, 15)
+    valores = rng.uniform(0, 40, (5, 15))
+    valores[1, [0, 3, 7]] = np.nan   # estações que não mediram naquele instante
+    centro, lon, lat = (-54.5, -20.75), -54.6, -20.4
+    # Grade de dois pontos, o do teste e o espelhado, para o centro dela ser o mesmo `centro`
+    lon_grade = np.array([[lon, 2 * centro[0] - lon]])
+    lat_grade = np.array([[lat, 2 * centro[1] - lat]])
+
+    serie = calculos.idw_no_tempo(lons, lats, valores, lon, lat, centro, vizinhos=8)
+
+    for linha, no_ponto in zip(valores, serie):
+        mediram = ~np.isnan(linha)
+        esperado = calculos.interpolar_idw(lons[mediram], lats[mediram], linha[mediram], lon_grade, lat_grade, vizinhos=8)
+        assert no_ponto == pytest.approx(esperado[0, 0])
+
+
+def test_o_idw_do_ponto_sobre_a_estacao_e_o_valor_dela():
+    serie = calculos.idw_no_tempo([-55.0, -53.0, -57.0], [-20.0, -22.0, -19.0], [[10.0, 30.0, 20.0]],
+                                  -55.0, -20.0, (-54.5, -20.75))
+    assert serie[0] == pytest.approx(10.0)
+
+
+def test_o_instante_sem_ninguem_medindo_fica_sem_valor():
+    serie = calculos.idw_no_tempo([-55.0, -53.0], [-20.0, -22.0], [[10.0, 30.0], [np.nan, np.nan]],
+                                  -54.0, -21.0, (-54.5, -20.75))
+    assert not np.isnan(serie[0]) and np.isnan(serie[1])
+
+
+def test_a_estacao_mais_proxima_e_a_distancia_em_km():
+    # De (-55, -21): (-54, -21) fica a 103,9 km e (-55, -20) a 110,6 km
+    indices, distancias = calculos.mais_proxima([-55.0, -54.0], [-20.0, -21.0], np.array([[-55.0]]), np.array([[-21.0]]))
+    assert indices[0, 0] == 1
+    assert distancias[0, 0] == pytest.approx(103.9, abs=0.5)
+
+
+# =====================================================
 # PODA DAS ESTAÇÕES DE APOIO
 # =====================================================
 def estado_denso():
-    """Um estado com 36 estações e a grade que vira desenho.
-
-    Denso de propósito: com poucas estações, `k` mais próximas passa a ser "todas", e aí não há o
-    que podar — o cenário precisa ter mais estações do que vizinhos para a poda significar algo.
-    """
     lon, lat = calculos.criar_grade((-55.0, -54.0, -21.0, -20.0), 30)
     colunas, linhas = np.meshgrid(np.linspace(-54.95, -54.05, 6), np.linspace(-20.95, -20.05, 6))
     return lon, lat, colunas.ravel(), linhas.ravel()
 
 
 def test_a_poda_guarda_quem_encosta_no_estado_e_larga_quem_esta_longe():
-    """Estar dentro da margem não basta: é preciso chegar às mais próximas de alguma célula."""
     lon, lat, proprias_lon, proprias_lat = estado_denso()
     #                      logo além da divisa | 210 km a leste | 100 km a leste
     apoio_lon = np.array([-53.95, -52.00, -53.00])
@@ -122,7 +148,6 @@ def test_a_poda_guarda_quem_encosta_no_estado_e_larga_quem_esta_longe():
 
 
 def test_a_poda_nao_muda_a_superficie_interpolada():
-    """É a promessa da poda: corta requisição e deixa o desenho igual, bit a bit."""
     lon, lat, proprias_lon, proprias_lat = estado_denso()
     apoio_lon = np.array([-53.95, -53.90, -53.00, -52.00, -50.00, -56.50])
     apoio_lat = np.array([-20.50, -20.90, -20.50, -20.50, -20.50, -20.50])
@@ -147,7 +172,6 @@ def test_a_poda_nao_muda_a_superficie_interpolada():
 
 
 def test_a_folga_da_poda_so_acrescenta_estacao():
-    """A folga existe para guardar quem só vira vizinha quando outra falta naquela hora."""
     lon, lat, proprias_lon, proprias_lat = estado_denso()
     apoio_lon = np.array([-53.95, -53.90, -53.85, -53.80, -53.70, -53.60])
     apoio_lat = np.full(len(apoio_lon), -20.50)
@@ -171,7 +195,6 @@ def test_a_poda_sem_apoio_nenhum_nao_quebra():
 
 
 def test_a_poda_devolve_a_mascara_na_ordem_que_recebeu():
-    """A máscara é posicional: quem chama filtra a tabela dele com ela."""
     lon, lat, proprias_lon, proprias_lat = estado_denso()
     apoio_lon = np.array([-50.00, -53.95, -50.50])
     apoio_lat = np.array([-20.50, -20.50, -20.50])
@@ -180,3 +203,34 @@ def test_a_poda_devolve_a_mascara_na_ordem_que_recebeu():
                                       lon, lat, vizinhos=config.IDW_VIZINHOS)
 
     assert entram.tolist() == [False, True, False]   # só a do meio encosta no estado
+
+
+# =====================================================
+# AS ESTAÇÕES VIZINHAS (o agrupamento dos mapas de chuva)
+# =====================================================
+# Um grau de latitude tem ~111 km: 0,09° são ~10 km
+def test_estacoes_a_ate_15_km_em_cadeia_viram_um_grupo_so():
+    # A, B e C em fila, a ~10 km uma da outra (A e C a ~20 km); D sozinha, longe
+    lats = [-20.00, -20.09, -20.18, -22.00]
+    lons = [-54.6, -54.6, -54.6, -54.6]
+
+    assert calculos.grupos_de_vizinhas(lons, lats, 15).tolist() == [0, 0, 0, 3]
+    assert calculos.grupos_de_vizinhas(lons, lats, 5).tolist() == [0, 1, 2, 3]
+
+
+def test_sem_raio_ou_com_uma_estacao_cada_uma_e_o_proprio_grupo():
+    assert calculos.grupos_de_vizinhas([-54.6, -54.6], [-20.0, -20.01], 0).tolist() == [0, 1]
+    assert calculos.grupos_de_vizinhas([-54.6], [-20.0], 15).tolist() == [0]
+
+
+def test_a_distancia_e_o_circulo_na_esfera():
+    # Um grau de meridiano tem ~111,2 km na esfera de raio médio
+    assert calculos.distancia_km(-54.0, -20.0, -54.0, -21.0) == pytest.approx(111.195, abs=0.01)
+    centro = (-54.6201, -20.4697)
+    lon, lat = calculos.circulo(centro, 2000, pontos=3601)
+    assert calculos.distancia_km(*centro, lon, lat) == pytest.approx(2000, abs=1e-6)
+    oeste, sul, leste, norte = calculos.caixa_do_circulo(centro, 2000)
+    assert (oeste, sul, leste, norte) == pytest.approx((lon.min(), lat.min(), lon.max(), lat.max()), abs=1e-4)
+    # A caixa é simétrica em longitude, e não em latitude no mapa: ~18° de latitude para cada lado
+    assert centro[0] - oeste == pytest.approx(leste - centro[0])
+    assert norte - centro[1] == pytest.approx(2000 / 111.195, abs=0.01)

@@ -1,73 +1,354 @@
-"""De onde vêm os dados: hoje as APIs públicas; depois, o banco da UNIGEO ou a API de leitura.
+"""De onde vêm os dados: as APIs públicas ou o banco da UNIGEO; depois, a API de leitura.
 
 Os produtos e o painel pedem as estações e as leituras a este módulo, e não direto a quem as
 busca. Cada instalação escolhe a fonte pela configuração (`FONTE_DADOS`, no `.env` do servidor
 ou nos Secrets do Streamlit Cloud), e o resto do código não muda: as contas, os mapas e as
 planilhas não sabem de onde as leituras vieram. É a costura descrita em
-docs/plano_arquitetura.md, que permite levar o painel para o servidor da unidade sem mexer nos
-produtos.
+docs/plano_arquitetura.md (passo 7).
 
-Por enquanto há uma fonte só, "apis": cada função repassa o pedido ao `inmet.py`, exatamente
-como o código fazia antes. As outras ("banco" e "api_leitura") entram nas próximas versões, com
-as mesmas funções e o mesmo formato de resposta.
+- "apis": cada função repassa o pedido ao `inmet.py`.
+- "banco": lê o cadastro, as leituras e a previsão do `climageo`, com o usuário que só lê, e
+  devolve as mesmas tabelas que o `inmet.py` e o `openmeteo.py` devolveriam, coluna por coluna. A
+  grade da previsão é a do coletor (0,25°), e não a da busca sob demanda (0,5°).
+
+Os pluviômetros do CEMADEN só vêm do banco (`estacoes_cemaden`, `chuva_cemaden`): com a fonte
+"apis", a PED teria de ser consultada na hora, e o limite de 12 consultas por minuto é da conta,
+dividido com o coletor. As tabelas deles têm as colunas das do INMET, só com a chuva.
+
+Os raios do GOES (GLM) também só vêm do banco (`tem_raios` diz se há): os recentes direto das
+tabelas que um colega da unidade alimenta, e os de um período da contagem por hora do coletor.
 
 As funções procuram o `inmet` na hora de cada chamada, sem guardar referência às funções dele.
 É o que deixa os testes trocarem a API do INMET por dados sintéticos, como sempre fizeram.
 """
-from datetime import datetime
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import psycopg
 
-from . import config, inmet
+from . import banco, cemaden, config, inmet, openmeteo
 
 # As fontes que esta versão sabe usar
-FONTES = ("apis",)
+FONTES = ("apis", "banco")
 
-# Por enquanto o único erro de fonte é o do INMET. Quando o banco chegar, este nome passa a ser a
-# classe-mãe dos erros das duas fontes, e quem trata ErroFonte não precisa mudar.
-ErroFonte = inmet.ErroINMET
+# O CEMADEN nas listas e nas tabelas, ao lado do INMET: o nome da estação começa por aqui
+PREFIXO_CEMADEN = config.PREFIXO_CEMADEN
+COLUNAS_ESTACOES_CEMADEN = ["CD_ESTACAO", "DC_NOME", "SG_ESTADO", "VL_LATITUDE", "VL_LONGITUDE", "DT_INICIO_OPERACAO",
+                            "CD_SITUACAO", "Estação"]
+SITUACOES_CEMADEN = {False: "Operante", True: "Parada"}
+
+# O erro que os produtos e o painel tratam, venha de qual fonte vier
+ErroFonte = (inmet.ErroINMET, banco.ErroBanco)
+ErroPrevisao = (openmeteo.ErroOpenMeteo, banco.ErroBanco)
 
 
 def _conferir_fonte() -> None:
-    """Para na primeira chamada se a configuração pedir uma fonte que esta versão não tem.
-
-    Sem isto, um FONTE_DADOS escrito errado no servidor cairia em silêncio para as APIs, e
-    ninguém saberia que o painel não está lendo de onde deveria.
-    """
     if config.FONTE_DADOS not in FONTES:
         raise ValueError(f"FONTE_DADOS={config.FONTE_DADOS!r} não existe nesta versão; "
                          f"as fontes disponíveis são: {', '.join(FONTES)}")
 
 
-def estacoes(uf: str = config.UF) -> pd.DataFrame:
-    """As estações operantes da UF, com coordenadas numéricas e o nome formatado em 'Estação'."""
+def _do_banco() -> bool:
     _conferir_fonte()
+    return config.FONTE_DADOS == "banco"
+
+
+def estacoes(uf: str = config.UF) -> pd.DataFrame:
+    if _do_banco():
+        todas = _estacoes_do_banco()
+        return todas[todas["SG_ESTADO"] == uf].reset_index(drop=True)
     return inmet.listar_estacoes(uf)
 
 
 def estacoes_de_apoio(recorte: config.Recorte, lon_celulas, lat_celulas) -> pd.DataFrame:
-    """As estações de fora do estado que podem entrar na interpolação de alguma célula."""
-    _conferir_fonte()
+    if _do_banco():
+        return inmet.estacoes_de_apoio(recorte, lon_celulas, lat_celulas, estacoes=_estacoes_do_banco())
     return inmet.estacoes_de_apoio(recorte, lon_celulas, lat_celulas)
 
 
 def leituras_da_estacao(codigo: str, inicio: datetime, fim: datetime,
                         fuso: ZoneInfo = config.FUSO_MS) -> pd.DataFrame | None:
-    """As leituras horárias de uma estação na janela (início, fim], ou None se ela não tiver."""
-    _conferir_fonte()
+    if _do_banco():
+        cadastro = _estacoes_do_banco(so_em_operacao=False)
+        return _leituras_do_banco(cadastro[cadastro["CD_ESTACAO"] == codigo], inicio, fim, fuso).get(codigo)
     return inmet.baixar_dados_estacao(codigo, inicio, fim, fuso)
 
 
 def leituras_do_estado(inicio: datetime, fim: datetime, uf: str = config.UF,
                        fuso: ZoneInfo = config.FUSO_MS) -> list[tuple[pd.Series, pd.DataFrame]]:
-    """As leituras de todas as estações da UF na janela, uma dupla (estação, leituras) por estação."""
-    _conferir_fonte()
+    if _do_banco():
+        do_estado = estacoes(uf)
+        print(f"✅ Encontradas {len(do_estado)} estações em {uf} (no banco)")
+        coletados, sem_dados = _por_estacao(do_estado, inicio, fim, fuso)
+        inmet.resumir_coleta(len(do_estado), len(coletados), sem_dados, [])
+        return coletados
     return inmet.baixar_estacoes(inicio, fim, uf=uf, fuso=fuso)
 
 
 def leituras_de_apoio(recorte: config.Recorte, lon_celulas, lat_celulas, inicio: datetime,
                       fim: datetime, fuso: ZoneInfo = config.FUSO_MS) -> list[tuple[pd.Series, pd.DataFrame]]:
-    """As leituras das vizinhas que seguram a borda da interpolação, no mesmo formato."""
-    _conferir_fonte()
+    if _do_banco():
+        try:
+            vizinhas = estacoes_de_apoio(recorte, lon_celulas, lat_celulas)
+            if vizinhas.empty:
+                return []
+            coletados, sem_dados = _por_estacao(vizinhas, inicio, fim, fuso)
+        except banco.ErroBanco as erro:
+            print(f"⚠️ Sem as estações vizinhas ({erro}); a borda sai só com as do estado.")
+            return []
+        estados = ", ".join(vizinhas["SG_ESTADO"].value_counts().index)
+        print(f"🧭 {len(vizinhas)} estações vizinhas para a borda ({estados}), do banco: {len(coletados)} com dados"
+              + (f", {len(sem_dados)} sem" if sem_dados else ""))
+        return coletados
     return inmet.baixar_apoio(recorte, lon_celulas, lat_celulas, inicio, fim, fuso=fuso)
+
+
+# =====================================================
+# O CEMADEN
+# =====================================================
+def do_cemaden(nomes) -> list[str]:
+    # As estações do CEMADEN numa lista que junta as duas redes, como a dos mapas de chuva
+    return [nome for nome in nomes if isinstance(nome, str) and nome.startswith(PREFIXO_CEMADEN)]
+
+
+def _nome_cemaden(municipio, nome: str) -> str:
+    # O nome sozinho não diz onde a estação fica ("Centro", "Escola"), e Campo Grande tem quatro
+    return f"{PREFIXO_CEMADEN}{municipio} ({nome})" if isinstance(municipio, str) and municipio else \
+        f"{PREFIXO_CEMADEN}{nome}"
+
+
+def estacoes_cemaden(uf: str = config.UF) -> pd.DataFrame:
+    if not _do_banco():
+        return pd.DataFrame(columns=COLUNAS_ESTACOES_CEMADEN)
+    with _conexao() as conexao:
+        cadastro = banco.ler_cemaden_estacoes(conexao, uf)
+    cadastro = cadastro.sort_values(["municipio", "nome", "codigo"], kind="stable", na_position="last")
+    tabela = pd.DataFrame({
+        "CD_ESTACAO": cadastro["codigo"], "DC_NOME": cadastro["nome"], "SG_ESTADO": cadastro["uf"],
+        "VL_LATITUDE": cadastro["latitude"], "VL_LONGITUDE": cadastro["longitude"],
+        "DT_INICIO_OPERACAO": cadastro["instalada_em"],   # sem fuso declarado, como a PED manda
+        # A parada fica na lista: num período de antes da parada, ela tem leitura
+        "CD_SITUACAO": cemaden.esta_parada(cadastro).map(SITUACOES_CEMADEN),
+        "Estação": [_nome_cemaden(municipio, nome) for municipio, nome in zip(cadastro["municipio"], cadastro["nome"])],
+    })
+    return tabela.reset_index(drop=True)
+
+
+def chuva_cemaden(estacoes: pd.DataFrame, inicio: datetime, fim: datetime,
+                  fuso: ZoneInfo = config.FUSO_MS) -> list[tuple[pd.Series, pd.DataFrame]]:
+    # Como leituras_do_estado, para as estações pedidas (de estacoes_cemaden): uma tabela por
+    # estação, com uma linha por hora cheia dos dias UTC de inicio a fim. A leitura entra na hora
+    # que termina na hora cheia seguinte: a das 13:40 na das 14:00, como a leitura do INMET das 14:00
+    # é a chuva das 13:00 às 14:00. A hora sem leitura fica sem dado, e não seca: a estação parada
+    # não manda nada. A estação sem leitura nenhuma no período fica de fora
+    if estacoes.empty or not _do_banco():
+        return []
+    primeiro = pd.Timestamp(inicio.astimezone(config.FUSO_UTC).date(), tz="UTC")
+    ultimo = pd.Timestamp(fim.astimezone(config.FUSO_UTC).date(), tz="UTC") + pd.Timedelta(hours=23)
+    with _conexao() as conexao:
+        # (primeiro − 1 h, último]: as leituras que caem nas horas de primeiro a último
+        lidas = banco.ler_cemaden_chuva(conexao, primeiro - timedelta(hours=1), ultimo, list(estacoes["CD_ESTACAO"]))
+    por_hora = {}
+    if not lidas.empty:
+        lidas = lidas.assign(dt_utc=lidas["leitura_utc"].dt.ceil("h"))
+        somas = lidas.groupby(["estacao", "dt_utc"])["chuva"].sum(min_count=1).round(cemaden.CASAS_DA_CHUVA)
+        por_hora = {codigo: serie.droplevel("estacao") for codigo, serie in somas.groupby(level="estacao")}
+    horas = pd.DataFrame({"dt_utc": pd.date_range(primeiro, ultimo, freq="h")})
+    coletados, sem_dados = [], []
+    for _, estacao in estacoes.iterrows():
+        dela = por_hora.get(estacao["CD_ESTACAO"])
+        if dela is None:
+            sem_dados.append(estacao["Estação"])
+            continue
+        dados = horas.merge(dela.rename("CHUVA").reset_index(), on="dt_utc", how="left")
+        dados = dados.assign(CD_ESTACAO=estacao["CD_ESTACAO"], DC_NOME=estacao["DC_NOME"], UF=estacao["SG_ESTADO"],
+                             VL_LATITUDE=estacao["VL_LATITUDE"], VL_LONGITUDE=estacao["VL_LONGITUDE"],
+                             DT_MEDICAO=dados["dt_utc"].dt.strftime("%Y-%m-%d"),
+                             HR_MEDICAO=dados["dt_utc"].dt.strftime("%H%M"),
+                             dt_local=dados["dt_utc"].dt.tz_convert(fuso))
+        coletados.append((estacao, dados))
+    print(f"🌧️ CEMADEN: {len(coletados)} de {len(estacoes)} estações com leitura no período"
+          + (f"; sem leitura ({len(sem_dados)}): {', '.join(sem_dados)}" if sem_dados else ""))
+    return coletados
+
+
+# =====================================================
+# OS RAIOS DO GOES (GLM)
+# =====================================================
+COLUNAS_RAIOS_RECENTES = ["hora_utc", "longitude", "latitude"]
+COLUNAS_RAIOS_POR_CELULA = ["lon_celula", "lat_celula", "flashes"]
+COLUNAS_COBERTURA_RAIOS = ["hora_utc", "arquivos", "sem_arquivo", "flashes"]
+COLUNAS_CELULAS_DO_CIRCULO = ["lon_celula", "lat_celula", "faixa", "flashes", "mais_novo"]
+
+
+def tem_raios() -> bool:
+    return _do_banco()
+
+
+def raios_recentes(desde: datetime, ate: datetime) -> tuple[pd.DataFrame, pd.Timestamp | None]:
+    # Os flashes de [desde, ate) na caixa do estado, e o arquivo processado mais novo: até ele, o
+    # GLM está no banco (o tempo real chega com ~40 s de atraso)
+    if not _do_banco():
+        return pd.DataFrame(columns=COLUNAS_RAIOS_RECENTES), None
+    with _conexao() as conexao:
+        return banco.ler_raios_recentes(conexao, desde, ate), banco.ultimo_arquivo_do_glm(conexao, desde)
+
+
+def celulas_do_circulo(desde: datetime, ate: datetime, idades: list[int]) -> pd.DataFrame:
+    # Os flashes de [desde, ate) no círculo de Campo Grande e fora da caixa do estado, por célula de
+    # 0,1° e faixa de idade
+    if not _do_banco():
+        return pd.DataFrame(columns=COLUNAS_CELULAS_DO_CIRCULO)
+    with _conexao() as conexao:
+        return banco.ler_celulas_do_circulo(conexao, desde, ate, idades)
+
+
+def raios_do_circulo(desde: datetime, ate: datetime) -> pd.DataFrame:
+    # Os flashes de [desde, ate) no círculo inteiro, um a um (para o PNG do boletim)
+    if not _do_banco():
+        return pd.DataFrame(columns=COLUNAS_RAIOS_RECENTES)
+    with _conexao() as conexao:
+        return banco.ler_raios_do_circulo(conexao, desde, ate)
+
+
+def raios_do_periodo(inicio: datetime, fim: datetime) -> tuple[pd.DataFrame, pd.DataFrame]:
+    # A soma dos flashes de cada célula de 0,1° nas horas de (início, fim], e a cobertura das horas
+    if not _do_banco():
+        return pd.DataFrame(columns=COLUNAS_RAIOS_POR_CELULA), pd.DataFrame(columns=COLUNAS_COBERTURA_RAIOS)
+    with _conexao() as conexao:
+        return banco.ler_raios_por_celula(conexao, inicio, fim), banco.cobertura_dos_raios(conexao, inicio, fim)
+
+
+def alcance_dos_raios() -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    # A primeira e a última hora contadas (pelo fim delas)
+    if not _do_banco():
+        return None, None
+    with _conexao() as conexao:
+        return banco.alcance_dos_raios(conexao)
+
+
+# =====================================================
+# A PREVISÃO
+# =====================================================
+# Os conjuntos de pontos têm o nome do banco: "grade" e "estacao"
+def origem_da_previsao() -> str:
+    return "o banco" if _do_banco() else "o Open-Meteo"
+
+
+def pontos_da_grade() -> pd.DataFrame:
+    return openmeteo.pontos_da_grade(passo=config.GRADE_PREVISAO_BANCO if _do_banco() else config.GRADE_PREVISAO)
+
+
+def pontos_da_grade_semanal() -> pd.DataFrame:
+    return openmeteo.pontos_da_grade(passo=config.GRADE_PREVISAO)   # a do coletor e a do painel são a mesma
+
+
+def rodadas_da_previsao(conjunto: str, modelos: tuple[str, ...]) -> dict[str, datetime]:
+    if _do_banco():
+        with _conexao() as conexao:
+            guardadas = banco.rodadas_guardadas(conexao, conjunto)
+        return {modelo: guardadas[modelo].to_pydatetime() for modelo in modelos if modelo in guardadas}
+    return openmeteo.rodadas(modelos)
+
+
+def previsao(conjunto: str, pontos: pd.DataFrame, modelo: str, rodada: datetime | None) -> pd.DataFrame:
+    if _do_banco():
+        with _conexao() as conexao:
+            tabela = banco.ler_previsao(conexao, conjunto, modelo, rodada)
+        return tabela[tabela["ponto"].isin(pontos["ponto"])].reset_index(drop=True)
+    return openmeteo.buscar(pontos, (modelo,))
+
+
+def rodada_das_semanas(conjunto: str) -> datetime | None:
+    if _do_banco():
+        with _conexao() as conexao:
+            rodada = banco.rodadas_semanais_guardadas(conexao, conjunto).get(config.MODELO_SEMANAS)
+        return None if rodada is None else rodada.to_pydatetime()
+    return openmeteo.rodadas((config.MODELO_SEMANAS,))[config.MODELO_SEMANAS]
+
+
+def semanas(conjunto: str, pontos: pd.DataFrame, rodada: datetime | None) -> pd.DataFrame:
+    if _do_banco():
+        with _conexao() as conexao:
+            tabela = banco.ler_semanas(conexao, conjunto, rodada)
+        return tabela[tabela["ponto"].isin(pontos["ponto"])].reset_index(drop=True)
+    return openmeteo.buscar_semanas(pontos)
+
+
+# =====================================================
+# A FONTE "BANCO"
+# =====================================================
+def _conectar() -> psycopg.Connection:
+    return banco.conectar("leitura")
+
+
+@contextmanager
+def _conexao() -> Iterator[psycopg.Connection]:
+    try:
+        with _conectar() as conexao:
+            yield conexao
+    except psycopg.Error as erro:
+        motivo = str(erro).strip().splitlines()[0] if str(erro).strip() else type(erro).__name__
+        raise banco.ErroBanco(f"falha ao ler o banco: {motivo}") from None
+
+
+def _estacoes_do_banco(so_em_operacao: bool = True) -> pd.DataFrame:
+    with _conexao() as conexao:
+        cadastro = banco.ler_estacoes(conexao)
+    # Na ordem da lista do INMET, pelo nome: é ela que desempata os rankings dos produtos
+    cadastro = cadastro.sort_values(["nome", "codigo"], kind="stable")
+    # As colunas da lista do INMET que o painel e os produtos usam
+    tabela = pd.DataFrame({
+        "CD_ESTACAO": cadastro["codigo"], "DC_NOME": cadastro["nome"], "SG_ESTADO": cadastro["uf"],
+        "VL_LATITUDE": cadastro["latitude"], "VL_LONGITUDE": cadastro["longitude"],
+        "VL_ALTITUDE": cadastro["altitude"], "CD_SITUACAO": cadastro["situacao"],
+        "DT_INICIO_OPERACAO": cadastro["inicio_operacao"],   # a página "Localização Estações" mostra
+    })
+    if so_em_operacao:   # como o inmet.listar_estacoes: só as que a lista dá como operantes
+        tabela = tabela[tabela["CD_SITUACAO"].fillna("").str.strip().str.casefold() == inmet.SITUACAO_OPERANTE]
+    tabela = tabela.assign(Estação=tabela["DC_NOME"].map(inmet.formatar_nome_estacao))
+    return tabela.reset_index(drop=True)
+
+
+def _leituras_do_banco(estacoes: pd.DataFrame, inicio: datetime, fim: datetime,
+                       fuso: ZoneInfo) -> dict[str, pd.DataFrame]:
+    # Como a consulta por estação do INMET: os dias UTC inteiros, de inicio a fim, com uma linha
+    # por hora, mesmo as que não chegaram (vazias). A estação sem nenhuma leitura fica de fora.
+    primeiro = pd.Timestamp(inicio.astimezone(config.FUSO_UTC).date(), tz="UTC")
+    ultimo = pd.Timestamp(fim.astimezone(config.FUSO_UTC).date(), tz="UTC") + pd.Timedelta(hours=23)
+    if estacoes.empty:
+        return {}
+    with _conexao() as conexao:
+        lidas = banco.ler_inmet(conexao, primeiro - timedelta(hours=1), ultimo, list(estacoes["CD_ESTACAO"]))
+    horas = pd.DataFrame({"dt_utc": pd.date_range(primeiro, ultimo, freq="h")})
+    medidas = {coluna: coluna.upper() for coluna in [*banco.COLUNAS_INMET, *banco.COLUNAS_INMET_EXTRAS]}
+    resultado = {}
+    for estacao in estacoes.itertuples(index=False):
+        dela = lidas[lidas["estacao"] == estacao.CD_ESTACAO]
+        if dela.empty:
+            continue
+        dados = horas.merge(dela.drop(columns="estacao").rename(columns={"hora_utc": "dt_utc", **medidas}),
+                            on="dt_utc", how="left")
+        dados = dados.assign(CD_ESTACAO=estacao.CD_ESTACAO, DC_NOME=estacao.DC_NOME, UF=estacao.SG_ESTADO,
+                             VL_LATITUDE=estacao.VL_LATITUDE, VL_LONGITUDE=estacao.VL_LONGITUDE,
+                             DT_MEDICAO=dados["dt_utc"].dt.strftime("%Y-%m-%d"),
+                             HR_MEDICAO=dados["dt_utc"].dt.strftime("%H%M"),
+                             dt_local=dados["dt_utc"].dt.tz_convert(fuso))
+        resultado[estacao.CD_ESTACAO] = dados
+    return resultado
+
+
+def _por_estacao(estacoes: pd.DataFrame, inicio: datetime, fim: datetime,
+                 fuso: ZoneInfo) -> tuple[list[tuple[pd.Series, pd.DataFrame]], list[str]]:
+    lidas = _leituras_do_banco(estacoes, inicio, fim, fuso)
+    coletados, sem_dados = [], []
+    for _, estacao in estacoes.iterrows():
+        dados = lidas.get(estacao["CD_ESTACAO"])
+        if dados is None:
+            sem_dados.append(estacao["Estação"])
+        else:
+            coletados.append((estacao, dados))
+    return coletados, sem_dados

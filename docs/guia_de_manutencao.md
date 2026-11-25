@@ -21,18 +21,21 @@ Uma leitura de ponta a ponta leva uns 20 minutos. Depois, ele serve de consulta:
 
 ## 1. O projeto em um minuto
 
-São **duas portas de entrada** sobre **uma base comum**:
+São **três portas de entrada** sobre **uma base comum**:
 
 - **`main.py`**, a linha de comando: gera os **produtos** (planilha Excel e mapas em PNG) que vão para o boletim. É o que a equipe mais usa.
-- **`app/explorador.py`**, o painel em Streamlit: serve para **olhar** os dados (gráficos, mapas, qualidade). Ele não grava nada em `saida/`.
+- **`app/explorador.py`**, o painel em Streamlit: serve para **olhar** os dados (mapas navegáveis ou do boletim, gráficos, qualidade). Ele não grava nada em `saida/`.
+- **`coletar.py`**, os coletores do banco da UNIGEO: rodam no servidor, pelo Agendador de Tarefas, e guardam o INMET, a previsão, o CEMADEN e a contagem dos raios.
 
-As duas usam o mesmo código de `modulos/`: a mesma API, as mesmas contas e o mesmo desenho de mapa. É por isso que a tela e o relatório não discordam.
+As três usam o mesmo código de `modulos/`: a mesma API, as mesmas contas e o mesmo desenho de mapa. É por isso que a tela e o relatório não discordam.
 
 ```mermaid
 flowchart TD
     main["main.py<br/>linha de comando"] --> rel["produtos/relatorio_inmet.py"]
     main --> fogo["produtos/risco_fogo.py"]
-    painel["app/explorador.py<br/>painel Streamlit"] --> appmods["app/*.py<br/>variaveis, chuva, risco, dados, previsao,<br/>boletim, superficie, animacao, qualidade"]
+    coletar["coletar.py<br/>coletores"] --> coletores["coletor_inmet, coletor_previsao,<br/>coletor_cemaden, coletor_raios"]
+    coletores --> base
+    painel["app/explorador.py<br/>painel Streamlit"] --> appmods["app/*.py<br/>variaveis, chuva, risco, dados, previsao, interativo,<br/>raios, car, boletim, superficie, animacao, qualidade"]
     appmods -->|"a regra 30-30-30 é importada, não reescrita"| fogo
     rel --> base
     fogo --> base
@@ -40,7 +43,9 @@ flowchart TD
     appmods --> base
     subgraph base["modulos/ — a base comum"]
         config["config.py<br/>Recorte, Periodo e as constantes"]
+        fonte["fonte.py<br/>as APIs ou o banco"]
         inmet["inmet.py<br/>API do INMET"]
+        banco["banco.py<br/>o único que fala SQL"]
         calculos["calculos.py<br/>janelas, extremos, IDW"]
         mapas["mapas.py<br/>todos os mapas"]
         excel["excel.py"]
@@ -50,16 +55,16 @@ flowchart TD
 
 A regra de dependência é uma só: **`modulos/` nunca importa nada de `app/`**. O painel conhece os produtos, mas os produtos não sabem que o painel existe. Mantida essa regra, o `main.py` roda sem Streamlit instalado.
 
-E uma segunda, desde a v0.3.1: **os produtos e o painel pedem os dados ao `modulos/fonte.py`, e nunca direto ao `inmet.py`.** É o `fonte.py` que decide de onde vêm as leituras, pela configuração `FONTE_DADOS`: hoje só existem as APIs públicas, e o banco da UNIGEO e a API de leitura chegam nas próximas versões ([`plano_arquitetura.md`](plano_arquitetura.md)). Um teste (`test_produtos_e_painel_pedem_os_dados_a_fonte_e_nao_ao_inmet`) falha se alguém passar por fora.
+E uma segunda, desde a v0.3.1: **os produtos e o painel pedem os dados ao `modulos/fonte.py`, e nunca direto ao `inmet.py`.** É o `fonte.py` que decide de onde vêm as leituras e a previsão, pela configuração `FONTE_DADOS`: `apis` (as APIs públicas, o padrão) ou `banco` (o `climageo`, desde a 0.4.1). A API de leitura chega numa próxima versão ([`plano_arquitetura.md`](plano_arquitetura.md)). Um teste (`test_produtos_e_painel_pedem_os_dados_a_fonte_e_nao_ao_inmet`) falha se alguém passar por fora.
 
 Tamanho de cada parte, para ter noção do que se está mantendo:
 
 | Parte | Linhas | O que tem |
 |---|---|---|
-| `modulos/` (base e produtos) | ~2.100 | `config`, `inmet`, `calculos`, `mapas`, `excel`, `graficos` e os dois produtos |
-| `app/explorador.py` | ~2.000 | a tela inteira do painel: as duas páginas, e o observado aba por aba |
-| `app/*.py` (os outros) | ~1.300 | as contas do painel, sem tela, por isso testáveis |
-| `tests/` | ~3.300 | 299 testes, que rodam em ~50 s |
+| `modulos/` (base, produtos e coletores) | ~5.000 | `config`, `fonte`, `inmet`, `banco`, `openmeteo`, `cemaden`, os quatro coletores, `calculos`, `mapas`, `geotiff`, `gpkg`, `excel`, `graficos` e os dois produtos |
+| `app/explorador.py` | ~5.300 | a tela inteira do painel: as páginas do observado e da previsão, e a dos raios |
+| `app/*.py` (os outros) | ~3.100 | as contas do painel, sem tela, por isso testáveis |
+| `tests/` | ~8.800 | 772 testes, que rodam em ~50 s |
 
 ---
 
@@ -92,7 +97,7 @@ Os mapas interpolados usam também as estações de **fora** do estado que podem
 
 A regra é rígida: **o apoio entra só na superfície**. Ele não vira ponto desenhado, linha de planilha, ranking, nem critério de qual hora ganha mapa no risco de fogo. E a escala de cores fica presa na faixa que o estado faria sozinho (`mapas.mapa_interpolado`).
 
-- Quem escolhe as vizinhas é `inmet.estacoes_de_apoio`: elas precisam cair a até 1,5° do enquadramento e chegar às 16 mais próximas de alguma célula (`config.VIZINHOS_NA_PODA`, o dobro do que o IDW usa, por folga).
+- Quem escolhe as vizinhas é `inmet.estacoes_de_apoio`, chamada pelo `fonte.estacoes_de_apoio` (com a fonte "banco", a mesma escolha sai do cadastro do banco): elas precisam cair a até 1,5° do enquadramento e chegar às 16 mais próximas de alguma célula (`config.VIZINHOS_NA_PODA`, o dobro do que o IDW usa, por folga).
 - Painel e produtos usam a **mesma** função, então a tela e o boletim saem das mesmas estações.
 - Se a lista falhar, `inmet.baixar_apoio` avisa e devolve vazio, e o produto sai só com as do estado.
 
@@ -108,12 +113,14 @@ O perigo é converter duas vezes: `app/risco.py` recebe o dado do painel, que j�
 
 ### 2.5 Um desenho de mapa, duas molduras
 
-Todo mapa sai de `modulos/mapas.py`. O que muda entre o relatório e a tela é a **moldura**:
+Todo mapa em PNG sai de `modulos/mapas.py`. O que muda entre o relatório e a tela é a **moldura**:
 
-- **Sem `Tela`** (o caminho do `main.py`): título e subtítulo (o quê e quando, sem as instituições), logos, ranking das 5 estações, barra de cores vertical, grade de latitude e longitude e, no rodapé, o crédito ("Dados: INMET/SEMADESC", ou o do Open-Meteo na previsão).
-- **Com `mapas.Tela(...)`** (o caminho do painel): só o desenho, para caber numa coluna.
+- **Sem `Tela`** (o caminho do `main.py`): título e subtítulo (o quê e quando, sem as instituições), logos, ranking das 5 estações, barra de cores vertical, grade de latitude e longitude e, no rodapé, o crédito ("Dados: INMET/SEMADESC", "INMET/SEMADESC/CEMADEN" quando há pluviômetro do CEMADEN, ou o do Open-Meteo na previsão).
+- **Com `mapas.Tela(...)`** (o caminho do painel, na vista Boletim): só o desenho, para caber na tela.
 
-O botão "Baixar PNG do boletim" do painel chama o caminho **sem** `Tela`, com as cores da tela. O texto da moldura vem de `app/boletim.py`.
+O item "PNG do boletim (300 dpi)" do menu "Baixar" chama o caminho **sem** `Tela`, com as cores da tela. O texto da moldura vem de `app/boletim.py`.
+
+A exceção é a **vista Navegável** do painel: ela é desenhada no navegador, pelo pydeck, com as camadas montadas em `app/interativo.py`. É um segundo desenho, mas a **conta** é a mesma: a superfície sai do mesmo IDW (ou da mesma bilinear, na previsão), na mesma grade dos produtos, e o GeoTIFF (`modulos/geotiff.py`) refaz a mesma conta em pixels de 0,01°.
 
 O que vai num mapa é descrito por uma especificação: `EspecMapa` para valores contínuos (coluna, título, paleta, unidade, ranking, setas de vento) e `EspecClasses` para classes, como os níveis de risco.
 
@@ -131,14 +138,14 @@ O catálogo também decide a **escala de cores** (`variaveis.escala`): temperatu
 python main.py --produto relatorio_inmet --uf MS --dataini 29/09/2026
 ```
 
-1. **`main.py` → `ler_consulta()`**: lê os argumentos, ou as variáveis no topo do arquivo quando eles faltam. Devolve três coisas: o **módulo do produto** (de `PRODUTOS`, que associa o `NOME` de cada produto ao seu módulo), o **`Periodo`** (com o fuso do recorte) e as **`opcoes`** (`{"recorte": ..., "hrtodas": ...}`).
+1. **`main.py` → `ler_consulta()`**: lê os argumentos, ou as variáveis no topo do arquivo quando eles faltam. Devolve três coisas: o **módulo do produto** (de `PRODUTOS`, que associa o `NOME` de cada produto ao seu módulo), o **`Periodo`** (com o fuso do recorte) e as **`opcoes`** (`{"recorte": ..., "hrtodas": ..., "retirar": ...}`, com as estações retiradas do `RETIRAR` ou do `--retirar`).
 2. **`main.executar()`**: confere se o token está no `.env` e chama `produto.executar(periodo, opcoes)`. **Todo produto tem essa mesma assinatura**: é o contrato que o `main.py` conhece.
 3. Dentro do produto, no `relatorio_inmet.executar`:
-   1. `fonte.leituras_do_estado(...)`, que hoje repassa ao `inmet.baixar_estacoes`, lista as estações operantes da UF (as em pane ficam de fora) e baixa as leituras de cada uma, **uma por vez**, com até 3 tentativas por consulta. Devolve uma lista de pares `(estação, leituras)` e imprime quem ficou de fora e por quê.
+   1. `fonte.leituras_do_estado(...)` devolve uma lista de pares `(estação, leituras)` das estações operantes da UF (as em pane ficam de fora). Com a fonte `apis`, ele repassa ao `inmet.baixar_estacoes`, que baixa as leituras de cada estação, **uma por vez**, com até 3 tentativas por consulta, e imprime quem ficou de fora e por quê. Com a fonte `banco`, lê as mesmas colunas do `climageo`, numa consulta.
    2. `resumir_estacao` calcula, para cada estação, os extremos e os acumulados da janela, com `calculos.recortar`, `indice_extremo` e `acumulado_chuva`.
    3. `montar_tabelas` monta uma tabela por aba do Excel, ordenada.
    4. `excel.salvar_relatorio` grava a planilha.
-   5. `mapas.carregar_base(recorte)` lê os shapefiles e monta a grade. `_tabelas_de_apoio` baixa as vizinhas e faz as mesmas tabelas para elas.
+   5. `mapas.carregar_base(recorte)` lê os shapefiles e monta a grade. `_tabelas_de_apoio` baixa as vizinhas e faz as mesmas tabelas para elas, e `_sem_as_retiradas` tira dos mapas as estações retiradas.
    6. `mapas.gerar_mapas(tabelas, especificacoes_mapas(...), ...)` desenha, para cada especificação, o mapa pontual e o interpolado.
 4. O `risco_fogo.executar` segue o mesmo esqueleto, com a conta própria no meio:
    1. `leituras_validas` guarda só as horas com as três variáveis, já com a rajada em km/h.
@@ -166,26 +173,26 @@ Além disso, há o **cache em disco** de `app/dados.py`: um `cache/<código da e
 
 ### 4.2 Como o `explorador.py` está organizado
 
-É o maior arquivo do projeto, mas segue uma ordem fixa. Para achar uma aba, procure por `with aba_`:
+É o maior arquivo do projeto, mas segue uma ordem fixa, em seções marcadas por um cabeçalho em maiúsculas (`# ===`). Cada página é uma função `pagina_*`, e o `st.navigation` do fim do arquivo as reúne:
 
 | Linhas (aprox.) | O que tem |
 |---|---|
-| 1–120 | imports e constantes da tela (`DPI_MAPA`, `MAPAS_POR_LINHA`, `CONVERSOES`, `ESTADOS_NA_MEMORIA`…) |
-| 120–945 | funções: as carregadas em cache (`carregar_*`, `mapa_do_*`, `gif_*`) e os pedaços de tela reutilizados (`painel_do_mapa`, `painel_da_chuva`, `botao_do_boletim`…) |
-| ~949 | **PREVISÃO**: as páginas da previsão (`pagina_previsao`, os gráficos; `pagina_mapas_previstos`, os mapas dos dias; `pagina_semanas`, as anomalias do EC46), as funções delas e `lembrar_filtros` |
-| ~1561 | **PÁGINAS**: `st.navigation`, com o observado e o grupo da previsão. Na previsão, o script para aqui; o observado é o resto do arquivo. |
-| ~1585 | **FILTROS**: a barra lateral do observado (estado, período, estações, grandezas, cache) |
-| ~1653 | **DADOS**: converte as datas do estado em UTC e carrega as estações escolhidas |
-| ~1682 | `with aba_series:` — Séries Temporais |
-| ~1756 | `with aba_mapa:` — Mapas Boletim. O botão carrega **todas** as estações do estado mais as vizinhas. |
-| ~1855 | `with aba_chuva:` — Chuva. Tem carga própria, porque os acumulados olham para trás do período. |
-| ~2042 | `with aba_risco:` — Risco de Fogo. Usa o mesmo dado da aba de mapas. |
-| ~2240 | `with aba_navegavel:` — Mapa Navegação (pydeck), em avaliação |
-| ~2339 | `with aba_qualidade:` — Qualidade dos dados |
+| 1–120 | imports e constantes da tela (`DPI_MAPA`, `MAPAS_POR_LINHA`, os textos de ajuda do GeoTIFF, `ESTADOS_NA_MEMORIA`…) |
+| 120–1115 | funções comuns: as carregadas em cache (`carregar_*`, `mapa_do_*`, `gif_*`), a gaveta das estações retiradas (`gaveta_das_retiradas`), o menu "Baixar" (`menu_de_baixar`, `botao_do_boletim`, `botao_do_geotiff`) e os pedaços de tela reutilizados (`painel_do_mapa`, `painel_da_chuva`…); perto de 1280, `CHAVES_DOS_FILTROS` e `lembrar_filtros` |
+| ~1118 | **PREVISÃO**: a busca e a guarda das rodadas (`guarda_da_previsao`), os gráficos e os mapas da previsão em PNG |
+| ~1566 | **FILTROS EM COMUM**: o estado e o período (`filtros_de_estado_e_periodo`) |
+| ~1599 | **MAPAS INTERATIVOS**: a vista navegável do observado (`mapa_interativo`, `mapa_navegavel_da_variavel`, `mapa_navegavel_da_chuva`, o ponto clicado, o imóvel do CAR em `imovel_da_barra`, o 3D) |
+| ~2509 | **PÁGINAS DO OBSERVADO**: `pagina_mapas` (com as séries e a qualidade dos dados), `pagina_chuva` (com carga própria, porque os acumulados olham para trás do período) e `pagina_risco` (o mesmo dado da página Mapas) |
+| ~3276 | **MAPAS INTERATIVOS DA PREVISÃO**: a vista navegável da previsão, por dia, hora a hora e por semana |
+| ~4043 | **PÁGINAS DA PREVISÃO**: a barra lateral (`barra_da_previsao`), o boletim hora a hora e o GIF, os gráficos da estação, e `pagina_mapas_previstos`, `pagina_chuva_prevista`, `pagina_risco_previsto` e `pagina_semanas` |
+| ~4723 | **RAIOS**: o Agora (num `st.fragment` que se refaz a cada minuto), a densidade e `pagina_raios` |
+| ~5235 | `lembrar_filtros()` e o `st.navigation` com os dois grupos. A página Raios só entra quando `fonte.tem_raios()` |
 
-**As páginas.** O painel tem o "Observado (INMET)" e, no grupo "Previsão (MS)", as "Estações", os "Mapas" e as "Semanas", trocadas no topo da barra lateral. O Streamlit apaga o valor de um widget que não aparece numa execução, e cada página aparece sozinha: sem cuidado, ir à previsão e voltar perderia as estações escolhidas. Um filtro novo da barra lateral que deva sobreviver à troca precisa de três coisas: uma `key`, entrar em `CHAVES_DOS_FILTROS`, e receber o valor inicial com `st.session_state.setdefault` antes do widget, **e não** pelo parâmetro (`default=`, `index=`). Com o valor nos dois lugares, o widget volta vazio na tela enquanto o painel usa o valor guardado. O período é a exceção, explicada em `lembrar_filtros`.
+Em cada página do observado e da previsão, os controles comuns (a agregação, a variável, o instante e o seletor "Mapa: Navegável | Boletim") ficam em cima, e a vista escolhida chama a função dela (`mapa_navegavel_*` ou `boletim_*`/`painel_do_*`) com as mesmas escolhas. Trocar de vista não consulta de novo, porque a carga em cache é a mesma.
 
-A regra de organização: **conta vai para um módulo de `app/` sem Streamlit; tela fica no `explorador.py`**. `variaveis`, `chuva`, `risco`, `dados`, `previsao`, `boletim`, `animacao`, `superficie` e `qualidade` não importam `streamlit`, e é por isso que têm testes. O `explorador.py` não tem teste direto: ele é verificado abrindo o painel.
+**As páginas.** O painel tem o grupo "Observado" (Mapas, Chuva, Risco de Fogo e Raios) e o grupo "Previsão (MS)" (Mapas, Chuva, Risco de Fogo e Semanas), trocadas no topo da barra lateral. O Streamlit apaga o valor de um widget que não aparece numa execução, e cada página aparece sozinha: sem cuidado, ir à previsão e voltar perderia as estações escolhidas. Um filtro novo da barra lateral que deva sobreviver à troca precisa de três coisas: uma `key`, entrar em `CHAVES_DOS_FILTROS`, e receber o valor inicial com `st.session_state.setdefault` antes do widget, **e não** pelo parâmetro (`default=`, `index=`). Com o valor nos dois lugares, o widget volta vazio na tela enquanto o painel usa o valor guardado. O período é a exceção, explicada em `lembrar_filtros`.
+
+A regra de organização: **conta vai para um módulo de `app/` sem Streamlit; tela fica no `explorador.py`**. `variaveis`, `chuva`, `risco`, `dados`, `previsao`, `interativo`, `raios`, `car`, `referencia`, `boletim`, `animacao`, `superficie` e `qualidade` não importam `streamlit`, e é por isso que têm testes. O `explorador.py` não tem teste direto: ele é verificado abrindo o painel.
 
 ---
 
@@ -196,12 +203,20 @@ A regra de organização: **conta vai para um módulo de `app/` sem Streamlit; t
 | Arquivo | Para que serve | Você mexe aqui quando… |
 |---|---|---|
 | `config.py` | `Recorte`, `Periodo` e **todas as constantes**: limiares do 30-30-30, IDW, DPI, logos, URLs, tentativas, cores do risco | quer mudar um número que vale para o projeto todo |
-| `fonte.py` | de onde vêm os dados: as funções que os produtos e o painel chamam (`estacoes`, `leituras_do_estado`, `leituras_de_apoio`…), e a escolha da fonte pela configuração `FONTE_DADOS`. Hoje só repassa ao `inmet.py`. | uma fonte nova entra (o banco, a API de leitura) |
-| `inmet.py` | toda conversa com a API: lista de estações, dados horários, tentativas, vizinhas, resumo de quem ficou de fora. O token sai das mensagens de erro (`_sem_token`). O INMET aceita **100 consultas por minuto por endereço de rede** e, passado o limite, responde 200 com um aviso no lugar do JSON: o `_consultar` reconhece o aviso e espera, dobrando a espera, sem gastar tentativa. | a API muda, ou a forma de baixar |
+| `fonte.py` | de onde vêm os dados: as funções que os produtos e o painel chamam (`estacoes`, `leituras_do_estado`, `leituras_de_apoio`, `previsao`, `semanas`…), e a escolha da fonte pela configuração `FONTE_DADOS`. Com `apis`, repassa ao `inmet.py` e ao `openmeteo.py`; com `banco`, lê do `climageo` com o usuário que só lê e devolve as mesmas colunas. O CEMADEN (`estacoes_cemaden`, `chuva_cemaden`) e os raios (`tem_raios`, `raios_*`) só vêm do banco: com `apis`, voltam vazios | uma fonte nova entra (a API de leitura), ou um dado novo passa a vir do banco |
+| `inmet.py` | toda conversa com a API: lista de estações, dados horários (por estação e, para o coletor, de todas as estações numa hora: `baixar_hora`), tentativas, vizinhas, resumo de quem ficou de fora. O token sai das mensagens de erro (`_sem_token`). O INMET aceita **100 consultas por minuto por endereço de rede** e, passado o limite, responde 200 com um aviso no lugar do JSON: o `_consultar` reconhece o aviso e espera, dobrando a espera, sem gastar tentativa. | a API muda, ou a forma de baixar |
+| `banco.py` | o banco da UNIGEO (PostgreSQL 16, schema `climageo`): a **única peça que fala SQL**. Conecta com o papel certo (`conectar("gravacao" / "leitura" / "teste")`, pelas variáveis `BANCO_*` do `.env`), cria o esquema (`criar_esquema`, pelo `banco/esquema.sql`), cria e apaga as partições (o banco não tem pg_partman nem pg_cron), grava em lote (`gravar_previsao`, `gravar_semanas`, `gravar_inmet`, `gravar_estacoes`) e lê de volta, nas colunas que o resto do projeto já usa. Guarda só as horas; o dia sai delas na leitura. | muda uma tabela, ou o jeito de gravar |
+| `coletor_inmet.py` | o coletor do INMET, chamado pelo `coletar.py`: o cadastro pela lista do INMET, os últimos 3 dias de todas as estações (`coletar_ultimas`, `HORAS_REBUSCADAS`), a sensação térmica, a bateria e o processador por estação (`coletar_extras`) e o histórico (`carregar_historico`), que retoma de onde parou. No máximo uma consulta por segundo (`config.INTERVALO_DO_COLETOR`): 60 das 100 do minuto, e sobram 40 para a equipe. A radiação é gravada com uma casa, como na consulta por estação, para o banco devolver o mesmo número que a API. | muda o que se coleta, ou o ritmo |
+| `cemaden.py` | toda conversa com a PED do CEMADEN: o login (o token vale 4 horas e é renovado aos 3,5; a PED o recusa às vezes antes disso, com HTTP 400 e "O Token informado é inválido!", e aí o cliente entra de novo e repete a consulta), o cadastro do estado (`cadastro`, `esta_parada`) e a chuva de um dia UTC do estado inteiro numa consulta (`chuva_do_dia`, `ler_chuva`). No máximo uma consulta a cada 6 s (`config.INTERVALO_CEMADEN`): a PED aceita 12 por minuto por conta. O token carrega o usuário e a senha dentro, então nunca vai para log nem para arquivo; as mensagens de erro saem sem a conta (`_sem_credenciais`). os termos da PED pedem a citação "DATA FROM THE CEMADEN/MCTIC OBSERVATIONAL NETWORK", e a equipe preferiu o crédito em português (`mapas.CREDITO_COM_CEMADEN`, "INMET/SEMADESC/CEMADEN"), que o `boletim.credito` escolhe quando o mapa tem estação do CEMADEN | a PED muda, ou a forma de consultar |
+| `coletor_cemaden.py` | o coletor do CEMADEN, chamado pelo `coletar.py cemaden`: o cadastro a cada execução, os últimos 3 dias UTC (`coletar_ultimos`) e o histórico em lotes de 10 dias (`carregar_historico`), que pula os dias já guardados e busca sempre de novo os últimos 3. A estação que não está no cadastro da PED entra pelas leituras (`estacoes_das_leituras`). Depois de 4 dias seguidos sem resposta, a carga para, e o `coletar.py` espera 15 minutos e retoma | muda o que se coleta da PED |
+| `coletor_previsao.py` | o coletor da previsão, chamado pelo `coletar.py previsao` de hora em hora: confere a rodada mais recente de cada modelo e guarda só as das 00Z e 12Z (as das 06Z e 18Z o Open-Meteo completa com a anterior), na grade de 0,25° (`GRADE_DO_COLETOR`) e nos pontos das estações; o EC46 por semana; recupera pela API das rodadas avulsas a rodada dos últimos 7 dias que passou (`rodadas_que_faltam`, `recuperacoes`), uma a cada 4 horas; e apaga as partições da grade com mais de 21 dias. A conferência que não acha rodada nova só lê os metadados, que não gastam cota | muda um modelo, a grade ou quanto tempo se guarda |
+| `coletor_raios.py` | o coletor dos raios, chamado pelo `coletar.py raios` de 10 em 10 minutos: lê no controle das tabelas do GLM (as que um colega alimenta, `config.GLM_SCHEMA`) os arquivos de 20 s que entraram desde a última vez, e reconta por hora e por célula de 0,1° (`raios_glm_hora`) só as horas que mudaram (`a_recontar`). A contagem roda no próprio servidor, numa consulta que apaga e grava a hora inteira: rodar de novo não duplica nada | muda a célula, a caixa do estado ou o que se conta |
 | `retiradas.py` | as estações que a equipe tira dos mapas de uma variável (sensor com defeito à espera da correção do INMET): as variáveis que têm lista (`VARIAVEIS`, as grandezas do painel e o Risco de Fogo), a leitura do `--retirar` (`ler_pedidos`), o nome sem acento ou o código do INMET (`resolver`) e o corte da tabela (`retirar`). Sai só do mapa, do ranking e da interpolação; planilhas, tabelas e gráficos ficam com todas. No painel, as listas vivem no `st.session_state["retiradas"]` | uma variável nova ganha lista, ou muda o que a retirada alcança |
 | `openmeteo.py` | a previsão do Open-Meteo: os pontos (grade com uma fileira além da divisa, e as estações), a rodada de cada modelo pelos metadados, os pedidos em lotes que cabem no limite de 600 por minuto, e o dia tirado das horas pela regra do projeto (`diario`). As semanas (`buscar_semanas`) vêm da API sazonal: as anomalias do EC46, na média dos membros, com a rodada pelos metadados do `ecmwf_ec46`. Os modelos, os 14 dias, os 46 das semanas e o espaçamento da grade ficam em `config.py`. | o Open-Meteo muda, ou muda um modelo, uma variável ou a grade |
 | `calculos.py` | contas puras: `recortar` (a janela `(início, fim]`), extremos, acumulado de chuva, `criar_grade`, `interpolar_idw` (distâncias em km), `apoio_que_entra` | quer mudar como se interpola ou se recorta no tempo |
 | `mapas.py` | todos os desenhos: `mapa_pontual`, `mapa_interpolado`, `mapa_de_grade`, os de classes, logos, ranking, setas de vento; `EspecMapa`, `EspecClasses`, `Tela`, `BaseCartografica`. O crédito do subtítulo é o `credito` da espec: "INMET/SEMADESC" por padrão, o do Open-Meteo na previsão. Classes de larguras desiguais (chuva, radiação, anomalias) são pintadas uma cor por classe, como a barra da tela; níveis iguais, como os do `main.py`, pela régua do valor. `ranking_absoluto` ranqueia pelo tamanho do desvio, nas anomalias | o **visual** de um mapa muda, nos dois lados |
+| `geotiff.py` | o GeoTIFF dos mapas do painel, no padrão das camadas do PIN MS: SIRGAS 2000 (EPSG:4674), pixel de 0,01°, NoData fora do estado (`grade_do_estado`). O IDW é refeito em cada pixel (`idw`); o risco vai pelo vizinho mais próximo, com a paleta (`gravar_classes`). Gravado só com o Pillow, com as tags do GeoTIFF e do GDAL escritas à mão | muda a resolução, o sistema de referência ou o que o GeoTIFF leva |
+| `gpkg.py` | o GeoPackage das estações de um mapa (`tabela_das_estacoes`, `gravar`), com o estilo do QGIS dentro, na tabela `layer_styles` (`ESTILO_QML`) | muda o que vai na camada ou o estilo |
 | `excel.py` | grava as tabelas num `.xlsx`, uma aba por tabela | o formato da planilha muda |
 | `graficos.py` | barras empilhadas, agrupadas e calendário, no estilo comum | um produto precisa de gráfico |
 | `produtos/relatorio_inmet.py` | o relatório: o que se calcula por estação, quais abas e **quais mapas** (`especificacoes_mapas`, com títulos e paletas) | muda o conteúdo do boletim |
@@ -214,30 +229,39 @@ A regra de organização: **conta vai para um módulo de `app/` sem Streamlit; t
 | `explorador.py` | a tela (seção 4.2) |
 | `variaveis.py` | o catálogo de produtos do painel (`PRODUTOS`), as regras de agregação (`CALCULOS`), a escala de cores (`escala`) e o que já vem escolhido (`PADRAO_MAPA`) |
 | `dados.py` | a coleta com cache em disco e download em paralelo (8 por vez), e o CSV com as 29 colunas da API |
-| `chuva.py` | as janelas dos acumulados (3 a 96 h e o mensal), `cobre` (o dado carregado alcança a janela?) e as cascatas |
+| `chuva.py` | as janelas dos acumulados (3 a 96 h, o mensal e o do período), `cobre` (o dado carregado alcança a janela?) e as cascatas |
 | `risco.py` | traduz o dado do painel para o formato do `risco_fogo` e de volta. **Não** reimplementa a regra. |
 | `boletim.py` | o texto da moldura do PNG do boletim: título, subtítulo, ranking, nome do arquivo |
 | `animacao.py` | os GIFs: quais quadros entram e o carimbo de cada um |
 | `superficie.py` | a superfície como imagem transparente, para o mapa navegável |
+| `interativo.py` | o que vai em cada camada do mapa navegável (pydeck), sem tela: a grade invisível que dá o valor em qualquer ponto (`grade_do_ponto`, `celulas_da_grade`, `celulas_do_risco_na_grade`), o texto do balão (`texto_do_ponto`, com casas a mais perto de um limiar), os pontos das estações e do CEMADEN, os blocos do 3D (`relevo`, `relevo_de_classes`) e as séries do ponto clicado (`serie_do_ponto`, `serie_da_chuva_no_ponto`…). `ESTILO_SEM_FUNDO` é o estilo sem mapa de fundo, para quando a caixa "Mapa de fundo" está desligada |
+| `raios.py` | as contas da página Raios: a cor e a faixa de cada flash pela idade (`IDADES`), o círculo do Agora (`agora_no_circulo`, `aneis`), as barras de 5 minutos, a densidade por km² (`densidade`, `classe`) e as horas que faltam no banco (`horas_que_faltam`) |
+| `car.py` | o imóvel do CAR: reconhece o tipo de cada arquivo pelo conteúdo (`reconhecer`), lê shapefile, GeoJSON, GeoPackage, KML e KMZ, também dentro de .zip (`ler`), lê coordenadas em graus decimais ou em graus, minutos e segundos (`ler_coordenadas`) e acha as células da grade que o imóvel toca (`celulas_do_imovel`, `resumo`). Tudo na memória |
+| `referencia.py` | a localização das estações: o município de cada uma (`tabela_de_referencia`, pelo começo do nome ou pelo ponto), o CEMADEN junto (`com_o_cemaden`) e a busca sem acento (`procurar`) |
 | `qualidade.py` | as conferências da aba de qualidade: completude, valores impossíveis, sensores travados |
-| `previsao.py` | as contas das páginas de previsão: a cópia guardada de cada modelo até a rodada seguinte (`Guarda`), o catálogo dos gráficos (`GRANDEZAS`) e as séries de cada estação; o catálogo dos mapas (`MAPAS`), a escala (a do observado), o acumulado e a `superficie`, que leva a grade de 0,5° do modelo à do mapa por interpolação bilinear; o catálogo das semanas (`MAPAS_SEMANAIS`), com as escalas divergentes, e quais semanas estão inteiras; e o risco de fogo previsto, com a regra do `risco_fogo` usada como está: o nível de cada hora (`risco_por_hora`), o pior nível e as horas em risco alto do dia (`diario_com_risco`), e a grade do dia, com a regra aplicada célula a célula, hora a hora (`risco_na_grade`). A busca é do `modulos/openmeteo.py`. |
+| `previsao.py` | as contas das páginas de previsão: a cópia guardada de cada modelo até a rodada seguinte (`Guarda`), o catálogo dos gráficos (`GRANDEZAS`) e as séries de cada estação; o catálogo dos mapas do dia (`MAPAS`) e da hora (`MAPAS_DA_HORA`), a escala (a do observado), o acumulado e a `superficie`, que leva a grade do modelo (0,5° na busca direta, 0,25° no banco) à do mapa por interpolação bilinear, e `vizinhos`/`no_ponto`, a mesma bilinear num ponto só; o catálogo das semanas (`MAPAS_SEMANAIS`), com as escalas divergentes, e quais semanas estão inteiras; e o risco de fogo previsto, com a regra do `risco_fogo` usada como está: o nível de cada hora (`risco_por_hora`), o pior nível e as horas em risco alto do dia (`diario_com_risco`), e a grade do dia, com a regra aplicada célula a célula, hora a hora (`risco_na_grade`). A busca é do `modulos/openmeteo.py`. |
 | `requirements.txt` | as dependências **do painel**. É este arquivo que o Streamlit Cloud instala. |
 
 ### O resto
 
 | Caminho | Para que serve |
 |---|---|
-| `shp/` | dois shapefiles por UF, `<UF>_UF_2022` (contorno) e `<UF>_mun_simplificado` (municípios). **Precisam estar no git**: a nuvem clona o repositório e não baixa nada na hora. |
+| `shp/` | dois shapefiles por UF, `<UF>_UF_2022` (contorno) e `<UF>_mun_simplificado` (municípios), e o `brasil_e_vizinhos.gpkg` dos mapas largos dos raios. **Precisam estar no git**: a nuvem clona o repositório e não baixa nada na hora. |
 | `img/` | os logos dos mapas (PNG transparente). A posição deles fica em `config.LOGOS`. |
 | `ferramentas/simplificar_municipios.py` | gera os shapefiles de uma UF a partir da malha 2022 do IBGE (`--uf GO`, `--refazer`) |
+| `ferramentas/brasil_e_vizinhos.py` | gera o `shp/brasil_e_vizinhos.gpkg`: os estados do Brasil (dos contornos do IBGE em `shp/`) e os países em volta (do Natural Earth), simplificados |
+| `coletar.py` | a linha de comando dos coletores do banco: `esquema` (cria as tabelas que faltam), `inmet` (de hora em hora), `inmet --extras` (uma vez por dia), `inmet --revisar 30` (uma vez por semana), `inmet --historico DATA`, `previsao` (de hora em hora), `cemaden` (de hora em hora), `cemaden --historico DATA` e `raios` (de 10 em 10 minutos). Com `--teste`, grava no `climageo_teste`, com a conexão de teste. Sai com código 1 quando o banco ou alguma consulta falham, para o Agendador marcar. |
+| `servidor/coletar.bat` | chama o `coletar.py` pelo Agendador de Tarefas, com a saída em `logs/coletor_<trabalho>.log` (`coletar.bat inmet` grava em `logs/coletor_inmet.log`, `coletar.bat inmet --extras` em `logs/coletor_inmet_extras.log`, e `coletar.bat cemaden` em `logs/coletor_cemaden.log`) |
+| `servidor/criar_tarefas.ps1` | cria (ou recria) as seis tarefas dos coletores no Agendador: o INMET de hora em hora aos 50 minutos, os extras às 03:00, a revisão de 30 dias aos domingos à 01:05, a previsão de hora em hora aos 15 minutos, o CEMADEN de hora em hora aos 5 minutos e os raios de 10 em 10 minutos. As tarefas rodam o código da pasta em que o script rodou, na branch que estiver nela |
+| `banco/esquema.sql` | as tabelas do banco, sem o schema na frente: o `banco.py` aponta para o `climageo` (ou o `climageo_teste`) ao conectar. Pode rodar de novo. As tabelas têm de ser do usuário que grava, porque o coletor cria e apaga as partições. |
 | `servidor/iniciar_painel.bat` | sobe o painel no servidor Windows da unidade, chamado pelo Agendador de Tarefas. A porta vem da variável `PORTA` (padrão 8501), a saída vai para `logs/painel.log`, fora do git, e o observador de arquivos fica **desligado**: depois de uma atualização, o painel só muda quando a tarefa é reiniciada, em vez de rodar metade código novo e metade velho |
 | `.gitattributes` | obriga os `.bat` a ter quebra de linha do Windows (CRLF): com LF, o `cmd.exe` pode pular comandos |
 | `legado/` | os scripts originais, só para comparação. Não são usados por nada. |
 | `docs/` | este guia, o de migração, as decisões da meteorologia, o escopo da 0.2.2 e as imagens do README |
 | `tests/` | seção 7 |
-| `.github/workflows/testes.yml` | a CI: roda o pytest no Python 3.14 a cada push, em qualquer branch, e a cada PR para a `main` |
+| `.github/workflows/testes.yml` | a CI: roda o pytest no Python 3.14 a cada push, em qualquer branch, e a cada PR para a `main`. Os testes do banco rodam num PostgreSQL 16 com PostGIS que sobe vazio só para eles, com uma senha que só existe ali |
 | `requirements.txt` / `requirements-dev.txt` | dependências da linha de comando / mais o pytest |
-| `.env` | o token do INMET. **Nunca vai para o git.** O modelo é o `.env.example`. |
+| `.env` | o token do INMET, a fonte (`FONTE_DADOS`), as conexões do banco (`BANCO_*`) e a conta da PED (`CEMADEN_*`). **Nunca vai para o git.** O modelo é o `.env.example`. |
 
 ---
 
@@ -279,7 +303,11 @@ Depois, commite os arquivos novos de `shp/`. O nome e o fuso de cada UF já est�
 1. Na sua máquina: coloque o valor novo no `.env`.
 2. No Streamlit Cloud: em **Settings → Secrets**, troque `TOKEN_INMET` e dê **Reboot**.
 
-O valor não deve aparecer em nenhum arquivo versionado: o `.env` está no `.gitignore`, e antes de cada commit vale procurar o token nos arquivos que o git acompanha (`git ls-files`).
+3. No servidor: no `.env` da pasta do projeto, e reiniciar a tarefa do painel (os coletores leem o `.env` a cada execução).
+
+O valor não deve aparecer em nenhum arquivo versionado: o `.env` está no `.gitignore`, e antes de cada commit vale procurar o token nos arquivos que o git acompanha (`git ls-files`). O mesmo vale para as conexões do banco (`BANCO_*`) e a conta da PED (`CEMADEN_*`).
+
+**Mudar o raio do agrupamento dos mapas de chuva.** Use `config.AGRUPAR_CHUVA_KM` (15 km, pedido da equipe em 13/11/2026). Ele vale para os mapas de chuva em PNG do painel, o da tela e o do boletim, e para o mapa navegável enquanto o estado inteiro está à vista (lá, os rótulos que não são o maior do grupo são medidos em metros e só aparecem quando se aproxima o mapa): das estações a até esse raio umas das outras, em cadeia (`calculos.grupos_de_vizinhas`), só a de maior valor vai ao desenho e ao ranking (`mapas.o_maior_de_cada_grupo`, pela `EspecMapa.agrupar_km`). A superfície continua com todas. Com 0, o agrupamento some. Os mapas do `main.py` não usam o agrupamento.
 
 **Atualizar uma dependência.** Para a linha de comando, use o `requirements.txt`. Para o painel, o `app/requirements.txt`, que é o que a nuvem instala. O teste `test_app_requisitos` importa o painel num processo à parte e falha se ele carregar algo que não está declarado ali.
 
@@ -296,7 +324,8 @@ pytest
 - **Nenhum teste usa a internet nem o token.** O `tests/conftest.py` tem três fixtures que fazem isso valer:
   - `api_simulada` substitui o INMET por estações e leituras sintéticas, inclusive duas vizinhas, para os produtos rodarem inteiros: planilha e mapas.
   - `sem_rede` (automática) faz qualquer tentativa de acesso à rede falhar na hora, com o endereço na mensagem. Se um teste novo falhar com "teste tentou acessar a rede", faltou simular algo.
-  - `sem_esperas` (automática) zera as pausas entre tentativas, para nenhum teste dormir.
+  - `sem_esperas` (automática) zera as pausas entre tentativas, a espera no limite do INMET e o ritmo do coletor, para nenhum teste dormir.
+- **Os testes do banco usam um PostgreSQL de verdade.** O `tests/test_banco.py`, o `tests/test_coletor_inmet.py` e parte do `tests/test_app_raios.py` conectam pelo `BANCO_TESTE` do `.env` e trabalham no schema `climageo_teste`, que as fixtures `conexao` e `limpa` (no `conftest.py`) apagam e recriam a cada módulo de testes (o `banco.recriar_schema_de_teste` recusa qualquer schema que não termine em `_teste`). Sem a conexão, os testes são pulados. Na CI, o GitHub Actions sobe um PostgreSQL 16 com PostGIS só para eles. A trava `sem_rede` não os alcança: ela fecha o `requests`, e o banco é outro caminho.
 - **O `explorador.py` não tem teste de tela.** Por isso as contas moram fora dele. Dois testes o vigiam de fora: um confere as dependências declaradas, o outro percorre o código e exige `max_entries` em todo `cache_resource`.
 - Antes de corrigir um defeito, vale escrever o teste que o reproduz e ver o teste **falhar**. Muitos testes do projeto nasceram assim, e o nome deles diz qual defeito guardam.
 
@@ -306,7 +335,7 @@ pytest
 
 **O Streamlit não recarrega `modulos/` nem os outros arquivos de `app/`.** Ele só acompanha a pasta do script, e o `explorador.py` é relido a cada execução. Quem muda uma função em `app/chuva.py` ou em `modulos/mapas.py` e só recarrega a página continua rodando o código velho, ou leva um `AttributeError` com o código certo no disco.
 - Na sua máquina: pare o servidor (Ctrl+C) e rode `streamlit run app/explorador.py` de novo.
-- No Streamlit Cloud: **Manage app → ⋮ → Reboot app**, depois de todo push que mexa fora do `explorador.py`.
+- No Streamlit Cloud: **Manage app → ⋮ → Reboot app**, depois de todo avanço da branch `streamlit` que mexa fora do `explorador.py`.
 
 **A API do INMET é instável.** Ela encerra conexões e às vezes devolve corpo vazio (`Expecting value: line 1 column 1`). Toda consulta passa por `inmet._consultar`, que tenta 3 vezes (2 s, depois 4 s). Se nem assim vier, a estação aparece no resumo como "falha na consulta", e vale rodar de novo mais tarde. Erro 4xx (token inválido, estação inexistente) falha de primeira, porque repetir não resolve.
 
@@ -320,6 +349,24 @@ pytest
 
 **A memória na nuvem é pouca.** O plano gratuito corta perto de 1 GB, e os caches são do processo, divididos por todos. Todo `cache_resource` tem teto (`max_entries`), e os GIFs têm poucos lugares no cache de propósito.
 
+**A PED do CEMADEN tem os seus jeitos.** Conferidos contra a API em novembro de 2026:
+- O limite de 12 consultas por minuto é **da conta**, e não da máquina: um script de teste rodando com a mesma conta durante a carga do histórico divide o limite com ela.
+- O dia sem leitura nenhuma no estado vem com HTTP 202 e só o aviso "Nenhum resultado foi encontrado", e conta como dia vazio.
+- A estação parada não manda nada: a hora sem leitura é hora sem dado, e não seca. Já a estação que mede e não chove manda o zero escrito, uma vez por hora.
+- O `dh_inicio_inativo` do cadastro vem preenchido em toda estação: é o começo da última parada. Parada é a que não mandou nada depois dele (`cemaden.esta_parada`).
+- O histórico tem leituras impossíveis, de 100 a 235 mm numa leitura de 10 minutos. Nada as filtra: elas entram nos mapas daqueles dias, e a estação sai pela gaveta "Estações retiradas".
+
+**O pydeck tem os seus jeitos.** Conferidos no Streamlit 1.64:
+- Todo texto (ou lista de textos) passado ao `pdk.Layer(...)` vira **expressão** ("@@=..."). Um texto literal, como a imagem de um `BitmapLayer` ou o `character_set` de um `TextLayer`, vai depois de criar a camada, por atribuição.
+- A seleção do Streamlit (`on_select="rerun"`) apaga as camadas que ele conhece (PolygonLayer, ColumnLayer, Text, Scatter…) quando algo é escolhido, menos o `GridCellLayer`: é por isso que os blocos do 3D são `GridCellLayer`, com uma camada clicável por cima. E dois tipos de camada diferentes com o mesmo `id` quebram o deck.gl.
+- O clique devolve só o objeto escolhido (o índice e os dados dele), nunca a coordenada clicada. O valor "em qualquer ponto" sai de uma grade invisível de células clicáveis (`interativo.grade_do_ponto`).
+- O `CollisionFilterExtension`, que esconderia os rótulos sobrepostos, está no pacote do Streamlit, mas esconde **todos** os rótulos. Para esconder rótulos até aproximar, o caminho é o tamanho em metros (`size_units="meters"`, com `size_min_pixels=0`).
+- Sem `map_style`, o Streamlit põe o fundo do Carto; um estilo em dicionário é recusado. O "sem fundo" é uma URL `data:application/json,` sem fontes (`interativo.ESTILO_SEM_FUNDO`).
+
+**Dois gráficos do Altair com o mesmo parâmetro de ponteiro não podem ficar um dentro do outro.** O Vega acusa "Duplicate signal name". Os gráficos abertos pelo clique compartilham o eixo e a régua por funções (`_eixo_do_tempo`, `_navegar_e_apontar`, `_regua_do_instante`), sem aninhar.
+
+**Os coletores rodam a branch que estiver na pasta.** As tarefas do Agendador chamam o `coletar.py` da pasta onde o `criar_tarefas.ps1` rodou. Trocar a branch dessa pasta por uma sem o coletor de um dado faz a tarefa dele falhar, e o painel que roda dali passa a mostrar o código da outra branch depois de reiniciado.
+
 **O Windows e os emojis.** A saída redirecionada do Windows usa cp1252, que não escreve os emojis dos avisos. O `main.py` se protege disso com `_saida_em_utf8`, e o painel com as mesmas duas linhas no topo do `explorador.py`. Um script novo que imprima avisos precisa do mesmo cuidado.
 
 ---
@@ -330,12 +377,15 @@ pytest
 - **`git describe --tags`** diz em que versão uma cópia está: `0.2.3`, ou `0.2.3-2-g1a2b3c4` para dois commits depois dela.
 - **O `CHANGELOG.md` é para quem usa.** Cada versão abre com "Atenção ao atualizar", o que pode quebrar um comando ou mudar um resultado. Teste, CI e reorganização interna não entram nele.
 - **As mensagens dos commits explicam o porquê**, e são longas de propósito. `git log --follow arquivo` e `git blame` levam da linha ao motivo.
-- **A `main` é o que está no ar.** O Streamlit Cloud publica da `main` (desde 07/10/2026), com `app/explorador.py` como arquivo principal, o `app/requirements.txt` como dependências, Python 3.14 e o `TOKEN_INMET` nos Secrets do app. Cada merge na `main` republica o painel da equipe. Se a mudança mexer fora do `explorador.py`, depois dela vem um Reboot (seção 8).
-- **O Community Cloud não deixa trocar a branch de um app publicado.** Para mudar a branch, o caminho é apagar o app e publicar de novo, e antes copiar o conteúdo dos Secrets. O endereço `.streamlit.app` costuma poder ser reaproveitado; as estatísticas de acesso se perdem.
-- **O servidor interno, quando existir, roda uma tag**, e só muda quando alguém decide: `git fetch --tags`, `git checkout 0.3.2`, instalar o que faltar no ambiente virtual e reiniciar a tarefa do painel no Agendador de Tarefas do Windows. Voltar uma versão é o mesmo caminho, com a tag anterior. A VM da unidade é Windows e, por ora, roda sem Docker (passo 8 de [`plano_arquitetura.md`](plano_arquitetura.md)).
-- **Uma branch só para as duas instalações.** O que muda entre a nuvem e o servidor (de onde vêm os dados, senhas, chaves) vem da configuração, no `.env` do servidor e nos Secrets da nuvem, e não de branches diferentes. Duas branches obrigariam a levar cada correção duas vezes.
+- **A `main` é a última versão fechada; o que está no ar no Streamlit Cloud é a branch `streamlit`.** Desde 25/11/2026 o app publica da `streamlit` (de 07/10 a 25/11 publicava da `main`), com `app/explorador.py` como arquivo principal, o `app/requirements.txt` como dependências, Python 3.14 e o `TOKEN_INMET` nos Secrets do app. Assim, o merge de uma versão na `main` não muda o painel da equipe na nuvem: ele só muda quando a `streamlit` avança.
+- **A `streamlit` só avança até a tag de uma versão fechada**, e nunca recebe commit próprio: `git checkout streamlit`, `git merge --ff-only 0.4.1` e o push. Faça isso numa cópia de trabalho, e nunca na pasta de onde rodam os coletores e o painel da equipe, que não pode trocar de branch (seção 8). Sem trocar de branch, o mesmo avanço é `git push origin "0.4.1^{commit}:streamlit"`, que o GitHub recusa se não for só para a frente. O Cloud publica sozinho; se a versão mexer fora do `explorador.py`, depois dela vem um Reboot (seção 8). Voltar uma versão é apontar a `streamlit` para a tag anterior (`git reset --hard 0.3.9` e um push com `--force`), o único caso em que ela não anda só para a frente.
+- **O Community Cloud não deixa trocar a branch de um app publicado.** Para mudar a branch, o caminho é apagar o app e publicar de novo, e antes copiar o conteúdo dos Secrets. O endereço `.streamlit.app` costuma poder ser reaproveitado; as estatísticas de acesso se perdem. Foi assim que o app passou da `main` para a `streamlit`.
+- **Enquanto a VM não fica pronta, o painel da equipe e os coletores rodam numa estação de trabalho da unidade**, na pasta do projeto, lendo do banco. Ela fica numa branch de versão e só muda quando alguém atualiza a pasta e reinicia o painel.
+- **O servidor definitivo roda uma tag**, e só muda quando alguém decide: `git fetch --tags`, `git checkout 0.3.2`, instalar o que faltar no ambiente virtual e reiniciar a tarefa do painel no Agendador de Tarefas do Windows. Voltar uma versão é o mesmo caminho, com a tag anterior. A VM da unidade é Windows e, por ora, roda sem Docker (passo 8 de [`plano_arquitetura.md`](plano_arquitetura.md)).
+- **O mesmo código para as duas instalações.** O que muda entre a nuvem e o servidor (de onde vêm os dados, senhas, chaves) vem da configuração, no `.env` do servidor e nos Secrets da nuvem, e não de código diferente. A `streamlit` não é uma segunda linha de desenvolvimento: ela só aponta para uma versão fechada, como a tag que o servidor roda. Uma correção feita só nela teria de ser levada de novo para a `main`.
 - **A CI roda no GitHub a cada push, em qualquer branch, e a cada PR para a `main`**, no Python 3.14. O resultado aparece como ✓ ou ✗ ao lado do commit.
-- **Antes de commitar, confira que o token não está em nenhum arquivo versionado.** O repositório é público.
+- **Antes de commitar, confira que o token, as conexões do banco e a conta da PED não estão em nenhum arquivo versionado.** O repositório é público.
+- **A partir da 0.4.1, o Streamlit Cloud instala o `psycopg`** (está no `app/requirements.txt`), mas continua com a fonte `apis`: ele não alcança o banco da unidade, e por isso não mostra os raios nem o CEMADEN.
 
 ---
 
@@ -348,8 +398,8 @@ pytest
 | Por que a previsão é assim? Por que o Open-Meteo, a grade de 0,25°, as horas guardadas por rodada, a API de leitura? | [`escopo_v0.3.1.md`](escopo_v0.3.1.md) |
 | Em que ordem o projeto vai para o servidor da UNIGEO? | [`plano_arquitetura.md`](plano_arquitetura.md) |
 | O que mudou de uma versão para outra? | [`../CHANGELOG.md`](../CHANGELOG.md) |
-| Por que esta linha está assim? | a docstring da função; depois, `git blame` e a mensagem do commit |
+| Por que esta linha está assim? | o comentário em cima dela e a docstring do topo do arquivo; depois, `git blame` e a mensagem do commit |
 | Como trazer um script antigo para o projeto? | [`como_migrar_um_script.md`](como_migrar_um_script.md) |
 | Como usar cada produto e o painel? | [`../README.md`](../README.md) |
 
-O código foi escrito para ser lido: as docstrings e os comentários dizem **por que** uma coisa é como é, não só o que ela faz. Quando algo parecer estranho (um recuo de uma hora, uma cópia que parece desnecessária, um teto de cache), a explicação costuma estar a duas linhas de distância.
+O código foi escrito para ser lido: a docstring do topo de cada arquivo e os comentários dizem **por que** uma coisa é como é, não só o que ela faz. As funções não têm docstring desde 14/10/2026: o porquê fica no comentário, quando há um. Quando algo parecer estranho (um recuo de uma hora, uma cópia que parece desnecessária, um teto de cache), a explicação costuma estar a duas linhas de distância.

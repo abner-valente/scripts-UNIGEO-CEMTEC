@@ -18,6 +18,9 @@ pyproj>=3.3
 matplotlib>=3.5
 openpyxl>=3.1
 
+# O banco da UNIGEO (PostgreSQL), para os coletores e os testes do banco
+psycopg[binary]>=3.2
+
 # Fusos horários (obrigatório no Windows) e configuração via .env
 tzdata
 python-dotenv>=1.0

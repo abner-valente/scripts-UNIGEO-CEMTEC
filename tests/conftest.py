@@ -1,4 +1,5 @@
-"""Fixtures dos testes: dados horários sintéticos e API do INMET simulada (sem acesso à rede)."""
+"""Fixtures dos testes: dados horários sintéticos, API do INMET simulada (sem acesso à rede) e o banco de teste."""
+import os
 from types import SimpleNamespace
 
 import numpy as np
@@ -6,7 +7,10 @@ import pandas as pd
 import pytest
 import requests
 
-from modulos import config, inmet
+from modulos import banco, config, inmet, mapas
+
+# O schema dos testes do banco, apagado e recriado a cada módulo de testes que o usa
+SCHEMA_DE_TESTE = "climageo_teste"
 
 VALORES_PADRAO = {"TEM_MIN": 20.0, "TEM_MAX": 30.0, "UMD_MIN": 50.0, "VEN_RAJ": 5.0, "VEN_DIR": 90.0, "CHUVA": 1.0}
 
@@ -36,7 +40,6 @@ VIZINHAS = [
 
 
 def serie_horaria(inicio: str, fim: str, **valores) -> pd.DataFrame:
-    """Registros horários em [início, fim), em UTC, no formato devolvido por inmet.baixar_dados_estacao."""
     horas = pd.date_range(pd.Timestamp(inicio, tz="UTC"), pd.Timestamp(fim, tz="UTC"), freq="h", inclusive="left")
     dados = pd.DataFrame({"dt_utc": horas, **{**VALORES_PADRAO, **valores}})
     dados["dt_local"] = dados["dt_utc"].dt.tz_convert(config.FUSO_MS)
@@ -49,25 +52,34 @@ def serie():
 
 
 @pytest.fixture(autouse=True)
+def fonte_das_apis(monkeypatch):
+    # Os testes não herdam o FONTE_DADOS do .env da máquina; os da fonte "banco" a pedem
+    monkeypatch.setattr(config, "FONTE_DADOS", "apis")
+
+
+@pytest.fixture
+def mapas_sem_desenho(monkeypatch):
+    # Para os testes que não são sobre o desenho: o mapa é montado inteiro, mas não passa pelo
+    # ajuste da figura nem vira PNG de verdade, que levavam ~0,4 s por mapa. O arquivo sai vazio,
+    # com o nome certo. Cada produto mantém uma execução completa que desenha de verdade.
+    def finalizar(fig, ax, espec, base, caminho, tela=None):
+        if caminho is not None:
+            caminho.write_bytes(b"")
+            print(f"🗺️ Mapa salvo: {caminho.name}")
+        return fig
+    monkeypatch.setattr(mapas, "_finalizar", finalizar)
+
+
+@pytest.fixture(autouse=True)
 def sem_esperas(monkeypatch):
-    """Nenhum teste dorme: as pausas entre requisições e entre tentativas ficam em zero."""
     monkeypatch.setattr(config, "PAUSA_ENTRE_REQUISICOES", 0)
     monkeypatch.setattr(config, "PAUSA_ENTRE_TENTATIVAS", 0)
     monkeypatch.setattr(config, "PAUSA_NO_LIMITE", 0)
+    monkeypatch.setattr(config, "INTERVALO_DO_COLETOR", 0)
 
 
 @pytest.fixture(autouse=True)
 def sem_rede(monkeypatch):
-    """Nenhum teste fala com a internet: quem tentar, falha na hora e diz o endereço.
-
-    Existe porque em 01/10/2026 os testes dos produtos passaram a consultar o INMET de verdade
-    sem ninguém notar — passavam porque a API respondia. Na CI isso é teste que depende do
-    humor de um servidor alheio. Toda requisição passa por Session.request, então fechar ali
-    fecha tudo; o teste que quiser simular a rede troca Session.get por cima, e ganha.
-
-    O erro não é RequestException de propósito: o _consultar trataria como falha passageira
-    e tentaria de novo, escondendo o problema atrás das retentativas.
-    """
     def recusar(self, metodo, url, *args, **kwargs):
         raise RuntimeError(f"teste tentou acessar a rede: {metodo} {url.split('/token/')[0]}")
 
@@ -76,7 +88,6 @@ def sem_rede(monkeypatch):
 
 @pytest.fixture
 def api_simulada(monkeypatch, tmp_path):
-    """Troca a API do INMET por dados sintéticos e grava as saídas numa pasta temporária."""
     estacoes = pd.DataFrame(ESTACOES, columns=["CD_ESTACAO", "DC_NOME", "VL_LONGITUDE", "VL_LATITUDE"])
     estacoes["SG_ESTADO"] = config.UF
     estacoes["Estação"] = estacoes["DC_NOME"].map(inmet.formatar_nome_estacao)
@@ -115,3 +126,23 @@ def api_simulada(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "DPI", 40)  # mapas pequenos, para o teste ser rápido
     return SimpleNamespace(estacoes_com_dados=len(ESTACOES) - 1,
                            vizinhas={nome for nome in vizinhas["Estação"]})
+
+
+@pytest.fixture(scope="module")
+def conexao():
+    if not os.getenv("BANCO_TESTE", "").strip():
+        pytest.skip("sem BANCO_TESTE no .env: os testes do banco ficam para a CI")
+    with banco.conectar("teste", schema=SCHEMA_DE_TESTE) as aberta:
+        banco.recriar_schema_de_teste(aberta, SCHEMA_DE_TESTE)
+        banco.criar_esquema(aberta)
+        yield aberta
+
+
+@pytest.fixture
+def limpa(conexao):
+    for tabela in banco.PARTICOES:
+        for nome in banco.particoes(conexao, tabela):
+            conexao.execute(f'DROP TABLE "{nome}"')
+    conexao.execute("TRUNCATE previsao_semanal, estacao, cemaden_estacao CASCADE")
+    conexao.commit()
+    return conexao

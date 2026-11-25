@@ -10,36 +10,22 @@ from . import config
 
 
 def recortar(dados: pd.DataFrame, inicio: datetime, fim: datetime) -> pd.DataFrame:
-    """Leituras da janela (início, fim].
-
-    Cada leitura do INMET se refere à hora que termina no horário indicado: a das 05 UTC cobre
-    das 04 às 05 UTC. Por isso entra a leitura do fim da janela e não a do início.
-    """
     return dados[(dados["dt_utc"] > inicio) & (dados["dt_utc"] <= fim)]
 
 
 def acumulado_chuva(dados: pd.DataFrame, inicio: datetime, fim: datetime) -> float:
-    """Soma da chuva (mm) na janela (início, fim]."""
     # min_count=1: a hora sem leitura não soma nada, mas a janela sem nenhuma leitura de chuva
     # (a estação que só mandou bateria) fica sem dado (NaN), e não com 0 mm
     return round(float(recortar(dados, inicio, fim)["CHUVA"].sum(min_count=1)), 1)
 
 
 def indice_extremo(dados: pd.DataFrame, coluna: str, minimo: bool):
-    """Índice do registro com o menor (ou maior) valor da coluna, ou None se não houver dado válido."""
     if coluna not in dados or dados[coluna].isna().all():
         return None
     return dados[coluna].idxmin() if minimo else dados[coluna].idxmax()
 
 
 def data_hora(dados: pd.DataFrame, indice, uf: str = config.UF) -> dict:
-    """Data e hora de um registro, em UTC e no horário do estado, prontas para a planilha.
-
-    A sigla entra no nome da coluna porque é ela que diz de que horário se fala. Uma planilha
-    de SC com a coluna "Data/Hora (MS)" faria quem lê entender horário de Campo Grande onde
-    está o de Florianópolis — o valor sempre esteve certo, o rótulo é que não acompanhava.
-    Em MS o nome não muda, e as planilhas já publicadas continuam iguais.
-    """
     return {
         "Data/Hora (UTC)": dados.at[indice, "dt_utc"].strftime("%d/%m/%Y %H:%M"),
         f"Data/Hora ({uf})": dados.at[indice, "dt_local"].strftime("%d/%m/%Y %H:%M"),
@@ -47,17 +33,15 @@ def data_hora(dados: pd.DataFrame, indice, uf: str = config.UF) -> dict:
 
 
 def criar_grade(limites: tuple[float, float, float, float], resolucao: int) -> tuple[np.ndarray, np.ndarray]:
-    """Grade regular (lon, lat) sobre os limites (lon_min, lon_max, lat_min, lat_max)."""
     lon_min, lon_max, lat_min, lat_max = limites
     return np.meshgrid(np.linspace(lon_min, lon_max, resolucao), np.linspace(lat_min, lat_max, resolucao))
 
 
-def interpolar_idw(lons, lats, valores, lon_grade, lat_grade, vizinhos: int = 8, potencia: float = 2) -> np.ndarray:
-    """Interpolação pelo inverso da distância (IDW) usando os vizinhos mais próximos.
-
-    As distâncias são medidas em quilômetros, numa projeção equidistante centrada na grade.
-    """
-    centro = float(np.mean(lon_grade)), float(np.mean(lat_grade))
+def interpolar_idw(lons, lats, valores, lon_grade, lat_grade, vizinhos: int = 8, potencia: float = 2,
+                   centro: tuple[float, float] | None = None) -> np.ndarray:
+    # O centro fixa a projeção das distâncias. Sem ele, é o meio da grade; quem interpola só parte
+    # dela (os pixels do estado, no GeoTIFF) passa o da grade inteira, para dar os mesmos números
+    centro = centro or (float(np.mean(lon_grade)), float(np.mean(lat_grade)))
     pontos = _em_km(lons, lats, *centro)
     k = min(vizinhos, len(pontos))
     distancias, indices = cKDTree(pontos).query(_em_km(lon_grade, lat_grade, *centro), k=k)
@@ -69,24 +53,33 @@ def interpolar_idw(lons, lats, valores, lon_grade, lat_grade, vizinhos: int = 8,
     return interpolados.reshape(np.shape(lon_grade))
 
 
+def mais_proxima(lons, lats, lon_grade, lat_grade,
+                 centro: tuple[float, float] | None = None) -> tuple[np.ndarray, np.ndarray]:
+    # A estação mais perto de cada ponto da grade e a distância até ela, em km, na projeção do IDW
+    centro = centro or (float(np.mean(lon_grade)), float(np.mean(lat_grade)))
+    distancias, indices = cKDTree(_em_km(lons, lats, *centro)).query(_em_km(lon_grade, lat_grade, *centro))
+    return indices.reshape(np.shape(lon_grade)), distancias.reshape(np.shape(lon_grade))
+
+
+def idw_no_tempo(lons, lats, valores, lon: float, lat: float, centro: tuple[float, float],
+                 vizinhos: int = 8, potencia: float = 2) -> np.ndarray:
+    # O IDW de um ponto só em cada linha de `valores` (tempos × estações, NaN onde a estação não
+    # mediu): a cada tempo entram as `vizinhos` mais próximas entre as que mediram, como no
+    # interpolar_idw. Com o `centro` da grade do mapa, o número é o mesmo da superfície
+    pontos = _em_km(lons, lats, *centro)
+    distancias = np.hypot(*(pontos - _em_km([lon], [lat], *centro)[0]).T)
+    ordem = np.argsort(distancias, kind="stable")
+    medidas = np.atleast_2d(np.asarray(valores, dtype=float))[:, ordem]
+    mediram = ~np.isnan(medidas)
+    entram = mediram & (np.cumsum(mediram, axis=1) <= vizinhos)
+    pesos = np.where(entram, 1.0 / np.maximum(distancias[ordem], 1e-10) ** potencia, 0.0)
+    soma = pesos.sum(axis=1)
+    ponderada = np.sum(np.where(entram, medidas, 0.0) * pesos, axis=1)
+    return np.divide(ponderada, soma, out=np.full(len(soma), np.nan), where=soma > 0)
+
+
 def apoio_que_entra(lons_apoio, lats_apoio, lons_proprias, lats_proprias,
                     lon_grade, lat_grade, vizinhos: int) -> np.ndarray:
-    """Quais estações de apoio chegam às `vizinhos` mais próximas de alguma célula da grade.
-
-    O IDW olha só as 8 mais próximas de cada célula: uma estação de fora do estado pode estar
-    dentro da margem do recorte e ainda assim não ser vizinha de célula nenhuma. Baixar os dados
-    dela é requisição jogada fora, e isso se decide **antes de baixar qualquer coisa** — só
-    depende de coordenadas, e a lista de estações é uma consulta só.
-
-    `vizinhos` é maior que os 8 que o IDW usa, de propósito. Numa hora em que faltam estações, as
-    8 mais próximas de uma célula passam a ser outras, e uma que nunca entrava passa a entrar. A
-    folga é o que faz esta poda cortar requisição sem mudar mapa nenhum.
-
-    A grade deve trazer só as células que viram desenho: as de fora do contorno são calculadas e
-    descartadas, e deixá-las aqui manteria estações que ninguém vê.
-
-    Devolve uma máscara booleana sobre as estações de apoio, na ordem em que vieram.
-    """
     apoio = np.column_stack([np.ravel(lons_apoio), np.ravel(lats_apoio)])
     if len(apoio) == 0:
         return np.zeros(0, dtype=bool)
@@ -103,14 +96,59 @@ def apoio_que_entra(lons_apoio, lats_apoio, lons_proprias, lats_proprias,
     return mascara
 
 
-def _em_km(lons, lats, lon_centro: float, lat_centro: float) -> np.ndarray:
-    """Converte lon/lat (graus) em x/y (km) numa projeção azimutal equidistante centrada em (lon, lat).
+def grupos_de_vizinhas(lons, lats, km: float) -> np.ndarray:
+    # O grupo de cada estação: as que ficam a até `km` umas das outras, em cadeia (A perto de B e B
+    # perto de C fazem um grupo só, mesmo com A longe de C). O número do grupo é o índice da primeira
+    # estação dele
+    lons, lats = np.ravel(np.asarray(lons, dtype=float)), np.ravel(np.asarray(lats, dtype=float))
+    grupo = np.arange(len(lons))
+    if len(lons) < 2 or km <= 0:
+        return grupo
 
-    Na extensão de MS, as distâncias nessa projeção ficam praticamente exatas (erro abaixo de 0,2%).
-    """
+    def raiz(indice: int) -> int:
+        while grupo[indice] != indice:
+            grupo[indice] = grupo[grupo[indice]]
+            indice = grupo[indice]
+        return indice
+
+    pontos = _em_km(lons, lats, float(np.mean(lons)), float(np.mean(lats)))
+    for i, j in cKDTree(pontos).query_pairs(km):
+        a, b = raiz(i), raiz(j)
+        if a != b:
+            grupo[max(a, b)] = min(a, b)
+    return np.array([raiz(indice) for indice in range(len(lons))])
+
+
+def _em_km(lons, lats, lon_centro: float, lat_centro: float) -> np.ndarray:
     projecao = f"+proj=aeqd +lat_0={lat_centro} +lon_0={lon_centro} +datum=WGS84 +units=km"
     transformador = Transformer.from_crs("EPSG:4326", projecao, always_xy=True)
     # Listas (e não arrays) fazem o pyproj usar sempre o cálculo vetorizado, mesmo com um único ponto
     x, y = transformador.transform(np.ravel(np.asarray(lons, dtype=float)).tolist(),
                                    np.ravel(np.asarray(lats, dtype=float)).tolist())
     return np.column_stack([x, y])
+
+
+def distancia_km(lon1, lat1, lon2, lat2) -> np.ndarray:
+    # A distância na esfera (haversine), a mesma conta do ST_DistanceSphere do PostGIS
+    lon1, lat1, lon2, lat2 = (np.radians(np.asarray(valor, dtype=float)) for valor in (lon1, lat1, lon2, lat2))
+    a = np.sin((lat2 - lat1) / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin((lon2 - lon1) / 2) ** 2
+    return 2 * config.RAIO_DA_TERRA_KM * np.arcsin(np.sqrt(a))
+
+
+def circulo(centro: tuple[float, float], km: float, pontos: int = 181) -> tuple[np.ndarray, np.ndarray]:
+    # Os pontos a `km` do centro (longitude, latitude), na esfera, de rumo em rumo e fechando o anel
+    lon0, lat0 = np.radians(centro[0]), np.radians(centro[1])
+    angulo = km / config.RAIO_DA_TERRA_KM
+    rumo = np.radians(np.linspace(0, 360, pontos))
+    lat = np.arcsin(np.sin(lat0) * np.cos(angulo) + np.cos(lat0) * np.sin(angulo) * np.cos(rumo))
+    lon = lon0 + np.arctan2(np.sin(rumo) * np.sin(angulo) * np.cos(lat0), np.cos(angulo) - np.sin(lat0) * np.sin(lat))
+    return np.degrees(lon), np.degrees(lat)
+
+
+def caixa_do_circulo(centro: tuple[float, float], km: float) -> tuple[float, float, float, float]:
+    # Oeste, sul, leste e norte do círculo (que não chegue a um polo). Na esfera, o círculo vai ao
+    # norte e ao sul na mesma longitude do centro, e mais a leste e a oeste numa latitude mais perto
+    # do polo, com asin(sen d / cos φ) de longitude para cada lado
+    angulo = km / config.RAIO_DA_TERRA_KM
+    lado = np.degrees(np.arcsin(np.sin(angulo) / np.cos(np.radians(centro[1]))))
+    return (centro[0] - lado, centro[1] - np.degrees(angulo), centro[0] + lado, centro[1] + np.degrees(angulo))

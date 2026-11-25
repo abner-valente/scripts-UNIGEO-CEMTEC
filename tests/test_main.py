@@ -83,7 +83,6 @@ def test_produto_desconhecido_na_variavel(monkeypatch):
 
 
 def test_todos_os_produtos_seguem_o_padrao():
-    """Todo produto em modulos/produtos/ precisa de NOME (igual à chave), TITULO e executar(periodo)."""
     for nome, produto in main.PRODUTOS.items():
         assert produto.NOME == nome
         assert produto.TITULO
@@ -100,8 +99,6 @@ def test_sem_token_para_antes_de_gerar_o_produto(api_simulada, monkeypatch):
 
 
 class FluxoFalso:
-    """Faz as vezes da saída padrão, guardando como foi reconfigurada."""
-
     def __init__(self):
         self.encoding = "cp1252"
         self.erros = None
@@ -111,7 +108,6 @@ class FluxoFalso:
 
 
 def test_saida_vai_para_utf8(monkeypatch):
-    """Redirecionada, a saída do Windows vai em cp1252 e o primeiro emoji derrubaria a execução."""
     saida, erro = FluxoFalso(), FluxoFalso()
     monkeypatch.setattr(sys, "stdout", saida)
     monkeypatch.setattr(sys, "stderr", erro)
@@ -123,7 +119,6 @@ def test_saida_vai_para_utf8(monkeypatch):
 
 
 def test_saida_sem_reconfigure_nao_quebra(monkeypatch):
-    """Sob outro executor a saída pode não ser reconfigurável: só não fazemos nada."""
     monkeypatch.setattr(sys, "stdout", object())
     monkeypatch.setattr(sys, "stderr", object())
     main._saida_em_utf8()  # não levanta

@@ -7,11 +7,6 @@ from app import qualidade
 
 
 def leituras(estacao: str, quantidade: int = 24, **valores) -> pd.DataFrame:
-    """Leituras horárias de uma estação, começando à 01 h de 15/09 (horário de MS).
-
-    Temperatura, umidade e pressão mudam de hora em hora, como num dado real: se ficassem
-    paradas, a verificação de sensor travado apontaria a estação inteira.
-    """
     horas = pd.date_range("2026-09-15 01:00", periods=quantidade, freq="h", tz="America/Campo_Grande")
     passo = np.arange(quantidade) * 0.3
     padrao = {"TEM_INS": 20 + passo, "UMD_INS": 50 + passo, "PRE_INS": 965 + passo,
@@ -31,7 +26,6 @@ def test_valor_fora_da_faixa_e_apontado():
 
 
 def test_radiacao_levemente_negativa_nao_e_valor_impossivel():
-    """À noite o sensor devolve algo como -3,5: é ruído conhecido, não defeito."""
     tabela = leituras("Bonito", RAD_GLO=-3.5)
     assert qualidade.valores_impossiveis(tabela).empty
 
@@ -59,7 +53,6 @@ def test_repeticao_curta_nao_conta_como_travado():
 
 
 def test_chuva_zerada_nao_conta_como_travada():
-    """Zero repetido em chuva é tempo seco, não sensor travado."""
     tabela = leituras("Dourados").assign(CHUVA=0.0)
     assert qualidade.sensores_travados(tabela).empty
 
@@ -74,7 +67,6 @@ def test_completude_por_dia_em_percentual():
 
 
 def test_completude_por_variavel_enxerga_sensor_parado():
-    """A estação registra a hora, mas um sensor específico não mede: a completude por dia não veria."""
     tabela = leituras("Bonito", quantidade=10)
     tabela.loc[5:9, "UMD_INS"] = np.nan
 

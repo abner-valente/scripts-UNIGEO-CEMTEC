@@ -24,7 +24,6 @@ def base():
 
 
 def test_superficie_cobre_todas_as_celulas_que_tocam_o_estado(base):
-    """Sem isso, a cor para antes da divisa e deixa falhas em degrau nas bordas do mapa interpolado."""
     lon, lat, dentro = base.lon_grade, base.lat_grade, base.dentro_uf
     estado = base.uf.geometry.union_all()
     shapely.prepare(estado)
@@ -47,14 +46,12 @@ def test_estacoes_com_zero_entram_no_mapa():
 
 
 def test_casas_decimais_dos_rotulos():
-    """Contagens (como horas) saem inteiras; medidas continuam com uma casa."""
     horas = mapas.EspecMapa("Risco", "Horas", "t", "s", "a", "YlOrRd", "h", "r", decimais=0)
     assert mapas._formato(horas)(5.0) == "5"
     assert mapas._formato(CHUVA)(5.0) == "5.0"
 
 
 def test_indicadores_ocupam_sempre_a_mesma_posicao():
-    """Cada indicador tem posição fixa sob a estação, mesmo quando os outros não aparecem."""
     tabela = pd.DataFrame({
         "Latitude": [-20.0, -22.0], "Longitude": [-55.0, -53.0], "Nível": [2, 1],
         "A": [True, False], "B": [False, True], "C": [True, False],
@@ -86,7 +83,6 @@ def test_dia_sem_chuva_em_nenhuma_estacao_ainda_gera_os_mapas(monkeypatch, tmp_p
 
 
 def test_mapa_devolve_a_figura_sem_gravar_nada(base):
-    """O explorador desenha na tela: pede a figura e não passa caminho nenhum."""
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
 
@@ -114,7 +110,6 @@ def test_no_mapa_do_relatorio_as_instituicoes_vao_so_no_rodape(base, monkeypatch
 
 
 def test_na_tela_o_mapa_sai_sem_titulo_nem_logos(base, monkeypatch, tmp_path):
-    """Numa miniatura, título e logos institucionais só tomariam o lugar do mapa."""
     monkeypatch.setattr(config, "DPI", 40)
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
@@ -129,8 +124,83 @@ def test_na_tela_o_mapa_sai_sem_titulo_nem_logos(base, monkeypatch, tmp_path):
     assert (tmp_path / "relatorio.png").exists()  # o relatório continua saindo com tudo
 
 
+def test_o_rodape_vai_embaixo_do_mapa_do_relatorio_e_nao_no_da_tela(base):
+    tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
+    gdf = mapas._preparar_dados(tabela, CHUVA)
+    com_rodape = replace(CHUVA, rodape="Citação da rede")
+
+    relatorio = mapas.mapa_interpolado(gdf, com_rodape, base)
+    na_tela = mapas.mapa_interpolado(gdf, com_rodape, base, tela=mapas.Tela())
+    sem_rodape = mapas.mapa_interpolado(gdf, CHUVA, base)
+
+    # O crédito na primeira linha do rodapé, e o rodapé da espec embaixo dele
+    assert "Dados: INMET/SEMADESC\nCitação da rede" in [texto.get_text() for texto in relatorio.axes[0].texts]
+    assert relatorio.axes[0].get_title() == "Chuva de teste\nsubtítulo"
+    assert not any("Citação da rede" in texto.get_text() for texto in na_tela.axes[0].texts)
+    assert "Dados: INMET/SEMADESC" in [texto.get_text() for texto in sem_rodape.axes[0].texts]
+
+
+# Campo Grande e duas vizinhas a ~5 e ~10 km (0,045° e 0,09° de latitude), mais as outras longe
+PERTO = pd.concat([ESTACOES, pd.DataFrame({"Estação": ["CG 2", "CG 3"], "Latitude": [-20.495, -20.54],
+                                           "Longitude": [-54.62, -54.62]})], ignore_index=True)
+
+
+def test_do_grupo_fica_so_a_estacao_de_mais_chuva_na_ordem_em_que_veio():
+    tabela = PERTO.assign(**{"Chuva (mm)": [3.0, 5.0, 12.0, 0.0, 8.0, 9.5, 1.0]})
+
+    maiores = mapas.o_maior_de_cada_grupo(tabela, "Chuva (mm)", 15)
+
+    assert maiores["Estação"].tolist() == ["Dourados", "Corumba", "Tres Lagoas", "Coxim", "CG 2"]
+    assert mapas.o_maior_de_cada_grupo(tabela, "Chuva (mm)", 0) is tabela
+
+
+def test_no_mapa_agrupado_a_superficie_leva_todas_e_o_desenho_so_o_maior_de_cada_grupo(base, monkeypatch):
+    tabela = PERTO.assign(**{"Chuva (mm)": [3.0, 5.0, 12.0, 0.0, 8.0, 9.5, 1.0]})
+    gdf = mapas._preparar_dados(tabela, CHUVA)
+    entraram = []
+    idw = mapas.calculos.interpolar_idw
+    monkeypatch.setattr(mapas.calculos, "interpolar_idw",
+                        lambda lons, *args, **kwargs: entraram.append(len(lons)) or idw(lons, *args, **kwargs))
+
+    agrupado = mapas.mapa_interpolado(gdf, replace(CHUVA, agrupar_km=15), base)
+    textos = [texto.get_text() for texto in agrupado.axes[0].texts]
+
+    assert entraram[0] == 7                                     # a superfície, com todas
+    numeros = sorted(texto for texto in textos if texto[:1].isdigit() and not texto.startswith("5 MAIORES"))
+    assert numeros == ["0.0", "12.0", "5.0", "8.0", "9.5"]
+    ranking = next(texto for texto in textos if texto.startswith("5 MAIORES"))
+    assert "CG 2: 9.5" in ranking and "Campo Grande" not in ranking and "CG 3" not in ranking
+    assert f"Dados: INMET/SEMADESC\n{mapas.AVISO_DO_GRUPO.format(km=15)}" in textos
+
+
+def test_sem_estacao_juntada_o_mapa_agrupado_nao_leva_o_aviso(base):
+    gdf = mapas._preparar_dados(ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]}), CHUVA)
+
+    agrupado = mapas.mapa_interpolado(gdf, replace(CHUVA, agrupar_km=15), base)
+    sem_agrupar = mapas.mapa_interpolado(gdf, CHUVA, base)
+
+    assert [texto.get_text() for texto in agrupado.axes[0].texts] == \
+        [texto.get_text() for texto in sem_agrupar.axes[0].texts]
+
+
+def test_o_aviso_do_grupo_vai_junto_da_citacao_no_rodape(base):
+    gdf = mapas._preparar_dados(PERTO.assign(**{"Chuva (mm)": [3.0, 5.0, 12.0, 0.0, 8.0, 9.5, 1.0]}), CHUVA)
+
+    figura = mapas.mapa_interpolado(gdf, replace(CHUVA, agrupar_km=15, rodape="Citação da rede"), base)
+
+    assert f"Dados: INMET/SEMADESC\nCitação da rede\n{mapas.AVISO_DO_GRUPO.format(km=15)}" in \
+        [t.get_text() for t in figura.axes[0].texts]
+
+
+def test_na_tela_o_mapa_agrupado_tambem_escreve_so_o_maior_de_cada_grupo(base):
+    gdf = mapas._preparar_dados(PERTO.assign(**{"Chuva (mm)": [3.0, 5.0, 12.0, 0.0, 8.0, 9.5, 1.0]}), CHUVA)
+
+    na_tela = mapas.mapa_interpolado(gdf, replace(CHUVA, agrupar_km=15), base, tela=mapas.Tela(rotulos=True))
+
+    assert len(na_tela.axes[0].texts) == 5
+
+
 def test_na_tela_o_mapa_sai_sem_barra_de_cores_e_sem_valores(base):
-    """A barra vertical e os valores de 62 estações não sobrevivem ao tamanho de uma coluna."""
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
 
@@ -145,7 +215,6 @@ def test_na_tela_o_mapa_sai_sem_barra_de_cores_e_sem_valores(base):
 
 
 def test_na_tela_nao_sai_a_grade_de_latitude_e_longitude(base):
-    """Numa miniatura a moldura de coordenadas toma a borda inteira do desenho e não se lê."""
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
 
@@ -159,7 +228,6 @@ def test_na_tela_nao_sai_a_grade_de_latitude_e_longitude(base):
 
 
 def test_na_tela_os_valores_saem_maiores(base):
-    """Encolhido para uma coluna, o corpo do relatório vira borrão."""
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
     escala = 1.5
@@ -172,7 +240,6 @@ def test_na_tela_os_valores_saem_maiores(base):
 
 
 def test_na_tela_o_valor_vai_contornado_e_sem_caixa(base):
-    """Num mapa do tamanho de uma coluna, o que cobre a estação vizinha é a caixa, não a letra."""
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
 
@@ -185,7 +252,6 @@ def test_na_tela_o_valor_vai_contornado_e_sem_caixa(base):
 
 
 def test_a_base_segue_o_enquadramento_do_recorte(base):
-    """O recorte anda junto com a chamada: quem pedir outro enquadramento recebe outra grade."""
     apertado = replace(config.RECORTE, limites=(-56.0, -53.0, -22.0, -19.0))
 
     outra = mapas.carregar_base(apertado)
@@ -198,7 +264,6 @@ def test_a_base_segue_o_enquadramento_do_recorte(base):
 
 
 def test_o_apoio_entra_na_interpolacao(base, monkeypatch):
-    """Se alguém tirar o apoio da conta, o desenho continua igual e ninguém percebe — daí o espião."""
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
     vizinha = mapas._preparar_dados(
@@ -218,7 +283,6 @@ def test_o_apoio_entra_na_interpolacao(base, monkeypatch):
 
 
 def test_o_apoio_muda_a_superficie_e_nao_o_desenho(base):
-    """As vizinhas seguram a borda: entram no IDW, mas não viram ponto, rótulo nem ranking."""
     tabela = ESTACOES.assign(**{"Chuva (mm)": [0.0, 5.0, 12.0, 3.0, 8.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
     vizinha = mapas._preparar_dados(
@@ -238,7 +302,6 @@ def test_o_apoio_muda_a_superficie_e_nao_o_desenho(base):
 
 
 def test_poucas_estacoes_nao_viram_superficie(base):
-    """Com dois pontos a interpolação inventaria o estado inteiro: melhor não desenhar."""
     tabela = ESTACOES.head(2).assign(**{"Chuva (mm)": [1.0, 2.0]})
     gdf = mapas._preparar_dados(tabela, CHUVA)
     assert mapas.mapa_interpolado(gdf, CHUVA, base, tela=mapas.Tela()) is None
@@ -246,7 +309,6 @@ def test_poucas_estacoes_nao_viram_superficie(base):
 
 
 def test_as_vizinhas_entram_so_no_mapa_interpolado(monkeypatch, tmp_path, base):
-    """O mapa pontual é o do estado; as vizinhas só seguram a borda da superfície."""
     recebidos = {}
     monkeypatch.setattr(mapas, "mapa_pontual",
                         lambda dados, espec, base, caminho: recebidos.setdefault("pontual", len(dados)))
@@ -265,12 +327,6 @@ def test_as_vizinhas_entram_so_no_mapa_interpolado(monkeypatch, tmp_path, base):
 
 
 def test_a_vizinha_nao_estica_a_escala_de_cores(monkeypatch, base):
-    """Uma vizinha fora da faixa do estado não pode mudar a cor do miolo.
-
-    Sem níveis dados, a escala se estica à superfície. Sem a trava, a borda puxada pela vizinha
-    levava a régua junto: em MS, em 29/09/2026, a mínima foi de 18,3 para 16,4 °C por causa de uma
-    estação do lado de lá, e um terço dos pixels do mapa mudou de cor sem o miolo ter mudado.
-    """
     vistas = []
     monkeypatch.setattr(mapas, "mapa_de_grade", lambda grade, *args, **kwargs: vistas.append(grade))
     gdf = mapas._preparar_dados(ESTACOES.assign(**{"Chuva (mm)": [10.0, 12.0, 14.0, 16.0, 18.0]}), CHUVA)
@@ -301,8 +357,6 @@ def _cor_de_cada_classe(figura, niveis):
 
 
 def test_classes_desiguais_tem_uma_cor_por_classe_como_a_barra_da_tela():
-    """Pela régua do valor, as classes de 1 a 50 mm da chuva saíam quase brancas no mapa, e a barra
-    da tela (que pinta por classe) mostrava azuis bem mais fortes: quem lia pela barra errava."""
     from matplotlib import colormaps
     from matplotlib.colors import BoundaryNorm, to_hex
     base = mapas.carregar_base()
@@ -343,7 +397,6 @@ def test_na_anomalia_o_normal_sai_branco_mesmo_com_a_escala_assimetrica():
 
 
 def test_o_mapa_de_grade_sai_sem_estacoes():
-    """A superfície da previsão vem do modelo: sem a previsão das estações, o mapa sai sem os pontos."""
     base = mapas.carregar_base()
     espec = mapas.EspecMapa("", "v", "t", "s", "", "Blues", "mm", "5 MAIORES ACUMULADOS")
 
@@ -353,7 +406,6 @@ def test_o_mapa_de_grade_sai_sem_estacoes():
 
 
 def test_o_ranking_das_anomalias_e_pelo_tamanho_do_desvio():
-    """Numa semana fria, "as maiores" seriam as menos frias; o que se procura é o maior desvio."""
     base = mapas.carregar_base()
     pontos = gpd.GeoDataFrame(pd.DataFrame({"Estação": list("ABCDEF"), "v": [0.4, -3.4, -0.3, -2.9, 1.0, -0.1]}),
                               geometry=gpd.points_from_xy([-54.0] * 6, [-20.0 - i * 0.3 for i in range(6)]),
@@ -385,6 +437,22 @@ def test_com_classes_a_barra_marca_todas_as_fronteiras():
     assert list(figura.axes[1].get_yticks()) == niveis
 
 
+def test_no_mapa_de_referencia_cada_rede_tem_a_sua_cor_e_a_legenda(base):
+    tabela = pd.DataFrame({"Nº": [1, 2, 3], "Estação": ["Corumba", "Dourados", "CEMADEN · Dourados (Centro)"],
+                           "Rede": ["INMET", "INMET", "CEMADEN"],
+                           "Latitude": [-19.02, -22.19, -22.22], "Longitude": [-57.67, -54.91, -54.80]})
+
+    figura = mapas.mapa_de_referencia(tabela, "Estações em MS", "2 e 1", base, credito=mapas.CREDITO_COM_CEMADEN)
+
+    mapa, lista = figura.axes[0], figura.axes[1]
+    assert [texto.get_text() for texto in mapa.get_legend().get_texts()] == [
+        mapas.NOMES_DAS_REDES["INMET"], mapas.NOMES_DAS_REDES["CEMADEN"]]
+    numeros = {texto.get_text(): texto.get_color() for texto in lista.texts if texto.get_text().isdigit()}
+    assert numeros == {"1": mapas.CORES_DAS_REDES["INMET"], "2": mapas.CORES_DAS_REDES["INMET"],
+                       "3": mapas.CORES_DAS_REDES["CEMADEN"]}
+    assert "Dados: INMET/SEMADESC/CEMADEN" in [texto.get_text() for texto in mapa.texts]
+
+
 def test_o_mapa_de_referencia_numera_as_estacoes_e_lista_os_nomes(base):
     tabela = pd.DataFrame({"Nº": [1, 2], "Estação": ["Corumba", "Dourados"],
                            "Latitude": [-19.02, -22.19], "Longitude": [-57.67, -54.91]})
@@ -396,3 +464,85 @@ def test_o_mapa_de_referencia_numera_as_estacoes_e_lista_os_nomes(base):
     assert "Dados: INMET/SEMADESC" in {texto.get_text() for texto in mapa.texts}
     assert {"1", "2"} <= {texto.get_text() for texto in mapa.texts}
     assert {"ESTAÇÕES", "1", "Corumba", "2", "Dourados"} <= {texto.get_text() for texto in lista.texts}
+
+
+def test_o_mapa_do_circulo_dos_raios(base):
+    # O PNG do boletim do Agora: os flashes na cor da idade, com a contagem de cada faixa na legenda
+    from app import raios
+    flashes = pd.DataFrame({"longitude": [-54.5, -57.6, -51.2], "latitude": [-20.5, -25.3, -30.0],
+                            "idade": [1.0, 20.0, 50.0]})
+    espec = mapas.EspecMapa(tabela="", coluna="", titulo="Raios até 1.500 km de Campo Grande",
+                            subtitulo="Flashes do GLM de 24/11/2026 06:00 a 07:00", arquivo="", cmap="", unidade="",
+                            ranking="", credito=raios.CREDITO)
+    regiao = mapas.carregar_brasil_e_vizinhos()
+    assert len(regiao[0]) == 27 and "Paraguai" in set(regiao[1]["pais"])
+    figura = mapas.mapa_do_circulo(flashes, raios.IDADES, [r for _, r in raios.rotulos_das_idades()], espec, base,
+                                   regiao, raios.aneis(), config.CENTRO_DOS_RAIOS, "Campo Grande",
+                                   raios.quadro_do_circulo())
+    eixo = figura.axes[0]
+    assert eixo.get_legend().get_title().get_text() == "Tempo"
+    assert [texto.get_text() for texto in eixo.get_legend().get_texts()] == [
+        "até 5 min (1)", "5 a 15 min (0)", "15 a 30 min (1)", "30 a 60 min (1)"]
+    oeste, leste, sul, norte = raios.quadro_do_circulo()
+    assert eixo.get_xlim() == pytest.approx((oeste, leste)) and eixo.get_ylim() == pytest.approx((sul, norte))
+    assert "Dados: NOAA (GOES-19/GLM)/SEMADESC" in [t.get_text() for t in eixo.texts]
+    # Os anéis são opcionais: sem eles, fica só a estrela de Campo Grande entre as linhas
+    assert len(eixo.lines) == len(config.ANEIS_DOS_RAIOS_KM) + 1
+    sem_aneis = mapas.mapa_do_circulo(flashes, raios.IDADES, [r for _, r in raios.rotulos_das_idades()], espec, base,
+                                      regiao, raios.aneis().iloc[:0], config.CENTRO_DOS_RAIOS, "Campo Grande",
+                                      raios.quadro_do_circulo()).axes[0]
+    assert len(sem_aneis.lines) == 1
+    assert not any(t.get_text().endswith(" km") for t in sem_aneis.texts)
+    # Os municípios de MS também são opcionais: sem eles, uma coleção de linhas a menos
+    sem_municipios = mapas.mapa_do_circulo(flashes, raios.IDADES, [r for _, r in raios.rotulos_das_idades()], espec,
+                                           base, regiao, raios.aneis(), config.CENTRO_DOS_RAIOS, "Campo Grande",
+                                           raios.quadro_do_circulo(), com_municipios=False).axes[0]
+    assert len(sem_municipios.collections) == len(eixo.collections) - 1
+
+
+def test_o_mapa_dos_flashes_no_quadro_do_estado(base):
+    # O PNG do boletim do Agora com o alcance de MS: os flashes um a um sobre os municípios, no quadro
+    # dos outros mapas do boletim
+    from app import raios
+    # O de -63° fica fora do quadro: não aparece e não entra na contagem
+    flashes = pd.DataFrame({"longitude": [-54.5, -55.0, -53.0, -56.0, -63.0],
+                            "latitude": [-20.5, -21.0, -19.0, -20.0, -20.0], "idade": [1.0, 7.0, 40.0, 50.0, 2.0]})
+    espec = mapas.EspecMapa(tabela="", coluna="", titulo="Raios em MS", subtitulo="Flashes do GLM de 24/11/2026 "
+                            "10:00 a 11:00", arquivo="", cmap="", unidade="", ranking="", credito=raios.CREDITO)
+    eixo = mapas.mapa_de_flashes(flashes, raios.IDADES, [r for _, r in raios.rotulos_das_idades()], espec,
+                                 base).axes[0]
+    assert eixo.get_legend().get_title().get_text() == "Tempo"
+    assert [texto.get_text() for texto in eixo.get_legend().get_texts()] == [
+        "até 5 min (1)", "5 a 15 min (1)", "15 a 30 min (0)", "30 a 60 min (2)"]
+    oeste, leste, sul, norte = base.recorte.limites
+    assert eixo.get_xlim() == pytest.approx((oeste, leste)) and eixo.get_ylim() == pytest.approx((sul, norte))
+    assert "Dados: NOAA (GOES-19/GLM)/SEMADESC" in [t.get_text() for t in eixo.texts]
+
+
+
+def test_no_mapa_do_circulo_os_logos_vao_embaixo_e_a_legenda_acima_deles(base):
+    # Pedido da equipe: no círculo dos raios, os logos ficam no canto de baixo à direita (sobre o
+    # oceano), e não em cima do Brasil; nos outros mapas do boletim, continuam em cima
+    from app import boletim, raios
+    if not base.logos:
+        pytest.skip("sem os logos em img/")
+    flashes = pd.DataFrame({"longitude": [-54.5], "latitude": [-20.5], "idade": [1.0]})
+    espec = mapas.EspecMapa(tabela="", coluna="", titulo="Raios", subtitulo="Agora", arquivo="", cmap="",
+                            unidade="", ranking="", credito=raios.CREDITO)
+    rotulos = [r for _, r in raios.rotulos_das_idades()]
+    figura = mapas.mapa_do_circulo(flashes, raios.IDADES, rotulos, espec, base, mapas.carregar_brasil_e_vizinhos(),
+                                   raios.aneis(), config.CENTRO_DOS_RAIOS, "Campo Grande", raios.quadro_do_circulo())
+    # Medido depois de gravar como o boletim grava (no primeiro desenho os logos ainda não acompanham
+    # o quadro, que se ajusta à proporção do mapa)
+    boletim.png(figura)
+    eixo = figura.axes[0]
+    quadro = eixo.get_window_extent()
+    logos = [filho.get_window_extent() for filho in eixo.child_axes]
+    assert len(logos) == len(base.logos)
+    assert all(logo.y1 < quadro.y0 + 0.3 * quadro.height for logo in logos)
+    assert eixo.get_legend().get_window_extent().y0 >= max(logo.y1 for logo in logos)
+    # No mapa de MS, em cima, como sempre
+    estado = mapas.mapa_de_flashes(flashes, raios.IDADES, rotulos, espec, base)
+    boletim.png(estado)
+    quadro = estado.axes[0].get_window_extent()
+    assert all(filho.get_window_extent().y0 > quadro.y0 + 0.6 * quadro.height for filho in estado.axes[0].child_axes)

@@ -8,6 +8,7 @@ import pytest
 
 from app import boletim, previsao
 from modulos import config, mapas, openmeteo
+from modulos.produtos import risco_fogo
 
 RODADA_00 = datetime(2026, 10, 7, 0, tzinfo=timezone.utc)
 RODADA_06 = datetime(2026, 10, 7, 6, tzinfo=timezone.utc)
@@ -18,8 +19,6 @@ def tabela_da_rodada(rodada: datetime, modelo: str = "ecmwf_ifs025") -> pd.DataF
 
 
 class Busca:
-    """Uma busca de mentira, que conta quantas vezes foi ao "Open-Meteo"."""
-
     def __init__(self, rodada: datetime = RODADA_00, erro: str | None = None):
         self.rodada, self.erro, self.vezes = rodada, erro, 0
 
@@ -55,7 +54,6 @@ def test_rodada_nova_e_buscada_de_novo():
 
 
 def test_guardada_mais_nova_que_a_conferida_nao_e_buscada_de_novo():
-    """A conferência fica 5 minutos no cache; a busca pode ter trazido a rodada seguinte."""
     guarda = previsao.Guarda()
     guarda.obter("estações", "ecmwf_ifs025", RODADA_00, Busca(RODADA_06))
     outra = Busca(RODADA_06)
@@ -112,7 +110,6 @@ def test_precisa_buscar_diz_o_que_a_obter_vai_fazer():
 
 
 def test_duas_pessoas_ao_mesmo_tempo_buscam_uma_vez_so():
-    """A segunda espera a busca da primeira e sai com ela, em vez de gastar a cota de novo."""
     guarda, liberar, buscando = previsao.Guarda(), threading.Event(), threading.Event()
     vezes = []
 
@@ -142,7 +139,6 @@ def test_duas_pessoas_ao_mesmo_tempo_buscam_uma_vez_so():
 # AS SÉRIES DOS GRÁFICOS
 # =====================================================
 def horaria(inicio: str, quantas: int, modelos=("ecmwf_ifs025", "gfs_seamless"), **colunas) -> pd.DataFrame:
-    """Horas seguidas no horário de MS, já em UTC, como a busca devolve, para cada modelo."""
     locais = pd.date_range(inicio, periods=quantas, freq="h", tz=config.FUSO_MS)
     padrao = {nome: 1.0 for nome in openmeteo.VARIAVEIS.values()}
     return pd.concat([pd.DataFrame({
@@ -172,7 +168,6 @@ def test_por_hora_uma_linha_por_modelo_e_hora_a_partir_de_agora():
 
 
 def test_por_dia_so_entram_os_dias_inteiros():
-    """O dia 7 começa 01:00 e está inteiro; o 8 fica pela metade e sairia como uma queda falsa."""
     temperatura = [20.0] * 23 + [35.0] + [10.0] * 12           # o 7 fecha com a das 00:00 de 8
     horas = horaria("2026-10-07 01:00", 36, temperatura=temperatura)
     desde = pd.Timestamp("2026-10-07 10:00", tz=config.FUSO_MS)
@@ -236,7 +231,6 @@ HOJE = date(2026, 10, 8)
 
 
 def diaria(dias: dict, pontos=("A", "B"), coluna: str = "chuva", horas: dict | None = None) -> pd.DataFrame:
-    """Uma tabela diária como a do `openmeteo.diario`: um valor por ponto e dia."""
     linhas = [{"modelo": "ecmwf_ifs025", "ponto": ponto, "dia_previsto": dia, coluna: valor,
                "direcao_dominante": 90.0, "horas": (horas or {}).get(dia, 24)}
               for dia, valor in dias.items() for ponto in pontos]
@@ -271,7 +265,6 @@ def test_o_acumulado_soma_de_hoje_ate_o_dia_escolhido():
 
 
 def test_no_acumulado_um_dia_faltando_deixa_o_ponto_sem_valor():
-    """Somar o que houver daria menos chuva onde faltou dia, e não onde choveu menos."""
     tabela = diaria({HOJE: 2.0, date(2026, 10, 9): 5.0})
     tabela = tabela[~((tabela["ponto"] == "B") & (tabela["dia_previsto"] == HOJE))]
 
@@ -299,7 +292,6 @@ def test_ajustar_a_escala_deixa_os_niveis_para_o_dado():
 
 
 def rede(passo: float = 0.5, faltando: tuple = ()) -> pd.DataFrame:
-    """Pontos de 0,5° num quadrado de MS, sem os de `faltando`."""
     lons, lats = np.meshgrid(np.arange(-56.0, -53.9, passo), np.arange(-22.0, -19.9, passo))
     pontos = pd.DataFrame({"latitude": lats.ravel(), "longitude": lons.ravel()})
     pontos["ponto"] = [f"{lat:.2f};{lon:.2f}" for lat, lon in zip(pontos["latitude"], pontos["longitude"])]
@@ -307,7 +299,6 @@ def rede(passo: float = 0.5, faltando: tuple = ()) -> pd.DataFrame:
 
 
 def test_a_superficie_bilinear_reproduz_um_campo_plano():
-    """Entre os pontos, um campo que varia em linha reta sai exato: nada é inventado."""
     pontos = rede()
     valores = pd.Series(2.0 * pontos["longitude"].to_numpy() + 3.0 * pontos["latitude"].to_numpy(),
                         index=pontos["ponto"].to_numpy())
@@ -316,6 +307,17 @@ def test_a_superficie_bilinear_reproduz_um_campo_plano():
     grade = previsao.superficie(valores, pontos, lon_fina, lat_fina)
 
     assert np.allclose(grade, 2.0 * lon_fina + 3.0 * lat_fina)
+
+
+def test_a_superficie_tira_o_passo_da_grade_dos_pontos():
+    # A grade do banco é de 0,25°, e a da busca sob demanda, de 0,5°
+    pontos = rede(passo=0.25)
+    assert (previsao.espacamento(pontos), previsao.espacamento(rede())) == (0.25, 0.5)
+    valores = pd.Series(2.0 * pontos["longitude"].to_numpy() + 3.0 * pontos["latitude"].to_numpy(),
+                        index=pontos["ponto"].to_numpy())
+    lon_fina, lat_fina = np.meshgrid(np.linspace(-55.8, -54.2, 9), np.linspace(-21.8, -20.2, 9))
+
+    assert np.allclose(previsao.superficie(valores, pontos, lon_fina, lat_fina), 2.0 * lon_fina + 3.0 * lat_fina)
 
 
 def test_a_superficie_nao_passa_da_faixa_do_modelo():
@@ -388,7 +390,6 @@ def test_o_subtitulo_diz_so_a_data_e_o_carimbo_o_modelo_e_a_rodada():
 
 
 def test_o_png_do_boletim_da_previsao_leva_o_credito_do_open_meteo_no_rodape():
-    """A licença do Open-Meteo obriga o crédito, que vai embaixo do mapa; o main.py segue com o do INMET."""
     base = mapas.carregar_base()
     mapa = previsao.MAPAS["Temperatura máxima"]
     pontos = previsao.nas_estacoes(diaria({HOJE: 33.0}, pontos=("A702", "A721"), coluna="temp_max"),
@@ -412,14 +413,12 @@ RODADA_EC46 = datetime(2026, 10, 7, 0, tzinfo=timezone.utc)
 
 
 def semanal(semanas: dict, pontos=("A", "B")) -> pd.DataFrame:
-    """Uma tabela como a de `openmeteo.buscar_semanas`: uma anomalia por ponto e semana."""
     return pd.DataFrame([{"modelo": "ecmwf_ec46_ensemble_mean", "rodada_utc": RODADA_EC46, "ponto": ponto,
                           "semana": semana, "anom_temperatura": valor, "anom_chuva": valor * 10}
                          for semana, valor in semanas.items() for ponto in pontos])
 
 
 def test_so_entram_as_semanas_que_comecam_depois_da_rodada():
-    """A semana de 05/10 já tinha começado quando a rodada de 07/10 saiu: só teria cinco dias."""
     tabela = semanal({date(2026, 10, 5): 1.0, date(2026, 10, 12): 2.0, date(2026, 10, 19): 3.0})
 
     assert previsao.semanas_inteiras(tabela, RODADA_EC46) == [date(2026, 10, 12), date(2026, 10, 19)]
@@ -454,14 +453,11 @@ def test_nas_estacoes_a_coluna_leva_o_titulo_que_nao_se_confunde_com_os_dias():
 
 
 def test_todo_mapa_das_semanas_diz_que_e_anomalia():
-    """Só "Temperatura média" sobre um -2,4 se lia como uma temperatura de -2,4 °C."""
     assert all(nome.startswith("Anomalia") for nome in previsao.MAPAS_SEMANAIS)
-    assert set(previsao.PADRAO_SEMANAIS) <= set(previsao.MAPAS_SEMANAIS)
 
 
 @pytest.mark.parametrize("niveis", [previsao.NIVEIS_ANOMALIA_TEMPERATURA, previsao.NIVEIS_ANOMALIA_CHUVA])
 def test_a_escala_da_anomalia_tem_o_normal_no_meio(niveis):
-    """Tantas classes abaixo quanto acima da faixa do normal: é ela que sai branca."""
     abaixo = sum(1 for nivel in niveis if nivel < 0)
     acima = sum(1 for nivel in niveis if nivel > 0)
     assert abaixo == acima
@@ -477,7 +473,6 @@ def test_subtitulo_e_carimbo_da_semana():
 # O RISCO DE FOGO PREVISTO
 # =====================================================
 def test_o_nivel_de_cada_hora_e_o_da_regra_do_produto():
-    """Temperatura ≥ 30 °C, umidade ≤ 30 % e rajada ≥ 30 km/h: cada uma soma um nível."""
     horas = horaria("2026-10-08 01:00", 4, modelos=("ecmwf_ifs025",),
                     temperatura=[35.0, 35.0, 25.0, 35.0], umidade=[20.0, 40.0, 40.0, 20.0],
                     rajada=[40.0, 40.0, 10.0, 29.9])
@@ -493,7 +488,6 @@ def test_hora_sem_uma_das_tres_variaveis_fica_fora_do_risco():
 
 
 def test_o_dia_do_risco_e_o_pior_nivel_e_as_horas_em_risco_alto():
-    """A das 00:00 fecha o dia anterior, como no produto: o risco alto dela conta no dia 8."""
     temperatura = [35.0] * 3 + [25.0] * 20 + [35.0] + [35.0]          # 01:00 do dia 8 à 01:00 do dia 9
     horas = horaria("2026-10-08 01:00", 25, modelos=("ecmwf_ifs025",), temperatura=temperatura,
                     umidade=[20.0] * 25, rajada=[40.0] * 25)
@@ -513,7 +507,6 @@ def test_a_tabela_diaria_e_a_planilha_levam_o_risco():
 
 
 def test_na_grade_a_regra_e_aplicada_celula_a_celula_hora_a_hora():
-    """Quente a oeste e ameno a leste: o nível muda no meio, onde a temperatura passa de 30 °C."""
     pontos = rede()
     linhas = []
     for hora in pd.date_range("2026-10-08 01:00", periods=24, freq="h", tz=config.FUSO_MS):
@@ -545,7 +538,6 @@ def test_os_dois_mapas_do_risco_estao_no_catalogo():
 
 
 def test_a_normal_da_semana_e_a_previsao_menos_a_anomalia():
-    """Campo Grande, semana de 12/10/2026: o EC46 previu 23,8 °C com anomalia de -1,8; a normal é 25,6."""
     tabela = pd.DataFrame([
         {"ponto": "A702", "semana": date(2026, 10, 5), "temperatura": 24.9, "anom_temperatura": -0.8},
         {"ponto": "A702", "semana": date(2026, 10, 12), "temperatura": 23.8, "anom_temperatura": -1.8},
@@ -565,3 +557,203 @@ def test_sem_as_medias_da_semana_o_grafico_fica_vazio():
     tabela = semanal({date(2026, 10, 12): -1.8})          # só as anomalias, como antes de 08/10
 
     assert previsao.semana_contra_o_normal(tabela, "A", "Chuva", RODADA_EC46).empty
+
+
+# =====================================================
+# O PONTO NO MAPA INTERATIVO
+# =====================================================
+def test_o_ponto_tem_a_mesma_bilinear_que_pinta_o_mapa():
+    pontos = rede(passo=0.25)
+    valores = pd.Series(np.random.default_rng(3).normal(25, 5, len(pontos)), index=pontos["ponto"].to_numpy())
+    lons, lats = np.array([-55.83, -55.1, -54.37]), np.array([-21.61, -20.9, -20.12])
+
+    no_ponto = previsao.no_ponto(valores.to_frame().T, previsao.vizinhos(pontos, lons, lats))
+
+    assert np.allclose(no_ponto.iloc[0], previsao.superficie(valores, pontos, lons, lats))
+
+
+def test_um_vizinho_sem_valor_deixa_o_peso_para_os_outros():
+    pontos = rede()
+    largo = pd.DataFrame([dict.fromkeys(pontos["ponto"], 10.0)])
+    largo.loc[0, "-21.00;-55.00"] = np.nan
+
+    assert previsao.no_ponto(largo, previsao.vizinhos(pontos, [-55.2], [-21.2])).iloc[0, 0] == pytest.approx(10.0)
+
+
+def test_fora_da_grade_o_ponto_fica_sem_valor():
+    pontos = rede()
+    largo = pd.DataFrame([dict.fromkeys(pontos["ponto"], 10.0)])
+
+    assert np.isnan(previsao.no_ponto(largo, previsao.vizinhos(pontos, [-60.0], [-21.0])).iloc[0, 0])
+
+
+def diaria_na_rede(pontos: pd.DataFrame, dias: dict, horas: dict | None = None) -> pd.DataFrame:
+    # Um campo plano por dia, somado a uma base que muda de dia para dia
+    return pd.DataFrame([{"modelo": "ecmwf_ifs025", "ponto": ponto.ponto, "dia_previsto": dia,
+                          "temp_max": base + 2.0 * ponto.longitude + 3.0 * ponto.latitude,
+                          "horas": (horas or {}).get(dia, 24)}
+                         for dia, base in dias.items() for ponto in pontos.itertuples()])
+
+
+def test_o_dia_no_ponto_sai_dos_dias_inteiros_de_hoje_em_diante():
+    tabela = diaria_na_rede(rede(), {date(2026, 10, 7): 0.0, HOJE: 100.0, date(2026, 10, 9): 200.0,
+                                     date(2026, 10, 10): 300.0}, horas={date(2026, 10, 10): 20})
+
+    serie = previsao.diario_no_ponto(tabela, rede(), -55.2, -21.3, "temp_max", HOJE)
+
+    plano = 2.0 * -55.2 + 3.0 * -21.3
+    assert list(serie.index) == [HOJE, date(2026, 10, 9)]
+    assert np.allclose(serie.to_numpy(), [100.0 + plano, 200.0 + plano])
+
+
+def test_no_imovel_o_dia_e_a_media_das_celulas():
+    tabela = diaria_na_rede(rede(), {HOJE: 100.0})
+
+    serie = previsao.diario_no_ponto(tabela, rede(), [-55.5, -54.5], [-21.0, -21.0], "temp_max", HOJE)
+
+    assert serie.loc[HOJE] == pytest.approx(100.0 + 2.0 * -55.0 + 3.0 * -21.0)
+
+
+def horaria_na_rede(pontos: pd.DataFrame, quantas: int = 24) -> pd.DataFrame:
+    # O oeste (longitude abaixo de -55) quente, e o leste ameno; a umidade e a rajada valem em toda parte
+    return pd.DataFrame([{"modelo": "ecmwf_ifs025", "rodada_utc": RODADA_00, "ponto": ponto.ponto,
+                          "latitude": ponto.latitude, "longitude": ponto.longitude,
+                          "hora_prevista_utc": hora.tz_convert("UTC"),
+                          "temperatura": 35.0 if ponto.longitude < -55 else 25.0, "umidade": 20.0, "rajada": 40.0}
+                         for hora in pd.date_range("2026-10-08 01:00", periods=quantas, freq="h", tz=config.FUSO_MS)
+                         for ponto in pontos.itertuples()])
+
+
+def test_o_risco_no_ponto_e_o_da_celula_no_mapa():
+    pontos = rede()
+    horas = horaria_na_rede(pontos)
+    # Entre -55,5 (35 °C) e -55,0 (25 °C): a -55,4 a bilinear dá 33 °C, e a -55,2, 29 °C
+    lons, lats = np.array([-55.9, -55.4, -55.2, -54.1]), np.full(4, -21.0)
+    nivel, horas_alto = previsao.risco_na_grade(horas, pontos, date(2026, 10, 8), lons.reshape(1, -1),
+                                                lats.reshape(1, -1))
+
+    no_ponto = [previsao.risco_no_ponto(previsao.largos_do_risco(horas), pontos, lon, lat, date(2026, 10, 8))
+                for lon, lat in zip(lons, lats)]
+
+    assert [int(dia.loc[0, "risco_max"]) for dia in no_ponto] == list(nivel[0]) == [3, 3, 2, 2]
+    assert [int(dia.loc[0, "horas_risco_alto"]) for dia in no_ponto] == list(horas_alto[0]) == [24, 24, 0, 0]
+
+
+def test_no_imovel_o_risco_e_o_pior_das_celulas():
+    pontos = rede()
+
+    dia = previsao.risco_no_ponto(previsao.largos_do_risco(horaria_na_rede(pontos)), pontos, [-55.9, -54.1],
+                                  [-21.0, -21.0], date(2026, 10, 8))
+
+    assert (dia.loc[0, "risco_max"], dia.loc[0, "horas_risco_alto"]) == (3, 24)
+
+
+def test_dia_incompleto_nao_entra_no_risco_do_ponto():
+    pontos = rede()
+
+    dias = previsao.risco_no_ponto(previsao.largos_do_risco(horaria_na_rede(pontos, quantas=12)), pontos, -55.9,
+                                   -21.0, date(2026, 10, 8))
+
+    assert dias.empty
+
+
+def test_o_rumo_no_mapa_sai_das_componentes_e_nao_da_media_dos_graus():
+    pontos = rede()
+    valores = pd.Series(20.0, index=pontos["ponto"].to_numpy())
+    direcoes = pd.Series(np.where(pontos["longitude"] < -55.2, 350.0, 10.0), index=pontos["ponto"].to_numpy())
+
+    graus = previsao.rumo_na_grade(valores, direcoes, pontos, np.array([-55.25]), np.array([-21.0]))[0]
+
+    assert min(graus, 360 - graus) < 1e-6           # o norte, e não os 180° da média de 350° e 10°
+
+
+# --- hora a hora e semanas ------------------------------------------------------------------
+def test_todo_mapa_da_hora_existe_na_previsao_horaria():
+    colunas = set(openmeteo.COLUNAS_HORARIAS)
+
+    assert all(mapa.coluna in colunas for mapa in previsao.MAPAS_DA_HORA.values() if not mapa.risco)
+    assert previsao.MAPAS_DA_HORA["Risco de fogo"].risco == "hora"
+
+
+def test_a_chuva_da_hora_usa_as_classes_curtas_do_observado():
+    assert previsao.niveis(previsao.MAPAS_DA_HORA["Chuva na hora"], horas=1.0)[0] == 0.2
+    assert previsao.niveis(previsao.MAPAS_DA_HORA["Temperatura"], horas=1.0)[-1] == 45.0
+
+
+def test_as_horas_do_deslizante_sao_as_de_agora_em_diante_com_o_dia_da_semana():
+    horas = horaria("2026-10-08 01:00", 5, modelos=("ecmwf_ifs025",))
+    agora = pd.Timestamp("2026-10-08 03:00", tz=config.FUSO_MS).tz_convert("UTC")
+
+    escolhidas = previsao.horas_previstas(horas, agora)
+
+    assert len(escolhidas) == 3 and escolhidas[0] == agora
+    assert previsao.nome_da_hora(escolhidas[0]) == "qui 08/10 03:00"
+
+
+def test_nas_estacoes_a_hora_leva_o_valor_e_a_direcao_do_modelo():
+    horas = horaria("2026-10-08 01:00", 2, modelos=("ecmwf_ifs025",), rajada=[40.0, 55.0], direcao=[90.0, 180.0])
+    segunda = horas["hora_prevista_utc"].iloc[1]
+
+    tabela = previsao.nas_estacoes_na_hora(horas, ESTACOES, previsao.MAPAS_DA_HORA["Rajada"], segunda)
+
+    assert tabela.loc[0, ["Estação", "Rajada", "Direção (°)"]].tolist() == ["Campo Grande", 55.0, 180.0]
+
+
+def test_no_risco_da_hora_a_estacao_leva_o_nivel_da_regra():
+    horas = horaria("2026-10-08 01:00", 1, modelos=("ecmwf_ifs025",), temperatura=[35.0], umidade=[20.0],
+                    rajada=[10.0])
+
+    tabela = previsao.nas_estacoes_na_hora(horas, ESTACOES, previsao.MAPAS_DA_HORA["Risco de fogo"],
+                                           horas["hora_prevista_utc"].iloc[0])
+
+    assert tabela.loc[0, "Risco de fogo"] == 2
+
+
+def test_a_hora_no_ponto_e_a_mesma_bilinear_do_mapa():
+    pontos = rede()
+    horas = horaria_na_rede(pontos, quantas=3)
+    largo = previsao.por_hora_e_ponto(horas, "temperatura")
+
+    serie = previsao.horario_no_ponto(largo, pontos, -55.4, -21.0)
+
+    assert len(serie) == 3 and np.allclose(serie, 33.0)          # entre 35 °C a -55,5 e 25 °C a -55,0
+
+
+def test_o_risco_da_hora_na_grade_sai_das_tres_medidas_interpoladas():
+    pontos = rede()
+    horas = horaria_na_rede(pontos, quantas=2)
+    lons, lats = np.array([[-55.9, -55.2]]), np.array([[-21.0, -21.0]])
+
+    campos = previsao.risco_da_hora(horas, pontos, horas["hora_prevista_utc"].iloc[0], lons, lats)
+
+    assert np.allclose(campos[0], [[35.0, 29.0]])
+    assert risco_fogo.contar_condicoes(*campos).tolist() == [[3, 2]]
+
+
+def semanal_na_rede(pontos: pd.DataFrame, semanas: dict) -> pd.DataFrame:
+    # A anomalia é um campo plano; a previsão, a anomalia somada a uma normal de 25 °C
+    return pd.DataFrame([{"modelo": "ecmwf_ec46_ensemble_mean", "rodada_utc": RODADA_EC46, "ponto": ponto.ponto,
+                          "semana": semana, "anom_temperatura": base + 0.5 * (ponto.longitude + 55.0),
+                          "temperatura": 25.0 + base + 0.5 * (ponto.longitude + 55.0)}
+                         for semana, base in semanas.items() for ponto in pontos.itertuples()])
+
+
+def test_a_semana_no_ponto_traz_a_previsao_a_normal_e_a_anomalia_do_balao():
+    pontos = rede()
+    tabela = semanal_na_rede(pontos, {date(2026, 10, 5): 9.0, date(2026, 10, 12): 1.0, date(2026, 10, 19): -1.0})
+
+    semana = previsao.semana_no_ponto(tabela, pontos, -54.6, -21.0, previsao.MAPAS_SEMANAIS[
+        "Anomalia da temperatura média"], RODADA_EC46)
+
+    assert list(semana["semana"]) == [date(2026, 10, 12), date(2026, 10, 19)]     # a da rodada fica de fora
+    assert np.allclose(semana["anomalia"], [1.2, -0.8]) and np.allclose(semana["normal"], 25.0)
+    assert semana.loc[0, "rotulo"] == "12/10 a 18/10"
+
+
+def test_na_estacao_cada_anomalia_vai_com_a_previsao_dela():
+    tabela = semanal({date(2026, 10, 12): 1.5}).assign(temperatura=26.5)
+
+    semana = previsao.semana_na_estacao(tabela, "A", previsao.MAPAS_SEMANAIS["Anomalia da temperatura média"],
+                                        RODADA_EC46)
+
+    assert semana.loc[0, ["prevista", "normal", "anomalia"]].tolist() == [26.5, 25.0, 1.5]

@@ -6,9 +6,11 @@ pelo main.py, e nada aqui altera o que eles produzem.
 
 Para abrir:  streamlit run app/explorador.py
 """
+import base64
 import io
 import math
 import sys
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -21,6 +23,7 @@ import numpy as np
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
+from streamlit.delta_generator import DeltaGenerator
 from matplotlib import colormaps
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import BoundaryNorm, Normalize
@@ -28,15 +31,18 @@ from matplotlib.figure import Figure
 
 from app import animacao
 from app import boletim
+from app import car
 from app import chuva as chuva_calc
 from app import dados as coleta
+from app import interativo
 from app import previsao
 from app import qualidade
+from app import raios
 from app import referencia
 from app import risco
 from app import superficie
 from app import variaveis
-from modulos import config, fonte, mapas, openmeteo, retiradas
+from modulos import calculos, config, fonte, geotiff, gpkg, mapas, openmeteo, retiradas
 from modulos.produtos import risco_fogo
 
 # A API manda o vento em m/s; os produtos trabalham em km/h, e aqui seguimos a mesma unidade
@@ -57,13 +63,27 @@ NOMES_CURTOS = {
 MODOS_MAPA = {"Hora a hora": variaveis.HORA, "Por dia": variaveis.DIA, "Período inteiro": variaveis.PERIODO}
 # O gráfico não tem o período inteiro: um valor só não faz série no tempo.
 MODOS_GRAFICO = {"Hora a hora": variaveis.HORA, "Por dia": variaveis.DIA}
-# Acumulados que já vêm escolhidos na aba da chuva: os três do boletim
-PADRAO_CHUVA = ["24 h", "48 h", "72 h"]
 DPI_MAPA = 150       # serve para a tela e para o PNG baixado: um desenho só, codificado uma vez
 # O GIF é feito de dezenas de quadros: em 150 dpi cada um sairia com 1780 px e o arquivo
 # passaria de 20 MB. Em 72 dpi o quadro tem 854 px — legível na tela e ~68 KB no GIF.
 DPI_GIF = 72
 MAPAS_POR_LINHA = 3  # acima disso cada mapa fica estreito demais para se lerem os valores
+# O GeoTIFF de cada mapa, para a UNIGEO abrir no SIG (pedido de 23/11/2026)
+AJUDA_DO_GEOTIFF = ("Para o QGIS, o ArcGIS ou o PIN MS: o valor de cada pixel de 0,01° (~1 km), em SIRGAS 2000 "
+                    "(EPSG:4674), recortado pelo estado. A superfície é a deste mapa; as cores ficam por conta do SIG.")
+AJUDA_DO_GEOTIFF_DO_RISCO = ("Para o QGIS, o ArcGIS ou o PIN MS: o nível de cada pixel de 0,01° (~1 km), de 0 (sem "
+                             "condição) a 3 (risco alto), em SIRGAS 2000 (EPSG:4674), recortado pelo estado e já com "
+                             "as cores do painel. O risco é calculado na grade dos produtos, de ~8 km: os pixels de "
+                             "uma célula têm o mesmo nível.")
+AJUDA_DO_GEOTIFF_DAS_HORAS = ("Para o QGIS, o ArcGIS ou o PIN MS: as horas em risco alto de cada pixel de 0,01° "
+                              "(~1 km), em SIRGAS 2000 (EPSG:4674), recortado pelo estado. A conta é feita na grade "
+                              "dos produtos, de ~8 km: os pixels de uma célula têm o mesmo número.")
+AJUDA_DAS_ESTACOES = ("Os pontos das estações que fizeram o mapa, com o valor de cada uma, em SIRGAS 2000 (EPSG:4674) "
+                      "como o GeoTIFF: é pôr a camada sobre ele no QGIS ou no ArcGIS. Vêm também as estações dos "
+                      "estados vizinhos, que firmam a borda (coluna uf). No QGIS a camada abre com os pontos pretos "
+                      "de borda branca dos mapas; os rótulos com o valor já vêm prontos, é só ligá-los.")
+METODO_DO_RISCO = ("Regra 30-30-30: temperatura, umidade e rajada das estações interpoladas separadas (IDW) na grade "
+                   "dos produtos (~8 km), e a regra aplicada célula a célula; nos pixels, pelo vizinho mais próximo")
 # Quantos estados ficam com os shapefiles na memória ao mesmo tempo. Cada um prende ~25 MB de
 # GeoDataFrame e grade, e esses caches são **do processo, não da sessão**: na nuvem um
 # contêiner serve a equipe inteira, então quem passeia pelo seletor enche a memória de todos.
@@ -74,27 +94,29 @@ ESTADOS_NA_MEMORIA = 3
 # Altura dos gráficos de série. Em 320 px, quatro estações com duas séries cada davam oito
 # linhas quase coladas: não dava para dizer qual era qual.
 ALTURA_GRAFICO = 420
+ALTURA_GRAFICO_DO_RISCO = 260   # cada uma das três medidas do risco, uma embaixo da outra
+NAVEGAR_NO_GRAFICO = (" Arraste o gráfico para deslocar e use **Shift + roda do mouse** para aproximar; o cursor "
+                      "mostra os números do instante mais próximo.")
 # O tamanho dos números em todos os gráficos, do observado e da previsão, a pedido da equipe em
 # 16/10/2026, em pixels: os dos eixos, e os escritos sobre as barras e as linhas. Um só para todos:
 # tamanhos diferentes fariam um gráfico parecer menos importante que o outro.
 FONTE_DOS_EIXOS = 15
 FONTE_DOS_ROTULOS = 12
-# Mapa navegável: o mapa base é o Carto (sem chave de acesso) e o enquadramento inicial sai do
-# recorte — o centro do estado e um zoom que cabe o maior lado dele na tela.
+# Mapas interativos: o enquadramento inicial sai do recorte — o centro do estado e um zoom que
+# cabe o maior lado dele na tela.
 ZOOM_POR_GRAU = 5.9 + 3.0  # calibrado em MS, que tem 8° de largura e abre bem no zoom 5,9
-MAPA_BASE = pdk.map_styles.LIGHT
-# MS é quase quadrado: ocupando a largura inteira da tela, o mapa sairia três vezes mais largo
-# que alto e o estado nadaria no meio de São Paulo e da Bolívia. Em tela menor que isso o
-# Streamlit encolhe o mapa até o espaço que houver, e o zoom inicial abaixo ainda o enquadra.
-LARGURA_MAPA, ALTURA_MAPA = 1200, 780
-# O Streamlit alinha tudo à esquerda; com largura fixa, sobraria um vão à direita nas telas
-# largas. A regra abaixo centraliza só o mapa. Se um dia o Streamlit mudar esse identificador,
-# o mapa volta a ficar à esquerda — e nada mais quebra.
-CENTRALIZAR_MAPA = """<style>
-[data-testid="stElementContainer"]:has([data-testid="stDeckGlJsonChart"]) {
-  margin-left: auto; margin-right: auto; align-self: center;
-}
-</style>"""
+ALTURA_MAPA = 900
+VISAO_3D = {"pitch": 52, "bearing": -18}   # a inclinação e o giro do protótipo que a equipe escolheu
+PONTOS_NO_RELEVO = "pontos_no_relevo"     # a grade que responde ao mouse no 3D (no plano, "pontos")
+# O imóvel do CAR: magenta não se confunde com o azul da chuva, com as cores do risco nem com o
+# vermelho e o ciano da célula clicada
+COR_DO_IMOVEL = [255, 0, 255]
+ACIMA_DO_BLOCO = 1500           # metros: no 3D, o topo das células do imóvel fica à vista
+LADO_MINIMO_DO_IMOVEL = 0.15    # graus: um imóvel pequeno (ou um ponto) abre com as células em volta
+FOLGA_DO_IMOVEL = 2.5
+ZOOM_DO_IMOVEL_EM_3D = 7.0
+ESCOLHAS_INTERATIVAS = ("escolha_mapa_interativo", "escolha_chuva_interativa", "escolha_risco_interativo",
+                        "escolha_previsao_interativa")
 # Dois ajustes no balão dos gráficos. Ele é um elemento só, pendurado no corpo da página fora
 # do gráfico, então as regras valem para todos eles; os seletores repetem o caminho inteiro do
 # estilo do Streamlit porque um mais curto perde na especificidade e não pega.
@@ -163,24 +185,11 @@ alt.data_transformers.enable("default", max_rows=20000)
 # estados diferentes no mesmo processo dividiriam o mesmo mapa — e a segunda veria o da primeira.
 @st.cache_data(ttl=3600, show_spinner=False)
 def carregar_estacoes(uf: str) -> pd.DataFrame:
-    """As estações do estado — as do produto: tabelas, listas, rankings e CSV saem daqui."""
     return fonte.estacoes(uf)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def carregar_apoio(uf: str) -> pd.DataFrame:
-    """As estações de fora do estado que ajudam a interpolar a borda.
-
-    Elas não são do produto: não entram em lista, tabela nem ranking, e não aparecem desenhadas.
-    Servem para o IDW ter dado dos dois lados da divisa — sem elas, os 8 vizinhos que ele enxerga
-    numa célula da fronteira estão todos para dentro, e a superfície extrapola tendo medição do
-    outro lado.
-
-    Da vizinhança inteira sobram só as que podem entrar na conta de alguma célula: estar dentro
-    da margem não basta, é preciso chegar às mais próximas de algum lugar que vira desenho. Isso
-    corta 54 para 39 em MS e 89 para 60 em SC — requisição a menos em toda consulta, sem mudar
-    mapa, porque a poda tem folga (ver config.VIZINHOS_NA_PODA).
-    """
     base = base_cartografica(uf)
     return fonte.estacoes_de_apoio(config.recorte_de(uf), base.lon_grade[base.dentro_uf],
                                    base.lat_grade[base.dentro_uf])
@@ -190,20 +199,6 @@ def carregar_apoio(uf: str) -> pd.DataFrame:
 def carregar_leituras(codigos: tuple[str, ...], nomes: tuple[str, ...],
                       inicio: datetime, fim: datetime, uf: str,
                       _mensagem: str = "Consultando o INMET") -> tuple[pd.DataFrame, list[str]]:
-    """Séries das estações escolhidas, com a lista das que falharam.
-
-    A espera é de rede: uma consulta por estação, e são 62. A barra diz quantas já chegaram —
-    um giro sem número não diz se falta muito, e numa janela longa a pessoa desiste antes de o
-    mapa aparecer.
-
-    A barra nasce **aqui dentro** de propósito. O Streamlit grava os elementos desenhados dentro
-    de uma função cacheada e os redesenha quando a resposta vem do cache; uma barra criada fora
-    quebra esse redesenho, porque o lugar dela pode não existir mais. Como ela é apagada antes
-    do retorno, o redesenho não mostra nada — que é o certo, já que não houve espera.
-
-    `_mensagem` começa com sublinhado para ficar fora da chave do cache: duas abas pedindo a
-    mesma janela com textos diferentes baixariam tudo duas vezes.
-    """
     barra = st.progress(0.0, text=_mensagem)
 
     def avancar(concluidas: int, total: int) -> None:
@@ -218,12 +213,35 @@ def carregar_leituras(codigos: tuple[str, ...], nomes: tuple[str, ...],
     return tabela, falharam
 
 
-def series_da_grandeza(tabela: pd.DataFrame, grandeza: str, modo: str):
-    """As séries daquela grandeza no tempo, e os produtos que as geraram.
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cadastro_cemaden(uf: str) -> pd.DataFrame:
+    return fonte.estacoes_cemaden(uf)
 
-    É aqui que o catálogo entra no gráfico: a máxima do dia sai da mesma regra que alimenta o
-    mapa, e as duas telas não podem discordar.
-    """
+
+def estacoes_do_cemaden(uf: str) -> pd.DataFrame:
+    # Os pluviômetros do CEMADEN do estado, para a gaveta dos mapas de chuva. Vazio com a fonte
+    # "apis" (o Streamlit Cloud), e também com o banco fora do ar: aí os mapas saem só com o INMET
+    try:
+        return _cadastro_cemaden(uf)
+    except fonte.ErroFonte:
+        return pd.DataFrame(columns=fonte.COLUNAS_ESTACOES_CEMADEN)
+
+
+# Dez minutos, e não uma hora como as do INMET: o coletor do CEMADEN grava a cada hora, aos 5
+# minutos, e a leitura do banco não custa nada à PED
+@st.cache_data(ttl=600, show_spinner=False)
+def carregar_chuva_cemaden(inicio: datetime, fim: datetime, uf: str) -> pd.DataFrame:
+    # A chuva de todos os pluviômetros do CEMADEN do estado, como as leituras de carregar_leituras:
+    # uma linha por estação e hora cheia de (inicio, fim], com a coluna "Estação"
+    fuso = config.recorte_de(uf).fuso
+    try:
+        coletados = fonte.chuva_cemaden(estacoes_do_cemaden(uf), inicio, fim, fuso)
+    except fonte.ErroFonte:
+        coletados = []
+    return coleta.juntar_cemaden(coletados, inicio, fim, fuso)
+
+
+def series_da_grandeza(tabela: pd.DataFrame, grandeza: str, modo: str):
     pedacos, usados = [], []
     for produto in variaveis.disponiveis(modo, variaveis.GRAFICO):
         if produto.grandeza != grandeza:
@@ -241,13 +259,6 @@ def series_da_grandeza(tabela: pd.DataFrame, grandeza: str, modo: str):
 
 
 def _apelidos(longo: pd.DataFrame) -> dict[tuple[str, str], str]:
-    """Um apelido curto e seguro para cada linha do gráfico: `s0`, `s1`...
-
-    O balão junta várias linhas num quadro só, e para isso o Vega transforma esses apelidos em
-    **nomes de campo**. Ponto em nome de campo ali quer dizer caminho aninhado, e meia dúzia de
-    estações se chamam "Faz. Alvorada" ou parecido: o nome viraria dois níveis e o balão
-    mostraria vazio. Daí o apelido no dado e o nome legível só no rótulo.
-    """
     pares = (longo[["Estação", "Série"]].drop_duplicates()
              .sort_values(["Estação", "Série"]).itertuples(index=False))
     return {(estacao, serie): f"s{indice}" for indice, (estacao, serie) in enumerate(pares)}
@@ -255,15 +266,6 @@ def _apelidos(longo: pd.DataFrame) -> dict[tuple[str, str], str]:
 
 def _regua(dados: pd.DataFrame, linhas_do_balao: list[tuple[str, str, str]], casas: int,
            por_dia: bool, apontar: alt.Parameter) -> alt.Chart:
-    """Régua vertical e balão com as linhas do instante mais próximo do cursor.
-
-    O balão tem as colunas fixas no spec: esconder uma linha tirando o dado dela deixaria "NaN"
-    no lugar. Então cada linha vira um **texto pronto**, vazio quando a legenda escondeu aquela
-    série ou quando a estação não mediu naquela hora — e linha vazia some do balão por CSS.
-
-    Uma régua só, e não uma por estado da legenda: o Vega-Lite constrói uma única vizinhança de
-    cursor por gráfico, e as outras camadas ficariam sem nenhuma.
-    """
     grafico = alt.Chart(dados).transform_pivot("chave", value="valor", groupby=["dt_local"])
     balao = [alt.Tooltip("dt_local:T", title="Quando", format="%d/%m" if por_dia else "%d/%m %H:%M")]
     for nome, apelido, serie in linhas_do_balao:
@@ -284,7 +286,6 @@ def _regua(dados: pd.DataFrame, linhas_do_balao: list[tuple[str, str, str]], cas
 
 
 def _escala_das_cores(cores: dict[str, str] | None, presentes: pd.Series):
-    """A cor fixa de cada modelo, só com os que estão no gráfico: os outros não vão para a legenda."""
     if not cores:
         return alt.Undefined
     nomes = [nome for nome in cores if nome in set(presentes)]
@@ -293,14 +294,6 @@ def _escala_das_cores(cores: dict[str, str] | None, presentes: pd.Series):
 
 def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, casas: int = 1,
              cores: dict[str, str] | None = None) -> alt.Chart:
-    """As séries de uma grandeza no tempo: cor separa a estação, traço separa a série.
-
-    Cinco estações com três séries dariam quinze linhas iguais. Cor para a estação e traço para
-    a série (máxima, mínima, média) deixa as duas leituras possíveis no mesmo desenho; clicar na
-    legenda isola uma série, no desenho e também no balão.
-
-    Na previsão, a coluna "Estação" leva o nome do modelo, e `cores` fixa a cor de cada um.
-    """
     # Arrastar move e Shift+roda aproxima. Sem o Shift, a roda do mouse em cima do gráfico
     # aproximaria em vez de rolar a página, e quem passa por vários gráficos fica preso no
     # primeiro (é o que o .interactive() faz por padrão).
@@ -350,11 +343,6 @@ def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, 
 
 
 def barras_do_acumulado(valores: pd.Series, unidade: str, quantas: int | None) -> alt.Chart:
-    """Quanto choveu em cada estação na janela, da maior para a menor.
-
-    É a leitura que vai para o texto do boletim — "Dourados registrou 78 mm em 24 h" —, e o mapa
-    fica para quando a pergunta for *onde* choveu.
-    """
     tabela = (valores.dropna().rename("valor").rename_axis("Estação").reset_index()
               .sort_values("valor", ascending=False))
     if quantas:
@@ -363,8 +351,9 @@ def barras_do_acumulado(valores: pd.Series, unidade: str, quantas: int | None) -
     base = alt.Chart(tabela)
     # labelOverlap=False obriga o eixo a escrever todos os nomes. Com pouca altura ele descarta
     # um sim, um não — e aí uma lista de 15 estações parece uma de 8.
+    # labelLimit de 340 px cabe "CEMADEN · Campo Grande (Jardim Panamá)" inteiro, sem reticências
     eixo_estacao = alt.Y("Estação:N", sort="-x", title=None,
-                         axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS, labelOverlap=False, labelLimit=230))
+                         axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS, labelOverlap=False, labelLimit=340))
     # size, e não height: em barra deitada é ele que define a espessura. Com height a barra
     # engorda até preencher a faixa, e os nomes das estações ficam espremidos entre elas.
     barras = base.mark_bar(color="#2171b5", size=20).encode(
@@ -382,14 +371,6 @@ def barras_do_acumulado(valores: pd.Series, unidade: str, quantas: int | None) -
 
 def cascata_da_chuva(barras: pd.DataFrame, por_dia: bool, titulo: str = "", teto: float | None = None,
                      altura: int = 300) -> alt.Chart:
-    """Quanto choveu em cada passo, empilhado no que já tinha caído, e a barra do total.
-
-    Cada barra começa onde a anterior terminou, então a altura da última diz o acumulado sem
-    ninguém somar de cabeça. A do total sai do chão, para comparar de relance.
-
-    Um gráfico por estação, ou o do estado, já somado numa linha única. `teto` fixa o alto do
-    eixo, para estações lado a lado se compararem.
-    """
     ordem = list(barras.sort_values("ordem")["Passo"].unique())
     base = alt.Chart(barras).encode(
         x=alt.X("Passo:N", title=None, sort=ordem, axis=alt.Axis(labelAngle=-45, labelFontSize=FONTE_DOS_EIXOS)))
@@ -414,11 +395,6 @@ def cascata_da_chuva(barras: pd.DataFrame, por_dia: bool, titulo: str = "", teto
 
 
 def rosa_dos_ventos(tabela: pd.DataFrame, nome_estacao: str):
-    """Horas em que o vento veio de cada direção, separadas por faixa de velocidade.
-
-    É a forma certa de resumir direção num período: cada pétala é um rumo, e o comprimento
-    diz por quantas horas o vento veio de lá.
-    """
     dados = tabela[tabela["Estação"] == nome_estacao].dropna(subset=["VEN_DIR", "VEN_VEL"])
     setores = ((dados["VEN_DIR"] % 360) / 22.5).round().astype(int) % 16
     rotulos = [f"{menor:g}–{maior:g}" if maior != float("inf") else f"≥ {menor:g}" for menor, maior in FAIXAS_VENTO]
@@ -458,11 +434,6 @@ def rosa_dos_ventos(tabela: pd.DataFrame, nome_estacao: str):
 
 
 def visao_inicial(recorte: config.Recorte) -> dict:
-    """Centro e zoom de abertura do mapa navegável, a partir do enquadramento do estado.
-
-    O zoom foi calibrado em MS (8° de largura abrem bem em 5,9) e escala pelo maior lado: um
-    estado pequeno abre mais perto, um grande mais longe, sem ninguém ajustar número nenhum.
-    """
     oeste, leste, sul, norte = recorte.limites
     maior_lado = max(leste - oeste, norte - sul)
     return {"latitude": (sul + norte) / 2, "longitude": (oeste + leste) / 2,
@@ -470,7 +441,6 @@ def visao_inicial(recorte: config.Recorte) -> dict:
 
 
 def niveis_da_escala(produto: variaveis.Produto, horas_janela=None, ajustar: bool = False):
-    """Os níveis de cor deste mapa, ou None para deixar a escala se ajustar ao dado."""
     if ajustar:
         return None
     escolhida = variaveis.escala(produto, horas_janela)
@@ -481,27 +451,23 @@ def niveis_da_escala(produto: variaveis.Produto, horas_janela=None, ajustar: boo
 
 
 @st.cache_data(show_spinner=False, max_entries=20)
-def barra_de_escala(paleta: str, niveis: tuple, unidade: str) -> bytes:
-    """Régua horizontal das cores, para ir embaixo do mapa.
-
-    Com escala fixa a barra passa a valer para todos os mapas daquela grandeza — e sem ela a cor
-    não diz número nenhum. Fica fina e deitada para não roubar largura do desenho, ao contrário
-    da barra vertical que tiramos.
-    """
+def barra_de_escala(paleta: str, niveis: tuple, unidade: str, vertical: bool = False) -> bytes:
     so_acima = float(min(niveis)) > 0
     continua = len(niveis) > mapas.MAX_CLASSES  # faixa fixa vira 21 níveis; classes são poucas
     norma = (Normalize(vmin=min(niveis), vmax=max(niveis)) if continua
              else BoundaryNorm(niveis, ncolors=256, extend="max" if so_acima else "both"))
 
-    fig = Figure(figsize=(4.0, 0.62))
-    eixo = fig.add_axes([0.02, 0.55, 0.96, 0.38])
+    # A vertical vai por cima do mapa interativo, num fundo escuro: letras mais claras
+    fig = Figure(figsize=(0.9, 3.4) if vertical else (4.0, 0.62))
+    eixo = fig.add_axes([0.05, 0.03, 0.3, 0.94] if vertical else [0.02, 0.55, 0.96, 0.38])
+    cor = "#d6d6d6" if vertical else "#9a9a9a"
     barra = fig.colorbar(ScalarMappable(norm=norma, cmap=colormaps[paleta]), cax=eixo,
-                         orientation="horizontal",
+                         orientation="vertical" if vertical else "horizontal",
                          extend="max" if so_acima else "both",
                          ticks=None if continua else list(niveis))
-    barra.set_label(unidade, color="#9a9a9a", size=8, labelpad=2)
-    barra.ax.tick_params(colors="#9a9a9a", labelsize=7, length=2, pad=1)
-    barra.outline.set_edgecolor("#9a9a9a")
+    barra.set_label(unidade, color=cor, size=8, labelpad=2)
+    barra.ax.tick_params(colors=cor, labelsize=7, length=2, pad=1)
+    barra.outline.set_edgecolor(cor)
     barra.outline.set_alpha(0.4)
     fig.patch.set_alpha(0)
 
@@ -512,33 +478,21 @@ def barra_de_escala(paleta: str, niveis: tuple, unidade: str) -> bytes:
 
 @st.cache_resource(show_spinner=False, max_entries=ESTADOS_NA_MEMORIA)
 def base_cartografica(uf: str) -> mapas.BaseCartografica:
-    """Shapefiles, grade e máscara do estado: pesados de ler e iguais para todo mundo.
-
-    `cache_resource` devolve **a mesma instância**, sem copiar — é o certo aqui, porque
-    serializar 24 MB de GeoDataFrame a cada chamada custaria mais que a leitura que o cache
-    poupa. O preço é que a instância vive enquanto a entrada viver, daí o teto.
-    """
     return mapas.carregar_base(config.recorte_de(uf))
 
 
 @st.cache_data(show_spinner=False, max_entries=30)
 def mapa_do_instante(valores: pd.Series, titulo: str, unidade: str, paleta: str, decimais: int,
                      quando: str, rotulos: bool, uf: str, niveis=None, direcoes=None,
-                     dpi: int = DPI_MAPA, apoio: pd.Series | None = None) -> bytes | None:
-    """PNG do mapa interpolado de um instante, ou None se faltarem estações para interpolar.
-
-    É o mesmo desenho dos produtos — mesmo IDW, mesmo recorte pelo estado, mesmas cores —, só que
-    sem a moldura institucional: na tela, título e logos tomariam o lugar do mapa. Fica em cache
-    porque cada passo do deslizante redesenha uma variável por vez: voltar a uma hora já vista não
-    paga o desenho de novo.
-    """
+                     dpi: int = DPI_MAPA, apoio: pd.Series | None = None, agrupar: bool = False) -> bytes | None:
     gdf = _pontos_do_mapa(valores, titulo, uf, quando, direcoes)
     if gdf is None or len(gdf) < config.MIN_ESTACOES_INTERPOLACAO:
         return None
 
     espec = mapas.EspecMapa(tabela="", coluna=titulo, titulo=titulo, subtitulo=quando, arquivo="",
                             cmap=paleta, ranking="", decimais=decimais, unidade=f"{titulo} ({unidade})",
-                            direcao_vento=direcoes is not None)
+                            direcao_vento=direcoes is not None,
+                            agrupar_km=config.AGRUPAR_CHUVA_KM if agrupar else 0.0)
     figura = mapas.mapa_interpolado(gdf, espec, base_cartografica(uf), tela=mapas.Tela(rotulos=rotulos),
                                     niveis=niveis, apoio=_vizinhas_do_mapa(apoio, titulo, uf, quando))
     if figura is None:
@@ -551,7 +505,6 @@ def mapa_do_instante(valores: pd.Series, titulo: str, unidade: str, paleta: str,
 
 @st.cache_resource(show_spinner=False, max_entries=ESTADOS_NA_MEMORIA)
 def malha_fina(uf: str) -> superficie.Malha:
-    """Grade e máscara do estado do mapa navegável: dependem só da resolução, não do dado."""
     recorte = config.recorte_de(uf)
     return superficie.malha(base_cartografica(uf).uf.geometry.union_all(), recorte=recorte)
 
@@ -559,7 +512,6 @@ def malha_fina(uf: str) -> superficie.Malha:
 @st.cache_data(show_spinner=False, max_entries=30)
 def camada_superficie(valores: pd.Series, nome_produto: str, quando: str, uf: str, niveis=None,
                       apoio: pd.Series | None = None) -> str:
-    """A superfície do instante como imagem, pronta para virar camada do mapa."""
     produto = variaveis.por_nome(nome_produto)
     pontos = _com_coordenadas(valores, nome_produto, uf)
     vizinhas = (_com_coordenadas(apoio, nome_produto, uf)
@@ -570,13 +522,6 @@ def camada_superficie(valores: pd.Series, nome_produto: str, quando: str, uf: st
 
 
 def estacoes_vizinhas(uf: str, avisar: bool = True) -> pd.DataFrame:
-    """As estações vizinhas do estado, ou nenhuma se o INMET não devolver a lista, e o painel segue.
-
-    Sem elas a borda dos mapas extrapola, mas todo o resto funciona: é o mesmo que os produtos
-    fazem em `inmet.baixar_apoio`. Melhor um mapa com a borda menos firme do que nenhum mapa. A
-    tabela vazia tem as colunas do cadastro, para quem vem depois não precisar tratar o caso; e a
-    falha não fica no cache, então a próxima consulta tenta de novo.
-    """
     try:
         return carregar_apoio(uf)
     except fonte.ErroFonte:
@@ -587,33 +532,34 @@ def estacoes_vizinhas(uf: str, avisar: bool = True) -> pd.DataFrame:
 
 
 def retiradas_da_variavel(grandeza: str) -> set[str]:
-    """As estações que a equipe tirou dos mapas da variável nesta sessão (veja modulos/retiradas.py).
-
-    A lista mora num dicionário da sessão, e não só no widget: o Streamlit apaga o estado de um
-    widget que deixa de ser desenhado, e a lista da temperatura sumiria quando o mapa dela saísse
-    da tela. Assim ela vale para os mapas da variável em todas as abas, até a página fechar.
-    """
+    # As estações que a equipe tirou dos mapas da variável nesta sessão (veja modulos/retiradas.py).
+    # A lista mora num dicionário da sessão, e não só no widget: o Streamlit apaga o estado de um
+    # widget que deixa de ser desenhado, e a lista da temperatura sumiria quando o mapa dela saísse
+    # da tela. Assim ela vale para os mapas da variável em todas as abas, até a página fechar.
     return set(st.session_state.get("retiradas", {}).get(grandeza, []))
 
 
 def gaveta_das_retiradas(onde: str, grandezas: list[str], estacoes: pd.DataFrame,
-                         vizinhas: pd.DataFrame) -> None:
-    """A gaveta à direita dos mapas: uma lista de estações a retirar para cada variável na tela.
-
-    Flutua por cima da aba (ESTILO_DA_GAVETA) e abre e fecha sem refazer os mapas; fechada, mostra
-    quantas estações estão fora, para ninguém esquecer delas. `onde` separa as gavetas das abas,
-    que o Streamlit desenha todas de uma vez. As do estado vêm primeiro, e as vizinhas (que seguram
-    a borda da interpolação) depois, marcadas.
-    """
+                         vizinhas: pd.DataFrame, cadastro_cemaden: pd.DataFrame | None = None) -> None:
+    # A gaveta à direita dos mapas: uma lista de estações a retirar para cada variável na tela.
+    # Flutua por cima da aba (ESTILO_DA_GAVETA) e abre e fecha sem refazer os mapas; fechada, mostra
+    # quantas estações estão fora, para ninguém esquecer delas. `onde` separa as gavetas das abas,
+    # que o Streamlit desenha todas de uma vez. As do estado vêm primeiro, e as vizinhas (que seguram
+    # a borda da interpolação) depois, marcadas.
+    # Nos mapas de chuva, os pluviômetros do CEMADEN (`cadastro_cemaden`) entram como as estações do
+    # INMET e saem por esta mesma lista, depois das vizinhas
     guardadas = st.session_state.setdefault("retiradas", {})
     de_fora = set(vizinhas["Estação"]) - set(estacoes["Estação"])
-    opcoes = list(estacoes["Estação"]) + sorted(de_fora)
-    fora = sum(nome in opcoes for grandeza in grandezas for nome in guardadas.get(grandeza, []))
+    do_cemaden = list(cadastro_cemaden["Estação"]) if cadastro_cemaden is not None else []
+    opcoes_de = {grandeza: list(estacoes["Estação"]) + sorted(de_fora) + (do_cemaden if grandeza == "Chuva" else [])
+                 for grandeza in grandezas}
+    fora = sum(nome in opcoes_de[grandeza] for grandeza in grandezas for nome in guardadas.get(grandeza, []))
     with st.container(key=f"gaveta_retiradas_{onde}"):
         st.html(ESTILO_DA_GAVETA)
         with st.expander(f"Estações retiradas ({fora})" if fora else "Estações retiradas",
                          icon=":material/location_off:", key=f"expansor_retiradas_{onde}"):
             for grandeza in grandezas:
+                opcoes = opcoes_de[grandeza]
                 chave = f"retiradas_{grandeza}"
                 # O valor sai do dicionário a cada execução; trocando o estado, as do anterior ficam
                 # de fora das opções, e o Streamlit recusaria o valor guardado
@@ -624,39 +570,35 @@ def gaveta_das_retiradas(onde: str, grandezas: list[str], estacoes: pd.DataFrame
                                    grandeza, list(st.session_state[chave])))
             st.caption("Para quando uma estação manda dado errado e a correção do INMET ainda não chegou: "
                        "ela sai do mapa, do ranking e da interpolação da variável, e continua nos gráficos "
-                       "e nas tabelas. A lista vale para os mapas da variável em todas as abas, enquanto a "
-                       "página estiver aberta.")
+                       "e nas tabelas. A lista vale para os mapas da variável em todas as abas e nos Mapas "
+                       "interativos, enquanto o painel estiver aberto."
+                       + (" Os pluviômetros do CEMADEN entram nos mapas de chuva como as estações do INMET, e "
+                          "saem por esta mesma lista." if do_cemaden and "Chuva" in grandezas else ""))
+
+
+def nota_das_retiradas(fora: set[str]) -> str:
+    # Embaixo de um mapa interativo, quem a lista das retiradas tirou dele
+    return f" Fora deste mapa, a pedido: {', '.join(sorted(fora))}." if fora else ""
 
 
 def sem_lista_de_estacoes(onde, uf: str) -> None:
-    """Para o painel com um aviso claro quando a lista de estações do estado não vem.
-
-    Sem ela não há o que mostrar: a barra lateral precisa dos nomes, e os mapas, das coordenadas.
-    Antes o painel caía com o traceback do Python na tela ("ErroINMET: Expecting value..."), e
-    quem abria não sabia se o problema era com ele. O INMET às vezes devolve resposta vazia por
-    alguns minutos, e as três tentativas de `inmet._consultar` não bastam; tentar de novo depois
-    resolve. A falha não fica no cache, então o botão refaz a consulta de verdade.
-    """
     onde.error(f"O INMET não respondeu à lista de estações de {uf} agora. Costuma passar em alguns "
                "minutos.")
     onde.button("Tentar de novo", key="tentar_lista_de_novo")
     st.stop()
 
 
-def _com_coordenadas(valores: pd.Series, nome_variavel: str, uf: str) -> pd.DataFrame:
-    """Valores de um instante com a latitude e a longitude de cada estação.
-
-    O cadastro reúne as duas listas — as do estado e as de apoio —, e quem manda é o índice da
-    série: entra o que estiver nela, saia de onde sair.
-    """
-    cadastro = pd.concat([carregar_estacoes(uf), estacoes_vizinhas(uf, avisar=False)], ignore_index=True)
-    coordenadas = (cadastro.set_index("Estação")[["VL_LATITUDE", "VL_LONGITUDE"]]
+def _com_coordenadas(valores: pd.Series, nome_variavel: str, uf: str, extras: tuple[str, ...] = ()) -> pd.DataFrame:
+    # `extras`: outras colunas do cadastro que vão junto (o código e o estado, para o GeoPackage)
+    cadastro = pd.concat([carregar_estacoes(uf), estacoes_vizinhas(uf, avisar=False), estacoes_do_cemaden(uf)],
+                         ignore_index=True)
+    coordenadas = (cadastro.set_index("Estação")[["VL_LATITUDE", "VL_LONGITUDE", *extras]]
                    .rename(columns={"VL_LATITUDE": "Latitude", "VL_LONGITUDE": "Longitude"}))
-    return coordenadas.join(valores.rename(nome_variavel), how="inner").reset_index().dropna()
+    return (coordenadas.join(valores.rename(nome_variavel), how="inner").reset_index()
+            .dropna(subset=["Latitude", "Longitude", nome_variavel]))
 
 
 def _pontos_do_mapa(valores: pd.Series, nome: str, uf: str, quando: str, direcoes=None):
-    """As estações do estado que vão para o mapa, com a direção do vento quando houver."""
     pontos = _com_coordenadas(valores, nome, uf)
     if direcoes is not None:
         # A direção não vira superfície: vai como seta sobre a estação, e o valor do mapa dá o
@@ -666,91 +608,227 @@ def _pontos_do_mapa(valores: pd.Series, nome: str, uf: str, quando: str, direcoe
 
 
 def _vizinhas_do_mapa(apoio: pd.Series | None, nome: str, uf: str, quando: str):
-    """As de apoio entram na conta e só: nada do que sai delas é desenhado, rotulado ou ranqueado."""
     if apoio is None or apoio.dropna().empty:
         return None
     return mapas.preparar_pontos(_com_coordenadas(apoio, nome, uf), nome, quando)
 
 
 def linha_do_tempo(rotulo: str, paradas: list, chave: str, formatar, dia_de=None):
-    """O deslizante que escolhe uma hora ou um dia, desenhado como linha do tempo.
-
-    É o `st.select_slider` de sempre, começando na última parada, sem o trilho pintado até o ponto
-    (que a equipe lia como acumulado) e com um risco na virada de cada dia. `dia_de` diz o dia de
-    cada parada no fuso do estado; sem ele, vale a data da própria parada.
-    """
     marcas = (variaveis.marcas_dos_dias(paradas, dia_de) if dia_de
               else variaveis.marcas_dos_dias(paradas))
     st.html(_estilo_da_linha_do_tempo(chave, marcas))   # só estilo: o Streamlit não reserva espaço para ele
     return st.select_slider(rotulo, options=paradas, value=paradas[-1], format_func=formatar, key=chave)
 
 
-def botao_do_boletim(medida: str, chave: str, arquivo: str, desenhar) -> None:
-    """O botão que baixa o mapa na moldura do relatório, com os logos do CEMTEC e da SEMADESC.
+# Pedido da equipe (24/11/2026): os arquivos de cada mapa ficam num botão só, "Baixar", que abre um
+# menu. O nome do mapa já está no título dele, e cada item diz só o formato, com um ícone
+ICONE_PNG = ":material/image:"
+ICONE_BOLETIM = ":material/description:"
+ICONE_GEOTIFF = ":material/grid_on:"
+ICONE_ESTACOES = ":material/location_on:"
+ICONE_GIF = ":material/movie:"
 
-    `desenhar` só roda no clique: o Streamlit chama a função quando o arquivo é pedido. Em 300
-    dpi, como o main.py grava, cada mapa custa ~0,7 s e 1,5 MB (medido com as 59 de MS), e pagar
-    isso a cada passo do deslizante — três mapas por linha —, por um arquivo que se baixa de vez
-    em quando, deixaria a aba lenta para todo mundo. A função
-    roda numa thread à parte, fora do script, então chega com tudo pronto — pontos, base e
-    níveis —, sem nada de cache do Streamlit lá dentro. E o clique não reexecuta a página
-    (`on_click="ignore"`): os mapas da tela já estão desenhados.
-    """
-    st.download_button(f"Baixar PNG do boletim — {medida}", lambda: boletim.png(desenhar()),
+
+def menu_de_baixar(chave: str) -> DeltaGenerator:
+    return st.popover("Baixar", icon=":material/download:", key=f"menu_{chave}")
+
+
+def estilo_do_menu(icone: str) -> dict:
+    # Dentro do menu, os itens não têm borda e ficam um embaixo do outro, alinhados à esquerda, como numa lista
+    return {"icon": icone, "type": "tertiary"}
+
+
+def botao_do_png(png: bytes, chave: str, arquivo: str) -> None:
+    st.download_button("PNG da tela", png, mime="image/png", key=chave, file_name=arquivo, on_click="ignore",
+                       help="O mapa como aparece na tela, sem o título e os logos do boletim.",
+                       **estilo_do_menu(ICONE_PNG))
+
+
+def botao_do_boletim(chave: str, arquivo: str, desenhar) -> None:
+    st.download_button("PNG do boletim (300 dpi)", lambda: boletim.png(desenhar()),
                        mime="image/png", key=f"boletim_{chave}", file_name=arquivo, on_click="ignore",
                        help="Como o main.py grava: título, logos do CEMTEC e da SEMADESC, ranking e "
-                            "barra de cores, em 300 dpi. As cores e a escala são as da tela.")
+                            "barra de cores, em 300 dpi. As cores e a escala são as da tela.",
+                       **estilo_do_menu(ICONE_BOLETIM))
+
+
+@st.cache_resource(show_spinner=False, max_entries=ESTADOS_NA_MEMORIA)
+def grade_do_geotiff(uf: str) -> geotiff.Grade:
+    base = base_cartografica(uf)
+    return geotiff.grade_do_estado(base.uf.geometry.union_all(), base.recorte)
+
+
+def nome_do_geotiff(png: str) -> str:
+    # O nome do PNG do boletim com a outra extensão: o estado e o instante já estão nele
+    return png.removesuffix(".png") + ".tif"
+
+
+def botao_do_geotiff(chave: str, arquivo: str, gravar, ajuda: str = AJUDA_DO_GEOTIFF) -> None:
+    # Como o do boletim, o arquivo só é feito no clique
+    st.download_button("GeoTIFF", gravar, mime=geotiff.MIME, key=f"geotiff_{chave}", file_name=arquivo,
+                       on_click="ignore", help=ajuda, **estilo_do_menu(ICONE_GEOTIFF))
+
+
+def geotiff_das_estacoes(valores: pd.Series, apoio: pd.Series | None, nome: str, unidade: str, uf: str,
+                         quando: str):
+    # O IDW das mesmas medidas do mapa, com as vizinhas na borda, refeito em cada pixel
+    def gravar() -> bytes:
+        pontos = _com_coordenadas(valores, nome, uf)
+        if apoio is not None and not apoio.dropna().empty:
+            pontos = pd.concat([pontos, _com_coordenadas(apoio, nome, uf)], ignore_index=True)
+        grade = grade_do_geotiff(uf)
+        campo = geotiff.idw(pontos["Longitude"], pontos["Latitude"], pontos[nome], grade)
+        return geotiff.gravar(campo, grade, f"{nome} ({unidade})", unidade,
+                              {"TITULO": nome, "QUANDO": quando, "FONTE": boletim.credito(valores.dropna().index),
+                               "METODO": geotiff.METODO_IDW})
+    return gravar
+
+
+def estacoes_do_mapa(valores: pd.Series, apoio: pd.Series | None, nome: str, unidade: str, casas: int, uf: str,
+                     quando: str):
+    # Os pontos das mesmas medidas do GeoTIFF das estações, as vizinhas da borda junto
+    def gravar() -> bytes:
+        extras = ("CD_ESTACAO", "SG_ESTADO")
+        pontos = _com_coordenadas(valores, nome, uf, extras)
+        if apoio is not None and not apoio.dropna().empty:
+            pontos = pd.concat([pontos, _com_coordenadas(apoio, nome, uf, extras)], ignore_index=True)
+        return gpkg.gravar(gpkg.tabela_das_estacoes(pontos, nome, casas, unidade), f"Estações — {nome}",
+                           f"{nome} ({unidade}) · {quando} · {boletim.credito(valores.dropna().index)}")
+    return gravar
+
+
+def botoes_do_sig(chave: str, png: str, valores: pd.Series, apoio: pd.Series | None, nome: str, unidade: str,
+                  casas: int, uf: str, quando: str) -> None:
+    # Nos mapas de estações, o GeoTIFF e, ao lado dele, os pontos das estações num GeoPackage. Só o
+    # observado tem mapa de estações, e os dois vão sempre no menu "Baixar"
+    botao_do_geotiff(chave, nome_do_geotiff(png),
+                     geotiff_das_estacoes(valores, apoio, nome, unidade, uf, quando))
+    st.download_button("Estações (GeoPackage)",
+                       estacoes_do_mapa(valores, apoio, nome, unidade, casas, uf, quando), mime=gpkg.MIME,
+                       key=f"gpkg_{chave}", file_name=png.removesuffix(".png") + "_estacoes.gpkg",
+                       on_click="ignore", help=AJUDA_DAS_ESTACOES, **estilo_do_menu(ICONE_ESTACOES))
+
+
+def geotiff_previsto(valores: pd.Series, pontos_grade: pd.DataFrame, nome: str, unidade: str, quando: str,
+                     metodo: str, descricao: str | None = None):
+    # A superfície do modelo pela mesma bilinear dos mapas, calculada direto nos pixels
+    def gravar() -> bytes:
+        grade = grade_do_geotiff(previsao.UF)
+        campo = previsao.superficie(valores, pontos_grade, grade.lon, grade.lat)
+        return geotiff.gravar(np.full(grade.lon.shape, np.nan) if campo is None else campo, grade,
+                              descricao or f"{nome} ({unidade})", unidade,
+                              {"TITULO": nome, "QUANDO": quando, "FONTE": previsao.CREDITO, "METODO": metodo})
+    return gravar
+
+
+def geotiff_da_grade(campo: np.ndarray, uf: str, nome: str, quando: str, credito: str, metodo: str,
+                     classes: bool, unidade: str = ""):
+    # Uma superfície da grade dos produtos (o risco de fogo), levada aos pixels pelo vizinho mais próximo
+    def gravar() -> bytes:
+        base, grade = base_cartografica(uf), grade_do_geotiff(uf)
+        nos_pixels = geotiff.da_malha(campo, base.lon_grade, base.lat_grade, grade)
+        metadados = {"TITULO": nome, "QUANDO": quando, "FONTE": credito, "METODO": metodo}
+        if classes:
+            return geotiff.gravar_classes(nos_pixels, grade, config.CORES_RISCO, config.ROTULOS_RISCO, nome,
+                                          metadados)
+        return geotiff.gravar(nos_pixels, grade, f"{nome} ({unidade})", unidade, metadados)
+    return gravar
+
+
+def passo_da_grade(pontos_grade: pd.DataFrame) -> str:
+    return f"{previsao.espacamento(pontos_grade):g}°".replace(".", ",")
+
+
+def metodo_previsto(modelo: str, rodada: datetime, pontos_grade: pd.DataFrame) -> str:
+    return (f"{openmeteo.NOMES[modelo]}, rodada de {rodada:%d/%m/%Y %H} UTC: a superfície do modelo, na grade de "
+            f"{passo_da_grade(pontos_grade)}, levada aos pixels por interpolação bilinear (não é IDW de estação)")
+
+
+def metodo_do_risco_previsto(modelo: str, rodada: datetime) -> str:
+    return (f"Regra 30-30-30 com as três medidas de cada hora do {openmeteo.NOMES[modelo]} (rodada de "
+            f"{rodada:%d/%m/%Y %H} UTC), levadas à grade dos produtos (~8 km) por interpolação bilinear, e a regra "
+            "aplicada célula a célula; nos pixels, pelo vizinho mais próximo")
+
+
+def geotiff_do_risco_previsto(mapa: previsao.MapaPrevisto, nivel: np.ndarray, horas_alto: np.ndarray, quando: str,
+                              modelo: str, rodada: datetime):
+    # O nível, com a paleta, ou as horas em risco alto, conforme o mapa
+    do_nivel = mapa.risco == "nivel"
+    return geotiff_da_grade(nivel if do_nivel else horas_alto, previsao.UF, mapa.titulo, quando, previsao.CREDITO,
+                            metodo_do_risco_previsto(modelo, rodada), classes=do_nivel, unidade="" if do_nivel else "h")
+
+
+def geotiff_semanal(mapa: previsao.MapaSemanal, valores: pd.Series, pontos_grade: pd.DataFrame, semana: date,
+                    rodada: datetime):
+    metodo = (f"EC46 (média dos membros), rodada de {rodada:%d/%m/%Y %H} UTC: o desvio em relação ao normal da época, "
+              f"na grade de {passo_da_grade(pontos_grade)}, levado aos pixels por interpolação bilinear")
+    return geotiff_previsto(valores, pontos_grade, mapa.titulo, mapa.unidade, previsao.subtitulo_da_semana(semana),
+                            metodo, f"{mapa.titulo} ({mapa.unidade} em relação ao normal)")
 
 
 def desenho_do_boletim(valores: pd.Series, nome: str, grandeza: str, unidade: str, paleta: str,
                        decimais: int, subtitulo: str, uf: str, niveis=None, direcoes=None, apoio=None):
-    """O mapa interpolado da tela na moldura do relatório, pronto para desenhar quando pedirem.
-
-    Mesma superfície, mesmas vizinhas e mesmos níveis de cor do que está na tela; muda só a
-    moldura, que é a que o main.py desenha.
-    """
     gdf = _pontos_do_mapa(valores, nome, uf, subtitulo, direcoes)
     vizinhas = _vizinhas_do_mapa(apoio, nome, uf, subtitulo)
-    espec = boletim.espec(nome, grandeza, unidade, paleta, decimais, uf, subtitulo, direcoes is not None)
+    espec = boletim.espec(nome, grandeza, unidade, paleta, decimais, uf, subtitulo, direcoes is not None,
+                          credito=boletim.credito(valores.dropna().index),
+                          agrupar_km=config.AGRUPAR_CHUVA_KM if grandeza == "Chuva" else 0.0)
     base = base_cartografica(uf)
     return lambda: mapas.mapa_interpolado(gdf, espec, base, niveis=niveis, apoio=vizinhas)
 
 
 def desenho_de_classes(grade, pontos: pd.DataFrame, coluna: str, espec: mapas.EspecClasses, uf: str,
                        indicadores: mapas.Indicadores | None = None):
-    """Um mapa de risco na moldura do relatório, pronto para desenhar quando pedirem."""
     gdf = mapas.preparar_pontos(pontos, coluna, espec.subtitulo)
     base = base_cartografica(uf)
     return lambda: mapas.mapa_classes_interpolado(grade, gdf, coluna, espec, base, indicadores=indicadores)
 
 
 def desenho_das_horas(grade, pontos: pd.DataFrame, espec: mapas.EspecMapa, uf: str):
-    """O mapa de horas em risco alto na moldura do relatório, com as faixas da tela."""
     gdf = mapas.preparar_pontos(pontos, espec.coluna, espec.subtitulo)
     base = base_cartografica(uf)
     return lambda: mapas.mapa_de_grade(grade, gdf, espec, base, niveis=niveis_das_horas(grade))
 
 
 def niveis_das_horas(grade):
-    """As faixas do mapa de horas em risco alto: uma por hora até 12, e 12 faixas acima disso."""
     maximo = int(grade.max())
     return np.arange(0, max(maximo, 1) + 1) if maximo < 12 else 12
 
 
-def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, subtitulo: str,
-                   carimbo: str, rotulos: bool, uf: str, niveis=None, direcoes=None, apoio=None) -> None:
-    """Uma coluna da linha de mapas: nome do produto, desenho, a regra e os botões de baixar.
+def estacoes_no_mapa(valores: pd.Series) -> str:
+    # Sob o mapa da tela: "23 estações", e quantas delas são do CEMADEN, com a citação que ele pede
+    medidas = valores.dropna()
+    do_cemaden = len(fonte.do_cemaden(medidas.index))
+    return f"{len(medidas)} estações" + (f" ({do_cemaden} do CEMADEN)" if do_cemaden else "")
 
-    `rotulo` é o instante como a tela o escreve; `subtitulo`, como o relatório escreve.
-    """
+
+def nota_do_grupo(valores: pd.Series, nome: str, uf: str) -> str:
+    # Sob o mapa de chuva da tela: quantas estações o agrupamento deixou sem ponto, por estarem perto
+    # de uma com mais chuva
+    pontos = _com_coordenadas(valores, nome, uf)
+    sem_ponto = len(pontos) - len(mapas.o_maior_de_cada_grupo(pontos, nome, config.AGRUPAR_CHUVA_KM))
+    return (f" Estações a até {config.AGRUPAR_CHUVA_KM:g} km umas das outras mostram só o maior valor "
+            f"({sem_ponto} ficaram sem ponto)." if sem_ponto else "")
+
+
+def credito_do_cemaden(valores: pd.Series) -> str:
+    # Sob o mapa da tela, quando ele tem estação do CEMADEN: o crédito com as três instituições
+    return f" Dados: {mapas.CREDITO_COM_CEMADEN}." if fonte.do_cemaden(valores.dropna().index) else ""
+
+
+def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, subtitulo: str,
+                   carimbo: str, rotulos: bool, uf: str, niveis=None, direcoes=None,
+                   apoio=None) -> DeltaGenerator | None:
+    # Devolve o menu "Baixar", onde o boletim_da_variavel ainda põe o GIF
     st.markdown(f"**{produto.nome}**")
     medida = produto.nome.lower()
     if valores.dropna().empty:
         st.info(f"Nenhuma estação mediu {medida} em {rotulo}.")
         return
 
+    chuva = produto.grandeza == "Chuva"
     png = mapa_do_instante(valores, produto.nome, produto.unidade, produto.paleta,
-                           produto.decimais, rotulo, rotulos, uf, niveis, direcoes, apoio=apoio)
+                           produto.decimais, rotulo, rotulos, uf, niveis, direcoes, apoio=apoio, agrupar=chuva)
     if png is None:
         st.warning(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram {medida} em {rotulo}: "
                    "com tão poucos pontos a superfície inventaria mais do que mostra.")
@@ -762,24 +840,23 @@ def painel_do_mapa(produto: variaveis.Produto, valores: pd.Series, rotulo: str, 
     # A regra do produto vai junto, para ninguém precisar adivinhar que conta é aquela
     casas = produto.decimais
     st.caption(f"{valores.min():.{casas}f} a {valores.max():.{casas}f} {produto.unidade} · "
-               f"{valores.notna().sum()} estações · {produto.regra}.")
+               f"{estacoes_no_mapa(valores)} · {produto.regra}.{credito_do_cemaden(valores)}"
+               + (nota_do_grupo(valores, produto.nome, uf) if chuva else ""))
     arquivo = produto.nome.lower().replace("/", "").replace(" ", "_")
-    st.download_button(f"Baixar PNG — {medida}", png, mime="image/png", key=f"baixar_{produto.nome}",
-                       file_name=f"Mapa_{arquivo}_{carimbo}.png")
-    # O título do boletim pode não ser o nome da tela: "Rajada s/ direção" sai "Rajada máxima em MS"
-    botao_do_boletim(medida, produto.nome, boletim.nome_do_arquivo(produto.nome, uf, carimbo),
-                     desenho_do_boletim(valores, produto.titulo or produto.nome, produto.grandeza,
-                                        produto.unidade, produto.paleta, produto.decimais, subtitulo, uf,
-                                        niveis, direcoes, apoio))
+    menu = menu_de_baixar(f"mapa_{produto.nome}")
+    with menu:
+        botao_do_png(png, f"baixar_{produto.nome}", f"Mapa_{arquivo}_{carimbo}.png")
+        # O título do boletim pode não ser o nome da tela: "Rajada s/ direção" sai "Rajada máxima em MS"
+        botao_do_boletim(produto.nome, boletim.nome_do_arquivo(produto.nome, uf, carimbo),
+                         desenho_do_boletim(valores, produto.titulo or produto.nome, produto.grandeza,
+                                            produto.unidade, produto.paleta, produto.decimais, subtitulo, uf,
+                                            niveis, direcoes, apoio))
+        botoes_do_sig(produto.nome, boletim.nome_do_arquivo(produto.nome, uf, carimbo), valores, apoio,
+                      produto.nome, produto.unidade, produto.decimais, uf, subtitulo)
+    return menu
 
 
 def escala_do_periodo(produto: variaveis.Produto, leituras: pd.DataFrame, horas_janela):
-    """Os níveis de cor que valem para todos os quadros do GIF.
-
-    Num GIF a escala **tem** de ser a mesma do começo ao fim: esticada a cada quadro, a mancha
-    fica igual e só as cores piscam, e quem olha vê variação onde não houve. Quando o produto não
-    tem escala fixa — a pressão —, a faixa sai dos extremos da janela inteira.
-    """
     niveis = niveis_da_escala(produto, horas_janela)
     if niveis is not None:
         return niveis
@@ -793,11 +870,6 @@ def escala_do_periodo(produto: variaveis.Produto, leituras: pd.DataFrame, horas_
 @st.cache_data(show_spinner=False, max_entries=3)
 def gif_do_mapa(nome_produto: str, leituras: pd.DataFrame, modo: str, momentos: tuple,
                 rotulos: bool, uf: str, niveis=None) -> bytes | None:
-    """O mapa quadro a quadro, do começo ao fim da janela, como GIF.
-
-    Guarda poucos na memória (`max_entries`) de propósito: cada um pesa alguns MB, e o painel
-    pode estar servindo várias pessoas ao mesmo tempo.
-    """
     produto = variaveis.por_nome(nome_produto)
     barra = st.progress(0.0, text=f"Desenhando o GIF de {produto.nome.lower()}")
     quadros = []
@@ -815,46 +887,51 @@ def gif_do_mapa(nome_produto: str, leituras: pd.DataFrame, modo: str, momentos: 
     return animacao.montar(quadros) if quadros else None
 
 
-def painel_do_gif(produto: variaveis.Produto, leituras: pd.DataFrame, modo: str, paradas: list,
-                  rotulos: bool, horas_janela, uf: str) -> None:
-    """Botão que monta a animação do período, e a animação quando ela fica pronta.
-
-    Atrás de um botão porque custa: um quadro por hora da janela, desenhados um a um. Quem só
-    quer o mapa da hora não deve pagar por isso.
-    """
+def painel_do_gif(menu: DeltaGenerator, produto: variaveis.Produto, leituras: pd.DataFrame, modo: str,
+                  paradas: list, rotulos: bool, horas_janela, uf: str) -> None:
+    # No menu "Baixar": o "Gerar GIF" desenha os quadros ali mesmo, com a barra de progresso, e vira
+    # "Baixar GIF"; a animação aparece embaixo do mapa
     momentos = animacao.passos(paradas)
     salto = animacao.intervalo(paradas, momentos)
+    passo = f"{salto} {'dia' if modo == variaveis.DIA else 'hora'}{'s' if salto > 1 else ''}"
     chave = f"gif_{produto.nome}"
-    if st.button(f"Gerar GIF — {produto.nome.lower()}", key=f"botao_{chave}",
-                 help=f"{len(momentos)} quadros, um a cada "
-                      f"{salto} {'dia' if modo == variaveis.DIA else 'hora'}{'s' if salto > 1 else ''}."):
-        st.session_state[chave] = True
-
-    if not st.session_state.get(chave):
-        return
-
-    gif = gif_do_mapa(produto.nome, leituras, modo, tuple(momentos), rotulos, uf,
-                      escala_do_periodo(produto, leituras, horas_janela))
-    if gif is None:
-        st.warning("Não houve dado suficiente para desenhar a sequência.")
-        return
+    with menu:
+        if not st.session_state.get(chave):
+            st.button("Gerar GIF", key=f"botao_{chave}", help=f"{len(momentos)} quadros, um a cada {passo}.",
+                      on_click=lambda: st.session_state.update({chave: True}), **estilo_do_menu(ICONE_GIF))
+            return
+        gif = gif_do_mapa(produto.nome, leituras, modo, tuple(momentos), rotulos, uf,
+                          escala_do_periodo(produto, leituras, horas_janela))
+        if gif is None:
+            st.warning("Não houve dado suficiente para desenhar a sequência.")
+            return
+        st.download_button("Baixar GIF", gif, mime="image/gif", key=f"baixar_{chave}", on_click="ignore",
+                           file_name=f"Animacao_{produto.nome.lower().replace('/', '').replace(' ', '_')}_"
+                                     f"{momentos[0]:%Y%m%d}_a_{momentos[-1]:%Y%m%d}.gif",
+                           **estilo_do_menu(ICONE_GIF))
 
     st.image(gif, width="stretch")
-    passo = f"{salto} {'dia' if modo == variaveis.DIA else 'hora'}{'s' if salto > 1 else ''}"
     st.caption(f"{len(momentos)} quadros, um a cada {passo}, com a escala de cores travada para "
                f"o período inteiro. {len(gif) / 1e6:.1f} MB.")
-    st.download_button(f"Baixar GIF — {produto.nome.lower()}", gif, mime="image/gif",
-                       key=f"baixar_{chave}",
-                       file_name=f"Animacao_{produto.nome.lower().replace('/', '').replace(' ', '_')}_"
-                                 f"{momentos[0]:%Y%m%d}_a_{momentos[-1]:%Y%m%d}.gif")
+
+
+def carimbo_do_momento(modo: str, momento, intervalo: tuple) -> str:
+    # No nome dos arquivos baixados: a hora, o dia ou o período do mapa
+    if modo == variaveis.PERIODO:
+        return f"{intervalo[0]:%Y%m%d}_a_{intervalo[1]:%Y%m%d}"
+    return f"{momento:%Y%m%d}" if modo == variaveis.DIA else f"{momento:%Y%m%d_%H}h"
+
+
+def carimbo_da_chuva(rotulo: str, comeco, ate) -> str:
+    # O do período leva no nome do arquivo os dias que soma, como o "período inteiro" dos Mapas Boletim
+    if rotulo == chuva_calc.PERIODO:
+        return (f"{comeco:%Y%m%d}_a_{ate - timedelta(days=1):%Y%m%d}" if ate.hour == 0
+                else f"{comeco:%Y%m%d}_a_{ate:%Y%m%d_%H}h")
+    return f"{ate:%Y%m%d_%H}h"
 
 
 def painel_da_chuva(rotulo: str, valores: pd.Series, janela: str, subtitulo: str, carimbo: str,
                     rotulos: bool, uf: str, niveis=None, apoio=None) -> None:
-    """Uma coluna da linha de acumulados: quanto choveu na janela que termina no fim do período.
-
-    `janela` é o intervalo como a tela o escreve; `subtitulo`, como o relatório escreve.
-    """
     legenda = chuva_calc.legenda(rotulo)
     st.markdown(f"**{legenda}**")
     if valores.dropna().empty:
@@ -862,7 +939,7 @@ def painel_da_chuva(rotulo: str, valores: pd.Series, janela: str, subtitulo: str
         return
 
     png = mapa_do_instante(valores, legenda, "mm", "Blues", 1, janela, rotulos, uf,
-                           niveis, apoio=apoio)
+                           niveis, apoio=apoio, agrupar=True)
     if png is None:
         st.warning(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram chuva em {janela}.")
         return
@@ -870,17 +947,19 @@ def painel_da_chuva(rotulo: str, valores: pd.Series, janela: str, subtitulo: str
     st.image(png, width="stretch")
     if niveis is not None:
         st.image(barra_de_escala("Blues", tuple(niveis), "mm"), width="stretch")
-    st.caption(f"{valores.min():.1f} a {valores.max():.1f} mm · {valores.notna().sum()} estações · "
-               f"soma das horas de {janela}.")
-    medida = "chuva do período" if rotulo == chuva_calc.PERIODO else f"chuva {rotulo}"
+    st.caption(f"{valores.min():.1f} a {valores.max():.1f} mm · {estacoes_no_mapa(valores)} · "
+               f"soma das horas de {janela}.{credito_do_cemaden(valores)}"
+               + nota_do_grupo(valores, legenda, uf))
     arquivo = carimbo if rotulo == chuva_calc.PERIODO else rotulo.replace(" ", "")
-    st.download_button(f"Baixar PNG — {medida}", png, mime="image/png",
-                       key=f"baixar_chuva_{rotulo}", file_name=f"Mapa_chuva_{arquivo}.png")
     nome = boletim.nome_da_chuva(rotulo)
-    botao_do_boletim(medida, f"chuva_{rotulo}",
-                     boletim.nome_do_arquivo(nome, uf, carimbo),
-                     desenho_do_boletim(valores, nome, "Chuva", "mm", "Blues", 1, subtitulo, uf, niveis,
-                                        apoio=apoio))
+    with menu_de_baixar(f"chuva_{rotulo}"):
+        botao_do_png(png, f"baixar_chuva_{rotulo}", f"Mapa_chuva_{arquivo}.png")
+        botao_do_boletim(f"chuva_{rotulo}",
+                         boletim.nome_do_arquivo(nome, uf, carimbo),
+                         desenho_do_boletim(valores, nome, "Chuva", "mm", "Blues", 1, subtitulo, uf, niveis,
+                                            apoio=apoio))
+        botoes_do_sig(f"chuva_{rotulo}", boletim.nome_do_arquivo(nome, uf, carimbo), valores, apoio,
+                      legenda, "mm", 1, uf, subtitulo)
 
 
 @st.cache_data(show_spinner=False, max_entries=2)
@@ -888,11 +967,6 @@ def risco_avaliado(leituras: pd.DataFrame, estacoes_do_estado: pd.DataFrame, uf:
     # `leituras` e `estacoes_do_estado` já vêm com as vizinhas dentro: a grade de risco de uma
     # célula da divisa depende do que acontece dos dois lados. Quem separa o produto do apoio é
     # `risco.da_uf`, na aba.
-    """As horas da janela avaliadas pela regra 30-30-30, com a grade de cada uma.
-
-    São três interpolações por hora — 31 ms cada, ~5 s numa semana —, e por isso fica em cache e
-    com barra: quem mexe no deslizante não pode pagar isso de novo a cada passo.
-    """
     completas = risco.por_estacao(leituras, estacoes_do_estado)
     if not completas:
         return [], {}
@@ -910,12 +984,6 @@ def risco_avaliado(leituras: pd.DataFrame, estacoes_do_estado: pd.DataFrame, uf:
 @st.cache_data(show_spinner=False, max_entries=30)
 def mapa_de_risco(grade, pontos: pd.DataFrame, coluna: str, quando: str, detalhes: bool, uf: str,
                   dpi: int = DPI_MAPA) -> bytes | None:
-    """PNG do mapa de níveis de risco: a superfície em quatro classes e as estações por cima.
-
-    Com `detalhes`, cada estação leva o seu nível escrito e, no mapa de uma hora, os pontinhos das
-    condições atendidas — temperatura, umidade e rajada, da esquerda para a direita. O do dia e o
-    do período só levam o nível: juntam horas diferentes (`risco.indicadores`).
-    """
     gdf = mapas.preparar_pontos(pontos, coluna, quando)
     if gdf is None:
         return None
@@ -932,7 +1000,6 @@ def mapa_de_risco(grade, pontos: pd.DataFrame, coluna: str, quando: str, detalhe
 @st.cache_data(show_spinner=False, max_entries=6)
 def mapa_de_horas_altas(grade, pontos: pd.DataFrame, quando: str, detalhes: bool,
                         uf: str) -> bytes | None:
-    """PNG do mapa de exposição: em quantas horas cada lugar esteve no risco alto."""
     gdf = mapas.preparar_pontos(pontos, risco_fogo.COLUNA_HORAS_ALTO, quando)
     if gdf is None:
         return None
@@ -950,12 +1017,8 @@ def mapa_de_horas_altas(grade, pontos: pd.DataFrame, quando: str, detalhes: bool
 @st.cache_data(show_spinner=False, max_entries=2)
 def gif_do_risco(instantes: tuple, detalhes: bool, uf: str, _avaliadas: dict,
                  _do_estado: set | None = None, retiradas_do_mapa: tuple = ()) -> bytes | None:
-    """A sequência das horas de risco, com a data e a hora escritas em cada quadro.
-
-    `_avaliadas` não entra na chave do cache (é um dicionário de grades, caro de resumir): as
-    horas escolhidas já identificam o que está sendo desenhado, junto das estações retiradas dos
-    mapas, que mudam as grades sem mudar as horas.
-    """
+    # retiradas_do_mapa só entra na chave do cache: as estações retiradas mudam as grades de
+    # _avaliadas sem mudar as horas
     barra = st.progress(0.0, text="Desenhando o GIF do risco")
     quadros = []
     for indice, hora in enumerate(instantes, start=1):
@@ -974,10 +1037,6 @@ def gif_do_risco(instantes: tuple, detalhes: bool, uf: str, _avaliadas: dict,
 
 
 def ordem_das_estacoes(horaria: pd.DataFrame) -> list[str]:
-    """As estações da que passou mais horas em risco alto para a que passou menos.
-
-    A mesma ordem nos três gráficos: sem isso, comparar um com o outro vira caça ao nome.
-    """
     por_nivel = (horaria.pivot_table(index="Estação", columns=risco_fogo.COLUNA_NIVEL_HORA,
                                      values="dia", aggfunc="count")
                  .reindex(columns=[1, risco.NIVEL_MEDIO, risco.NIVEL_ALTO]).fillna(0))
@@ -997,7 +1056,6 @@ def _legenda_dos_niveis(niveis: list[int]) -> alt.Legend:
 
 
 def barras_de_niveis(horaria: pd.DataFrame, ordem: list[str]) -> alt.Chart:
-    """Quantas horas cada estação passou em cada nível, empilhadas do alto para o baixo."""
     contagem = (horaria[horaria[risco_fogo.COLUNA_NIVEL_HORA] > 0]
                 .groupby(["Estação", risco_fogo.COLUNA_NIVEL_HORA]).size().reset_index(name="Horas"))
     return (alt.Chart(contagem)
@@ -1018,7 +1076,6 @@ def barras_de_niveis(horaria: pd.DataFrame, ordem: list[str]) -> alt.Chart:
 
 
 def calendario_de_risco(horaria: pd.DataFrame, ordem: list[str]) -> alt.Chart:
-    """O pior nível de cada estação em cada dia — a leitura de relance da semana."""
     por_dia = (horaria.groupby(["Estação", "dia"])[risco_fogo.COLUNA_NIVEL_HORA].max()
                .reset_index().assign(dia=lambda tabela: tabela["dia"].astype(str)))
     return (alt.Chart(por_dia)
@@ -1036,11 +1093,6 @@ def calendario_de_risco(horaria: pd.DataFrame, ordem: list[str]) -> alt.Chart:
 
 
 def condicoes_do_dia(horaria: pd.DataFrame, dia, ordem: list[str]) -> alt.Chart:
-    """Quantas horas cada condição valeu, estação por estação, naquele dia.
-
-    É o gráfico que responde "o risco veio do calor, da secura ou do vento?" — a pergunta que o
-    nível sozinho não responde.
-    """
     do_dia = horaria[horaria["dia"] == dia]
     somas = (do_dia.groupby("Estação")[risco_fogo.COLUNAS_CONDICOES].sum().reset_index()
              .melt("Estação", var_name="Condição", value_name="Horas"))
@@ -1067,80 +1119,73 @@ def condicoes_do_dia(horaria: pd.DataFrame, dia, ordem: list[str]) -> alt.Chart:
 # =====================================================
 @st.cache_resource(show_spinner=False, max_entries=1)
 def guarda_da_previsao() -> previsao.Guarda:
-    """A previsão guardada, uma só no processo: todos os que abrem o painel dividem a mesma.
-
-    São as estações e a grade de 0,5° de MS nos três modelos, uns 26 MB (medido em 08/10: 7,7 MB a
-    grade de um modelo): a função não tem argumentos, e a entrada é uma só.
-    """
     return previsao.Guarda()
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def rodadas_atuais() -> tuple[dict | None, str | None]:
-    """A rodada que o Open-Meteo está servindo de cada modelo, conferida no máximo a cada 5 minutos.
+# O nome de cada conjunto de pontos na guarda da página e no banco
+CONJUNTOS_NO_BANCO = {"grade": "grade", "estações": "estacao", "grade-semanas": "grade",
+                      "estações-semanas": "estacao"}
 
-    Conferir não gasta cota, mas são três pedidos, e o script roda a cada clique. A falha fica
-    guardada pelos mesmos 5 minutos: com o Open-Meteo fora do ar, cada clique esperaria de novo as
-    três tentativas de cada pedido.
-    """
+
+@st.cache_data(ttl=300, show_spinner=False)
+def rodadas_atuais(conjunto: str) -> tuple[dict | None, str | None]:
     try:
-        return openmeteo.rodadas(config.MODELOS_PREVISAO), None
-    except openmeteo.ErroOpenMeteo as erro:
+        return fonte.rodadas_da_previsao(conjunto, config.MODELOS_PREVISAO), None
+    except fonte.ErroPrevisao as erro:
         return None, str(erro)
 
 
 def previsao_dos_pontos(conjunto: str, pontos: pd.DataFrame,
                         modelos: tuple[str, ...]) -> tuple[list[pd.DataFrame], list[str]]:
-    """A previsão horária dos pontos, uma tabela por modelo, e os avisos para a tela.
-
-    `conjunto` nomeia os pontos na guarda: "estações" ou "grade".
-    """
-    rodadas, falha = rodadas_atuais()
+    no_banco = CONJUNTOS_NO_BANCO[conjunto]
+    rodadas, falha = rodadas_atuais(no_banco)
     tabelas, avisos = [], []
     for modelo in modelos:
-        tabela = _obter_previsao(conjunto, modelo, rodadas[modelo] if rodadas else None, falha,
-                                 lambda modelo=modelo: openmeteo.buscar(pontos, (modelo,)), avisos)
+        rodada = rodadas.get(modelo) if rodadas else None
+        tabela = _obter_previsao(conjunto, modelo, rodada, falha,
+                                 lambda modelo=modelo, rodada=rodada: fonte.previsao(no_banco, pontos, modelo, rodada),
+                                 avisos)
         if tabela is not None:
             tabelas.append(tabela)
     return tabelas, avisos
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def rodada_semanal_atual() -> tuple[datetime | None, str | None]:
-    """A rodada do EC46 que o Open-Meteo está servindo, conferida no máximo a cada 5 minutos."""
+def rodada_semanal_atual(conjunto: str) -> tuple[datetime | None, str | None]:
     try:
-        return openmeteo.rodadas((config.MODELO_SEMANAS,))[config.MODELO_SEMANAS], None
-    except openmeteo.ErroOpenMeteo as erro:
+        return fonte.rodada_das_semanas(conjunto), None
+    except fonte.ErroPrevisao as erro:
         return None, str(erro)
 
 
 def semanas_dos_pontos(conjunto: str, pontos: pd.DataFrame) -> tuple[pd.DataFrame | None, list[str]]:
-    """As anomalias semanais do EC46 nos pontos, guardadas como as dos outros modelos."""
-    rodada, falha = rodada_semanal_atual()
+    no_banco = CONJUNTOS_NO_BANCO[conjunto]
+    rodada, falha = rodada_semanal_atual(no_banco)
     avisos = []
     tabela = _obter_previsao(conjunto, config.MODELO_SEMANAS, rodada, falha,
-                             lambda: openmeteo.buscar_semanas(pontos), avisos)
+                             lambda: fonte.semanas(no_banco, pontos, rodada), avisos)
     return tabela, avisos
 
 
 def _obter_previsao(conjunto: str, modelo: str, rodada: datetime | None, falha: str | None, buscar,
                     avisos: list[str]) -> pd.DataFrame | None:
-    """A previsão de um modelo, da guarda ou do Open-Meteo, com os avisos acrescentados à lista."""
     nome = openmeteo.NOMES[modelo]
+    origem = fonte.origem_da_previsao()   # "o Open-Meteo", "o banco"
     guarda = guarda_da_previsao()
     try:
         if not guarda.precisa_buscar(conjunto, modelo, rodada):
             obtida = guarda.obter(conjunto, modelo, rodada, buscar)
         elif rodada is None:
             # Nada guardado e nem os metadados responderam: a busca falharia do mesmo jeito,
-            # depois de esperar as tentativas
-            avisos.append(f"**{nome}** ficou de fora: o Open-Meteo não respondeu ({falha}).")
+            # depois de esperar as tentativas. No banco, sem falha, é o modelo que não tem rodada
+            motivo = f"{origem} não respondeu ({falha})" if falha else f"não há rodada dele n{origem}"
+            avisos.append(f"**{nome}** ficou de fora: {motivo}.")
             return None
         else:
-            with st.spinner(f"Buscando a previsão do {nome} ({conjunto}) no Open-Meteo…"):
+            with st.spinner(f"Buscando a previsão do {nome} ({conjunto}) n{origem}…"):
                 obtida = guarda.obter(conjunto, modelo, rodada, buscar)
-    except openmeteo.ErroOpenMeteo as erro:
-        avisos.append(f"**{nome}** ficou de fora: o Open-Meteo não respondeu ({erro}).")
+    except fonte.ErroPrevisao as erro:
+        avisos.append(f"**{nome}** ficou de fora: {origem} não respondeu ({erro}).")
         return None
     guardada = previsao.rodada_da(obtida.tabela)
     if obtida.aviso and guardada is not None:
@@ -1149,176 +1194,109 @@ def _obter_previsao(conjunto: str, modelo: str, rodada: datetime | None, falha: 
     return obtida.tabela
 
 
-def barras_da_chuva_prevista(longo: pd.DataFrame) -> alt.Chart:
-    """A chuva de cada dia, com os modelos lado a lado: chuva se lê em barra, e não em linha."""
+@dataclass
+class Prevista:
+    # O que os mapas de um modelo de 14 dias pedem, buscado uma vez por página (previsao_do_modelo)
+    modelo: str
+    rodada: datetime
+    horaria: pd.DataFrame
+    horaria_estacoes: pd.DataFrame
+    pontos_grade: pd.DataFrame
+    origem: str
+
+
+@dataclass
+class Semanal:
+    # O mesmo, nas semanas do EC46 (previsao_semanal)
+    rodada: datetime
+    grade: pd.DataFrame
+    estacoes: pd.DataFrame
+    pontos_grade: pd.DataFrame
+    origem: str
+
+
+def previsao_do_modelo(modelo: str, estacoes: pd.DataFrame, aviso) -> Prevista:
+    # A grade do estado e o ponto de cada estação, de um modelo só: o do mapa
+    pontos_grade = fonte.pontos_da_grade()
+    grades, avisos = previsao_dos_pontos("grade", pontos_grade, (modelo,))
+    nas_estacoes, avisos_estacoes = previsao_dos_pontos("estações", openmeteo.pontos_das_estacoes(estacoes), (modelo,))
+    for texto in avisos + avisos_estacoes:
+        aviso.warning(texto)
+    if not grades:
+        st.stop()
+    return Prevista(modelo, previsao.rodada_da(grades[0]), grades[0],
+                    nas_estacoes[0] if nas_estacoes else pd.DataFrame(columns=openmeteo.COLUNAS_HORARIAS),
+                    pontos_grade, origem_da_grade(modelo, pontos_grade))
+
+
+def dias_das_estacoes(prevista: Prevista) -> pd.DataFrame:
+    # A previsão de cada dia no ponto das estações; vazia se a busca das estações falhou
+    if prevista.horaria_estacoes.empty:
+        return pd.DataFrame()
+    return diario_previsto("estações", prevista.modelo, previsao.rodada_da(prevista.horaria_estacoes),
+                           prevista.horaria_estacoes)
+
+
+def previsao_semanal(estacoes: pd.DataFrame, aviso) -> Semanal:
+    pontos_grade = fonte.pontos_da_grade_semanal()
+    semanal_grade, avisos = semanas_dos_pontos("grade-semanas", pontos_grade)
+    semanal_estacoes, avisos_estacoes = semanas_dos_pontos("estações-semanas", openmeteo.pontos_das_estacoes(estacoes))
+    for texto in avisos + avisos_estacoes:
+        aviso.warning(texto)
+    if semanal_grade is None:
+        st.stop()
+    return Semanal(previsao.rodada_da(semanal_grade), semanal_grade,
+                   pd.DataFrame() if semanal_estacoes is None else semanal_estacoes, pontos_grade,
+                   origem_da_grade(config.MODELO_SEMANAS, pontos_grade))
+
+
+def barras_da_chuva_prevista(longo: pd.DataFrame, titulo: str = "Chuva (mm)", formato: str = ".1f") -> alt.Chart:
+    # Também as horas em risco alto, nos mapas interativos da previsão
     base = alt.Chart(longo).encode(
         x=alt.X("yearmonthdate(dt_local):O", title=None,
-                axis=alt.Axis(format="%d/%m", formatType="time", labelAngle=0, labelFontSize=FONTE_DOS_EIXOS)),
+                axis=alt.Axis(format="%d/%m", formatType="time", labelAngle=0,
+                              labelFontSize=FONTE_DOS_EIXOS)),
         xOffset=alt.XOffset("Modelo:N", sort=list(previsao.CORES)),
-        y=alt.Y("valor:Q", title="Chuva (mm)",
+        y=alt.Y("valor:Q", title=titulo,
                 axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS)))
     barras = base.mark_bar().encode(
         color=alt.Color("Modelo:N", title=None, legend=alt.Legend(orient="bottom"),
                         scale=_escala_das_cores(previsao.CORES, longo["Modelo"])),
         tooltip=[alt.Tooltip("yearmonthdate(dt_local):T", title="Dia", format="%d/%m"),
                  alt.Tooltip("Modelo:N"),
-                 alt.Tooltip("valor:Q", title="Chuva (mm)", format=".1f")])
+                 alt.Tooltip("valor:Q", title=titulo, format=formato)])
     # O número em cima de cada barra, e só onde choveu: os dias secos são a maioria, e um "0.0"
     # em cada um cobriria as barras que interessam
     numeros = (base.transform_filter(alt.datum.valor > 0)
                .mark_text(baseline="bottom", dy=-4, fontSize=FONTE_DOS_ROTULOS, color="#d0d0d0")
-               .encode(text=alt.Text("valor:Q", format=".1f")))
+               .encode(text=alt.Text("valor:Q", format=formato)))
     return (barras + numeros).properties(height=ALTURA_GRAFICO)
 
 
 # O Streamlit apaga o que se escolheu num widget quando ele não aparece numa execução. Cada
 # página aparece sozinha, então ir à previsão e voltar perderia as estações escolhidas no
-# observado. Ficam só os filtros da barra lateral: as escolhas dentro das abas voltam ao padrão.
+# observado. Ficam as escolhas que valem para mais de uma página (o estado; as estações e as
+# grandezas das séries; o modelo dos mapas da previsão, a estação e os modelos dos gráficos
+# dela); as outras voltam ao padrão.
 CHAVES_DOS_FILTROS = ("uf", "estacoes", "grandezas",
                       "previsao_estacao", "previsao_modelos", "previsao_grandezas", "previsao_modo",
-                      "mapas_previstos_modelo", "mapas_previstos", "semanas_mapas", "semanas_estacao")
+                      "mapas_previstos_modelo")
 
 
 def lembrar_filtros() -> None:
-    """Mantém o que se escolheu nos filtros de cada página. Chamada no topo de toda execução.
-
-    É a receita da documentação do Streamlit: regravar a chave a cada execução impede que ela seja
-    apagada. Tem de ser em toda execução, e não só na da outra página: regravada só lá, a chave
-    sobrevivia, mas o widget voltava vazio na tela, e o painel mostrava uma estação que o seletor
-    não mostrava. Por isso esses widgets não recebem valor inicial pelo parâmetro: ele entra no
-    estado com `setdefault`, antes do widget. Com os dois, o Streamlit avisa que o valor veio de
-    dois lugares.
-
-    O período fica de fora: o seletor de datas só sabe que é de intervalo pelo valor inicial. Ele
-    volta pelo valor guardado em `periodo_guardado`.
-    """
     for chave in CHAVES_DOS_FILTROS:
         if chave in st.session_state:
             st.session_state[chave] = st.session_state[chave]
 
 
-def pagina_previsao() -> None:
-    """A previsão de MS nas estações, com os três modelos lado a lado (passo 3 do escopo)."""
-    st.title("Previsão do tempo — Mato Grosso do Sul")
-    aviso = st.container()
-    # A previsão é do Open-Meteo, mas a lista das estações é do INMET
-    if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
-        st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
-        st.stop()
-
-    with st.sidebar:
-        st.header("Filtros")
-        try:
-            estacoes = carregar_estacoes(previsao.UF).sort_values("Estação")
-        except fonte.ErroFonte:
-            sem_lista_de_estacoes(aviso, previsao.UF)
-        nomes = estacoes["Estação"].tolist()
-        codigos = estacoes["CD_ESTACAO"].astype(str).tolist()
-        # Aqui a estação já vem escolhida, ao contrário do observado: a busca é das estações todas
-        # de uma vez, e escolher uma ou outra não muda o custo
-        if st.session_state.get("previsao_estacao") not in nomes:
-            st.session_state["previsao_estacao"] = (nomes[codigos.index(previsao.ESTACAO_INICIAL)]
-                                                    if previsao.ESTACAO_INICIAL in codigos else nomes[0])
-        nome = st.selectbox("Estação", nomes, key="previsao_estacao",
-                            help="A previsão é a do ponto da estação: é o que permite comparar, "
-                                 "depois, o previsto com o que ela mediu.")
-        st.session_state.setdefault("previsao_modelos", list(config.MODELOS_PREVISAO))
-        modelos = st.multiselect("Modelos", list(config.MODELOS_PREVISAO),
-                                 format_func=openmeteo.NOMES.get, key="previsao_modelos",
-                                 help="O ECMWF e o GFS vão até o dia 14; o ICON, até o dia 7.")
-        st.session_state.setdefault("previsao_grandezas", ["Temperatura", "Chuva"])
-        escolhidas = st.multiselect("Grandezas", [*previsao.GRANDEZAS, previsao.GRANDEZA_RISCO],
-                                    key="previsao_grandezas",
-                                    help="Cada grandeza ganha o seu gráfico, com os modelos lado a lado.")
-
-    if not modelos:
-        st.info("Escolha ao menos um modelo na barra lateral.")
-        st.stop()
-    tabelas, avisos = previsao_dos_pontos("estações", openmeteo.pontos_das_estacoes(estacoes), tuple(modelos))
-    for texto in avisos:
-        aviso.warning(texto)
-    if not tabelas:
-        st.stop()
-    codigo = str(estacoes.set_index("Estação").loc[nome, "CD_ESTACAO"])
-    horaria = pd.concat([tabela[tabela["ponto"] == codigo] for tabela in tabelas], ignore_index=True)
-
-    # Por dia de saída: catorze dias hora a hora são 336 pontos por linha
-    st.session_state.setdefault("previsao_modo", "Por dia")
-    modo = MODOS_GRAFICO[st.radio("Agregação", list(MODOS_GRAFICO), horizontal=True, key="previsao_modo")]
-    rodadas = " · ".join(f"{openmeteo.NOMES[modelo]} {rodada:%d/%m %H} UTC" for modelo, rodada
-                         in horaria.groupby("modelo")["rodada_utc"].first().items())
-    st.caption(f"**Rodadas:** {rodadas}. Cada modelo é buscado de novo quando sai uma rodada dele, "
-               "de 6 em 6 horas. O dia vai da 01:00 à 00:00 do dia seguinte, como no observado; no "
-               "modo por dia entram só os dias inteiros. "
-               "Previsão: [Open-Meteo.com](https://open-meteo.com/), com dados do ECMWF, da NOAA e "
-               "do DWD ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)).")
-    st.markdown(ESTILO_BALAO, unsafe_allow_html=True)
-    if not escolhidas:
-        st.info("Escolha ao menos uma grandeza na barra lateral.")
-
-    desde = pd.Timestamp.now(tz=config.FUSO_MS).floor("h")
-    # Na ordem do catálogo, e não na da escolha: a direção fica logo depois do vento
-    for grandeza in [nome for nome in previsao.GRANDEZAS if nome in escolhidas]:
-        dados_grandeza = previsao.GRANDEZAS[grandeza]
-        longo = previsao.series(horaria, grandeza, modo, desde)
-        if longo.empty:
-            st.warning(f"{grandeza}: nenhum modelo trouxe essa variável para {nome}.")
-            continue
-        st.subheader(grandeza)
-        if grandeza == "Chuva" and modo == variaveis.DIA:
-            grafico = barras_da_chuva_prevista(longo)
-        else:
-            grafico = desenhar(longo.rename(columns={"Modelo": "Estação"}),
-                               f"{grandeza} ({dados_grandeza.unidade})", dados_grandeza.zero_na_base,
-                               modo, dados_grandeza.decimais, cores=previsao.CORES)
-        st.altair_chart(grafico, width="stretch")
-        regras = " · ".join(f"**{serie.nome}**: {serie.regra}" for serie in dados_grandeza.series[modo])
-        if dados_grandeza.circular:
-            regras += (". A direção ligada por linha engana: entre 350° e 10° o vento mal mudou, mas o "
-                       "traço desce o gráfico inteiro.")
-        if grandeza == "Chuva":
-            totais = previsao.chuva_total(horaria, desde)
-            regras += ". **Total previsto:** " + " · ".join(
-                f"{linha.Modelo} {linha.chuva:.1f} mm até {linha.ate:%d/%m}" for linha in totais.itertuples())
-        st.caption(regras)
-
-    if previsao.GRANDEZA_RISCO in escolhidas:
-        st.subheader(previsao.GRANDEZA_RISCO)
-        dias = previsao.diario_com_risco(horaria)
-        dias = dias[(dias["horas"] == 24) & (dias["dia_previsto"] >= desde.date())].dropna(subset=["risco_max"])
-        if dias.empty:
-            st.warning(f"Nenhum modelo trouxe as três variáveis da regra para {nome}.")
-        else:
-            st.altair_chart(calendario_do_risco_previsto(dias), width="stretch")
-            st.caption("O pior nível de cada dia pela regra 30-30-30 (temperatura ≥ 30 °C, umidade ≤ 30 %, "
-                       "rajada ≥ 30 km/h), aplicada a cada hora prevista, como no produto. O modelo dá o valor "
-                       "da hora cheia, e a estação mede a máxima e a mínima dentro da hora: o risco previsto "
-                       "tende a sair um pouco abaixo do medido. No balão, as horas em risco alto.")
-
-    with st.expander("Ver e baixar a previsão diária desta estação"):
-        visivel = previsao.planilha(horaria)
-        st.caption("Um dia por linha e modelo, pela regra do observado. `horas` diz quantas horas o "
-                   "dia tem na previsão: menos de 24 no primeiro, no último e no fim do ICON.")
-        st.dataframe(visivel, width="stretch", height=300, hide_index=True)
-        st.download_button("Baixar CSV", visivel.to_csv(index=False).encode("utf-8-sig"),
-                           file_name=f"previsao_{codigo}_{desde:%Y%m%d_%H}h.csv", mime="text/csv")
-
-
 @st.cache_data(show_spinner=False, max_entries=12)
 def diario_previsto(conjunto: str, modelo: str, rodada: datetime, _horaria: pd.DataFrame) -> pd.DataFrame:
-    """O dia de cada ponto, tirado das horas uma vez por rodada.
-
-    As horas da grade são 60 mil linhas por modelo: refazer a soma a cada clique custaria mais que
-    o desenho. A chave é o conjunto, o modelo e a rodada, que é o que muda a tabela. Vem com o pior
-    nível de risco de fogo de cada dia e as horas em risco alto.
-    """
     return previsao.diario_com_risco(_horaria, config.FUSO_MS)
 
 
 @st.cache_data(show_spinner=False, max_entries=12)
 def risco_na_grade_prevista(modelo: str, rodada: datetime, dia: date, _horaria: pd.DataFrame,
                             _pontos: pd.DataFrame) -> tuple[np.ndarray, np.ndarray] | None:
-    """O pior nível e as horas em risco alto do dia, célula a célula: a regra aplicada a cada hora."""
     base = base_cartografica(previsao.UF)
     return previsao.risco_na_grade(_horaria, _pontos, dia, base.lon_grade, base.lat_grade, config.FUSO_MS)
 
@@ -1326,12 +1304,17 @@ def risco_na_grade_prevista(modelo: str, rodada: datetime, dia: date, _horaria: 
 @st.cache_data(show_spinner=False, max_entries=20)
 def mapa_de_risco_previsto(origem: tuple, nome: str, rotulos: bool, _grade: np.ndarray,
                            _estacoes: pd.DataFrame) -> bytes:
-    """PNG do mapa do pior nível de risco previsto para a tela, com as cores do produto."""
+    return png_do_risco_previsto(nome, rotulos, _grade, _estacoes)
+
+
+def png_do_risco_previsto(nome: str, rotulos: bool, grade: np.ndarray, estacoes: pd.DataFrame,
+                          dpi: int = DPI_MAPA) -> bytes:
+    # Fora do cache, para os quadros do GIF não tirarem dele os mapas da tela
     espec = mapas.EspecClasses(nome, "", "", config.CORES_RISCO, config.ROTULOS_RISCO)
-    figura = mapas.mapa_classes_interpolado(_grade, _pontos_previstos(_estacoes, nome), nome, espec,
+    figura = mapas.mapa_classes_interpolado(grade, _pontos_previstos(estacoes, nome), nome, espec,
                                             base_cartografica(previsao.UF), tela=mapas.Tela(rotulos=rotulos))
     arquivo = io.BytesIO()
-    figura.savefig(arquivo, format="png", dpi=DPI_MAPA, bbox_inches="tight", facecolor="white")
+    figura.savefig(arquivo, format="png", dpi=dpi, bbox_inches="tight", facecolor="white")
     return arquivo.getvalue()
 
 
@@ -1339,25 +1322,24 @@ def mapa_de_risco_previsto(origem: tuple, nome: str, rotulos: bool, _grade: np.n
 def mapa_previsto(origem: tuple, nome: str, paleta: str, unidade: str, decimais: int, setas: bool,
                   rotulos: bool, niveis: tuple | None, _grade: np.ndarray, _estacoes: pd.DataFrame,
                   com_sinal: bool = False) -> bytes:
-    """PNG de um mapa da previsão para a tela, sem a moldura.
+    return png_previsto(nome, paleta, unidade, decimais, setas, rotulos, niveis, _grade, _estacoes, com_sinal)
 
-    `origem` diz de que previsão é o desenho: o modelo, a rodada e o dia (ou a semana). Com o
-    mapa e a escala, é a chave; a superfície e as estações vêm deles e ficam fora dela, que não
-    precisa comparar 10 mil números a cada clique.
-    """
+
+def png_previsto(nome: str, paleta: str, unidade: str, decimais: int, setas: bool, rotulos: bool,
+                 niveis: tuple | None, grade: np.ndarray, estacoes: pd.DataFrame, com_sinal: bool = False,
+                 dpi: int = DPI_MAPA) -> bytes:
     espec = mapas.EspecMapa(tabela="", coluna=nome, titulo=nome, subtitulo="", arquivo="",
                             cmap=paleta, unidade=f"{nome} ({unidade})", ranking="",
                             decimais=decimais, direcao_vento=setas, com_sinal=com_sinal)
-    figura = mapas.mapa_de_grade(_grade, _pontos_previstos(_estacoes, nome), espec,
+    figura = mapas.mapa_de_grade(grade, _pontos_previstos(estacoes, nome), espec,
                                  base_cartografica(previsao.UF), niveis=list(niveis) if niveis else 20,
                                  tela=mapas.Tela(rotulos=rotulos))
     arquivo = io.BytesIO()
-    figura.savefig(arquivo, format="png", dpi=DPI_MAPA, bbox_inches="tight", facecolor="white")
+    figura.savefig(arquivo, format="png", dpi=dpi, bbox_inches="tight", facecolor="white")
     return arquivo.getvalue()
 
 
 def _pontos_previstos(estacoes: pd.DataFrame, nome: str):
-    """As estações com a previsão no ponto delas, prontas para o mapa; vazias se não houver."""
     pontos = mapas.preparar_pontos(estacoes, nome, nome)
     if pontos is None:
         colunas = ["Estação", "Latitude", "Longitude", nome, "Direção (°)"]
@@ -1369,16 +1351,14 @@ def _pontos_previstos(estacoes: pd.DataFrame, nome: str):
 def painel_do_mapa_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: datetime, dia: date,
                             hoje: date, rotulos: bool, ajustar: bool, diaria_grade: pd.DataFrame,
                             pontos_grade: pd.DataFrame, diaria_estacoes: pd.DataFrame,
-                            estacoes: pd.DataFrame, horaria_grade: pd.DataFrame) -> None:
-    """Uma coluna da linha de mapas da previsão: o desenho, a escala, a regra e os botões."""
+                            estacoes: pd.DataFrame, horaria_grade: pd.DataFrame) -> DeltaGenerator | None:
     st.markdown(f"**{mapa.nome}**")
     if mapa.risco:
-        painel_do_risco_previsto(mapa, modelo, rodada, dia, hoje, rotulos, horaria_grade, pontos_grade,
-                                 diaria_estacoes, estacoes)
-        return
+        return painel_do_risco_previsto(mapa, modelo, rodada, dia, hoje, rotulos, horaria_grade, pontos_grade,
+                                        diaria_estacoes, estacoes)
     base = base_cartografica(previsao.UF)
-    grade = previsao.superficie(previsao.valores_do_dia(diaria_grade, mapa, dia, hoje), pontos_grade,
-                                base.lon_grade, base.lat_grade)
+    valores = previsao.valores_do_dia(diaria_grade, mapa, dia, hoje)
+    grade = previsao.superficie(valores, pontos_grade, base.lon_grade, base.lat_grade)
     if grade is None:
         st.info(f"O {openmeteo.NOMES[modelo]} não traz {mapa.nome.lower()} para {previsao.nome_do_dia(dia)}.")
         return
@@ -1396,28 +1376,29 @@ def painel_do_mapa_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: da
                f"{mapa.unidade} · {mapa.regra}.")
 
     carimbo = previsao.carimbo(modelo, rodada, mapa, dia, hoje)
-    st.download_button(f"Baixar PNG — {mapa.nome.lower()}", png, mime="image/png",
-                       key=f"baixar_previsto_{mapa.nome}",
-                       file_name=f"Mapa_{mapa.titulo.replace(' ', '_')}_{carimbo}.png")
     espec = boletim.espec(mapa.titulo, mapa.grandeza, mapa.unidade, mapa.paleta, mapa.decimais,
                           previsao.UF, previsao.subtitulo(mapa, dia, hoje), mapa.setas,
                           credito=previsao.CREDITO, coluna=mapa.nome)
     gdf = _pontos_previstos(pontos, mapa.nome)
-    botao_do_boletim(mapa.nome.lower(), f"previsto_{mapa.nome}",
-                     boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo),
-                     lambda: mapas.mapa_de_grade(grade, gdf, espec, base,
-                                                 niveis=list(escala) if escala else 20))
+    menu = menu_de_baixar(f"previsto_{mapa.nome}")
+    with menu:
+        botao_do_png(png, f"baixar_previsto_{mapa.nome}", f"Mapa_{mapa.titulo.replace(' ', '_')}_{carimbo}.png")
+        botao_do_boletim(f"previsto_{mapa.nome}",
+                         boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo),
+                         lambda: mapas.mapa_de_grade(grade, gdf, espec, base,
+                                                     niveis=list(escala) if escala else 20))
+        botao_do_geotiff(f"previsto_{mapa.nome}",
+                         nome_do_geotiff(boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo)),
+                         geotiff_previsto(valores, pontos_grade, mapa.nome, mapa.unidade,
+                                          previsao.subtitulo(mapa, dia, hoje),
+                                          metodo_previsto(modelo, rodada, pontos_grade)))
+    return menu
 
 
 def painel_do_risco_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: datetime, dia: date,
                              hoje: date, rotulos: bool, horaria_grade: pd.DataFrame,
                              pontos_grade: pd.DataFrame, diaria_estacoes: pd.DataFrame,
-                             estacoes: pd.DataFrame) -> None:
-    """Os mapas do risco de fogo previsto: o pior nível do dia ou as horas em risco alto.
-
-    A superfície sai da regra aplicada célula a célula, hora a hora (`previsao.risco_na_grade`), e
-    os números sobre as estações, da regra aplicada às horas previstas no ponto de cada uma.
-    """
+                             estacoes: pd.DataFrame) -> DeltaGenerator | None:
     base = base_cartografica(previsao.UF)
     calculado = risco_na_grade_prevista(modelo, rodada, dia, _horaria=horaria_grade, _pontos=pontos_grade)
     if calculado is None:
@@ -1456,15 +1437,19 @@ def painel_do_risco_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: d
         desenhar = lambda: mapas.mapa_de_grade(horas_alto, gdf, espec, base, niveis=niveis)  # noqa: E731
 
     arquivo = mapa.titulo.replace(" — ", " ")   # sem o travessão no nome do arquivo
-    st.download_button(f"Baixar PNG — {mapa.nome.lower()}", png, mime="image/png",
-                       key=f"baixar_previsto_{mapa.nome}",
-                       file_name=f"Mapa_{arquivo.replace(' ', '_')}_{carimbo}.png")
-    botao_do_boletim(mapa.nome.lower(), f"previsto_{mapa.nome}",
-                     boletim.nome_do_arquivo(arquivo, previsao.UF, carimbo), desenhar)
+    menu = menu_de_baixar(f"previsto_{mapa.nome}")
+    with menu:
+        botao_do_png(png, f"baixar_previsto_{mapa.nome}", f"Mapa_{arquivo.replace(' ', '_')}_{carimbo}.png")
+        botao_do_boletim(f"previsto_{mapa.nome}",
+                         boletim.nome_do_arquivo(arquivo, previsao.UF, carimbo), desenhar)
+        botao_do_geotiff(f"previsto_{mapa.nome}",
+                         nome_do_geotiff(boletim.nome_do_arquivo(arquivo, previsao.UF, carimbo)),
+                         geotiff_do_risco_previsto(mapa, nivel, horas_alto, subtitulo, modelo, rodada),
+                         AJUDA_DO_GEOTIFF_DO_RISCO if mapa.risco == "nivel" else AJUDA_DO_GEOTIFF_DAS_HORAS)
+    return menu
 
 
 def calendario_do_risco_previsto(dias: pd.DataFrame) -> alt.Chart:
-    """O pior nível de cada dia em cada modelo, na estação: as duas semanas de relance."""
     dados = dias.assign(Modelo=dias["modelo"].map(openmeteo.NOMES),
                         dia=dias["dia_previsto"].map(previsao.nome_do_dia),
                         risco_max=dias["risco_max"].astype(int))
@@ -1472,7 +1457,8 @@ def calendario_do_risco_previsto(dias: pd.DataFrame) -> alt.Chart:
     return (alt.Chart(dados)
             .mark_rect(stroke="#111111", strokeWidth=1)
             .encode(x=alt.X("dia:O", sort=ordem_dos_dias, title=None, axis=alt.Axis(labelAngle=0, labelFontSize=FONTE_DOS_EIXOS)),
-                    y=alt.Y("Modelo:N", sort=list(previsao.CORES), title=None, axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)),
+                    y=alt.Y("Modelo:N", sort=list(previsao.CORES), title=None,
+                            axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)),
                     color=alt.Color("risco_max:O", title="Pior nível do dia",
                                     scale=alt.Scale(domain=[0, 1, risco.NIVEL_MEDIO, risco.NIVEL_ALTO],
                                                     range=config.CORES_RISCO),
@@ -1488,93 +1474,14 @@ def calendario_do_risco_previsto(dias: pd.DataFrame) -> alt.Chart:
             .properties(height=alt.Step(32)))
 
 
-def pagina_mapas_previstos() -> None:
-    """Os mapas dos dias 1 a 14 de MS, um modelo por vez (passo 4 do escopo)."""
-    st.title("Mapas da previsão — Mato Grosso do Sul")
-    aviso = st.container()
-    # A superfície é do Open-Meteo; os números sobre as estações precisam da lista do INMET
-    if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
-        st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
-        st.stop()
-
-    with st.sidebar:
-        st.header("Filtros")
-        st.session_state.setdefault("mapas_previstos_modelo", config.MODELOS_PREVISAO[0])
-        modelo = st.radio("Modelo", list(config.MODELOS_PREVISAO), format_func=openmeteo.NOMES.get,
-                          key="mapas_previstos_modelo",
-                          help="Um modelo por vez. O ECMWF e o GFS vão até o dia 14; o ICON, até o dia 7.")
-        st.session_state.setdefault("mapas_previstos", list(previsao.PADRAO_MAPAS))
-        escolhidos = st.multiselect("Mapas", list(previsao.MAPAS), key="mapas_previstos",
-                                    help="A chuva acumulada soma de hoje até o dia escolhido.")
-    try:
-        estacoes = carregar_estacoes(previsao.UF).sort_values("Estação")
-    except fonte.ErroFonte:
-        sem_lista_de_estacoes(aviso, previsao.UF)
-    if not escolhidos:
-        st.info("Escolha ao menos um mapa na barra lateral.")
-        st.stop()
-
-    pontos_grade = openmeteo.pontos_da_grade()
-    grades, avisos = previsao_dos_pontos("grade", pontos_grade, (modelo,))
-    nas_estacoes, avisos_estacoes = previsao_dos_pontos("estações", openmeteo.pontos_das_estacoes(estacoes),
-                                                        (modelo,))
-    for texto in avisos + avisos_estacoes:
-        aviso.warning(texto)
-    if not grades:
-        st.stop()
-    rodada = previsao.rodada_da(grades[0])
-    diaria_grade = diario_previsto("grade", modelo, rodada, grades[0])
-    diaria_estacoes = (diario_previsto("estações", modelo, previsao.rodada_da(nas_estacoes[0]), nas_estacoes[0])
-                       if nas_estacoes else pd.DataFrame())
-
-    hoje = pd.Timestamp.now(tz=config.FUSO_MS).date()
-    dias = previsao.dias_inteiros(diaria_grade, hoje)
-    if not dias:
-        st.warning(f"O {openmeteo.NOMES[modelo]} não trouxe nenhum dia inteiro de hoje em diante.")
-        st.stop()
-    # Trocando de modelo, o dia escolhido pode não existir no outro (o ICON para no dia 7): fica o
-    # último que o modelo tem até ele, e não o primeiro, para quem olhava o fim da semana
-    escolhido = st.session_state.get("mapas_previstos_dia")
-    if escolhido not in dias:
-        st.session_state["mapas_previstos_dia"] = max((dia for dia in dias if escolhido and dia <= escolhido),
-                                                      default=dias[0])
-    dia = st.select_slider("Dia", options=dias, format_func=previsao.nome_do_dia, key="mapas_previstos_dia")
-    marcar, ajustar_escala = st.columns([1, 1])
-    with marcar:
-        rotulos = st.checkbox("Mostrar o valor de cada estação", value=True, key="mapas_previstos_rotulos",
-                              help="A previsão do mesmo modelo no ponto de cada estação.")
-    with ajustar_escala:
-        ajustar = st.checkbox("Ajustar a escala ao dado", value=False, key="mapas_previstos_ajustar",
-                              help="Desligada, a escala é a mesma dos mapas do observado: a mesma cor "
-                                   "quer dizer o mesmo valor, previsto ou medido.")
-    st.caption(f"**{openmeteo.NOMES[modelo]}**, rodada de {rodada:%d/%m %H} UTC. "
-               "Previsão: [Open-Meteo.com](https://open-meteo.com/), com dados do ECMWF, da NOAA e do "
-               "DWD ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)).")
-
-    # Na ordem do catálogo, e todas as linhas com a mesma quantidade de colunas, como no observado
-    ordem = [nome for nome in previsao.MAPAS if nome in escolhidos]
-    por_linha = min(len(ordem), MAPAS_POR_LINHA)
-    with st.spinner("Desenhando os mapas..."):
-        for primeiro in range(0, len(ordem), por_linha):
-            for coluna_tela, nome in zip(st.columns(por_linha), ordem[primeiro:primeiro + por_linha]):
-                with coluna_tela:
-                    painel_do_mapa_previsto(previsao.MAPAS[nome], modelo, rodada, dia, hoje, rotulos, ajustar,
-                                            diaria_grade, pontos_grade, diaria_estacoes, estacoes, grades[0])
-    espacamento = f"{config.GRADE_PREVISAO:g}".replace(".", ",")
-    st.caption(f"A superfície é a do próprio modelo, nos {len(pontos_grade)} pontos da grade de "
-               f"{espacamento}° que cobrem o estado, levada à resolução do mapa por interpolação bilinear: "
-               "não é IDW de estação. Os números sobre as estações são a previsão do mesmo modelo no ponto "
-               "de cada uma, e são eles que entram no ranking do PNG do boletim.")
-
-
 def painel_do_mapa_semanal(mapa: previsao.MapaSemanal, rodada: datetime, semana: date, rotulos: bool,
                            semanal_grade: pd.DataFrame, pontos_grade: pd.DataFrame,
-                           semanal_estacoes: pd.DataFrame, estacoes: pd.DataFrame, titulo: str) -> None:
-    """Uma coluna de mapas das semanas: o desenho, a escala divergente, a regra e os botões."""
+                           semanal_estacoes: pd.DataFrame, estacoes: pd.DataFrame,
+                           titulo: str) -> DeltaGenerator | None:
     st.markdown(f"**{titulo}**")
     base = base_cartografica(previsao.UF)
-    grade = previsao.superficie(previsao.valores_da_semana(semanal_grade, mapa, semana), pontos_grade,
-                                base.lon_grade, base.lat_grade)
+    valores = previsao.valores_da_semana(semanal_grade, mapa, semana)
+    grade = previsao.superficie(valores, pontos_grade, base.lon_grade, base.lat_grade)
     if grade is None:
         st.info(f"O EC46 não traz {mapa.nome.lower()} para a semana de {previsao.nome_da_semana(semana)}.")
         return
@@ -1591,9 +1498,6 @@ def painel_do_mapa_semanal(mapa: previsao.MapaSemanal, rodada: datetime, semana:
 
     carimbo = previsao.carimbo_da_semana(rodada, semana)
     chave = f"{mapa.nome}_{semana:%Y%m%d}"
-    st.download_button(f"Baixar PNG — {mapa.titulo.lower()}", png, mime="image/png",
-                       key=f"baixar_semana_{chave}",
-                       file_name=f"Mapa_{mapa.titulo.replace(' ', '_')}_{carimbo}.png")
     # O ranking é o dos maiores desvios, para cima ou para baixo, em qualquer mapa: o "mínima" do
     # nome, que nos outros mapas pede as menores, aqui não muda o que se procura
     espec = mapas.EspecMapa(tabela="", coluna=mapa.titulo, titulo=boletim.titulo(mapa.titulo, previsao.UF),
@@ -1603,19 +1507,22 @@ def painel_do_mapa_semanal(mapa: previsao.MapaSemanal, rodada: datetime, semana:
                             credito=previsao.CREDITO, ranking_absoluto=True,
                             com_sinal=True)
     gdf = _pontos_previstos(pontos, mapa.titulo)
-    botao_do_boletim(mapa.titulo.lower(), f"semana_{chave}",
-                     boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo),
-                     lambda: mapas.mapa_de_grade(grade, gdf, espec, base, niveis=list(escala)))
+    menu = menu_de_baixar(f"semana_{chave}")
+    with menu:
+        botao_do_png(png, f"baixar_semana_{chave}", f"Mapa_{mapa.titulo.replace(' ', '_')}_{carimbo}.png")
+        botao_do_boletim(f"semana_{chave}",
+                         boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo),
+                         lambda: mapas.mapa_de_grade(grade, gdf, espec, base, niveis=list(escala)))
+        botao_do_geotiff(f"semana_{chave}",
+                         nome_do_geotiff(boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo)),
+                         geotiff_semanal(mapa, valores, pontos_grade, semana, rodada))
+    return menu
 
 
-def semana_contra_o_normal(tabela: pd.DataFrame, grandeza: str) -> alt.Chart:
-    """A previsão de cada semana contra a normal da época, e a anomalia como a distância entre as duas.
-
-    A barra entre as linhas é o número dos mapas: vermelha (ou verde, na chuva) quando a semana fica
-    acima do normal, azul (ou marrom) quando fica abaixo.
-    """
-    _, _, unidade = previsao.SERIES_SEMANAIS[grandeza]
-    chuva = grandeza == "Chuva"
+def semana_contra_o_normal(tabela: pd.DataFrame, grandeza: str, unidade: str | None = None) -> alt.Chart:
+    # `grandeza` dá o título do eixo; sem `unidade`, ela vem de previsao.SERIES_SEMANAIS (a página Semanas)
+    unidade = unidade or previsao.SERIES_SEMANAIS[grandeza][2]
+    chuva = unidade == "mm"
     acima, abaixo = ("#1b7837", "#8c510a") if chuva else ("#d6604d", "#4393c3")
     ordem = list(tabela["rotulo"])
     # "12/10 a 18/10" em duas linhas: numa linha só, metade das semanas sumia do eixo por falta de lugar
@@ -1652,241 +1559,13 @@ def semana_contra_o_normal(tabela: pd.DataFrame, grandeza: str) -> alt.Chart:
     return alt.layer(barras, linhas, numeros).resolve_scale(color="independent").properties(height=320)
 
 
-def pagina_semanas() -> None:
-    """A anomalia semanal do EC46 em MS, até 6 semanas à frente (passo 5 do escopo)."""
-    st.title("Previsão por semana — Mato Grosso do Sul")
-    aviso = st.container()
-    # A superfície é do Open-Meteo; os números sobre as estações precisam da lista do INMET
-    if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
-        st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
-        st.stop()
-
-    try:
-        estacoes = carregar_estacoes(previsao.UF).sort_values("Estação")
-    except fonte.ErroFonte:
-        sem_lista_de_estacoes(aviso, previsao.UF)
-    with st.sidebar:
-        st.header("Filtros")
-        nomes = estacoes["Estação"].tolist()
-        codigos = estacoes["CD_ESTACAO"].astype(str).tolist()
-        if st.session_state.get("semanas_estacao") not in nomes:
-            st.session_state["semanas_estacao"] = (nomes[codigos.index(previsao.ESTACAO_INICIAL)]
-                                                   if previsao.ESTACAO_INICIAL in codigos else nomes[0])
-        nome_estacao = st.selectbox("Estação", nomes, key="semanas_estacao",
-                                    help="A do gráfico da semana contra o normal, no topo da página.")
-        st.session_state.setdefault("semanas_mapas", list(previsao.PADRAO_SEMANAIS))
-        # Um nome que deixou de existir (os mapas foram renomeados em 08/10) seria recusado pelo widget
-        st.session_state["semanas_mapas"] = [nome for nome in st.session_state["semanas_mapas"]
-                                             if nome in previsao.MAPAS_SEMANAIS] or list(previsao.PADRAO_SEMANAIS)
-        escolhidos = st.multiselect("Anomalias", list(previsao.MAPAS_SEMANAIS), key="semanas_mapas",
-                                    help="A anomalia de cada grandeza: quanto a semana deve ficar acima ou "
-                                         "abaixo do normal.")
-    if not escolhidos:
-        st.info("Escolha ao menos um mapa na barra lateral.")
-        st.stop()
-
-    pontos_grade = openmeteo.pontos_da_grade()
-    semanal_grade, avisos = semanas_dos_pontos("grade-semanas", pontos_grade)
-    semanal_estacoes, avisos_estacoes = semanas_dos_pontos("estações-semanas",
-                                                           openmeteo.pontos_das_estacoes(estacoes))
-    for texto in avisos + avisos_estacoes:
-        aviso.warning(texto)
-    if semanal_grade is None:
-        st.stop()
-    semanal_estacoes = pd.DataFrame() if semanal_estacoes is None else semanal_estacoes
-    rodada = previsao.rodada_da(semanal_grade)
-    semanas = previsao.semanas_inteiras(semanal_grade, rodada)
-    if not semanas:
-        st.warning("O EC46 não trouxe nenhuma semana inteira nesta rodada.")
-        st.stop()
-
-    codigo_estacao = str(estacoes.set_index("Estação").loc[nome_estacao, "CD_ESTACAO"])
-    st.subheader(f"{nome_estacao}: a semana contra o normal")
-    colunas_graficos = st.columns(2)
-    for coluna_tela, grandeza in zip(colunas_graficos, previsao.SERIES_SEMANAIS):
-        with coluna_tela:
-            tabela = previsao.semana_contra_o_normal(semanal_estacoes, codigo_estacao, grandeza, rodada)
-            if tabela.empty:
-                st.info(f"O EC46 não trouxe {grandeza.lower()} para {nome_estacao}.")
-            else:
-                st.altair_chart(semana_contra_o_normal(tabela, grandeza), width="stretch")
-    st.caption("A linha cinza tracejada é a **normal da época**: a do próprio modelo, tirada das reprevisões "
-               "do ECMWF dos últimos anos para as mesmas semanas. A azul é a **previsão do EC46** para cada "
-               "semana (na chuva, o total da semana). A barra entre as duas é a **anomalia**, o número dos "
-               "mapas abaixo: o quanto a semana deve ficar acima ou abaixo do normal.")
-    st.divider()
-
-    ordem = [nome for nome in previsao.MAPAS_SEMANAIS if nome in escolhidos]
-    ver = st.radio("Ver", ["Uma semana", "Todas as semanas"], horizontal=True, key="semanas_ver",
-                   help="Todas as semanas mostra o primeiro mapa escolhido, uma semana em cada mapa: é "
-                        "como se vê a tendência mudar.")
-    if ver == "Uma semana":
-        if st.session_state.get("semanas_semana") not in semanas:
-            st.session_state["semanas_semana"] = semanas[0]
-        semana = st.select_slider("Semana", options=semanas, format_func=previsao.nome_da_semana,
-                                  key="semanas_semana")
-        paineis = [(previsao.MAPAS_SEMANAIS[nome], semana, nome) for nome in ordem]
-    else:
-        mapa = previsao.MAPAS_SEMANAIS[ordem[0]]
-        paineis = [(mapa, semana, f"{mapa.nome}, {previsao.nome_da_semana(semana)}") for semana in semanas]
-    rotulos = st.checkbox("Mostrar o valor de cada estação", value=True, key="semanas_rotulos",
-                          help="A anomalia do EC46 no ponto de cada estação.")
-    st.info("**Os números destes mapas são desvios do normal, e não temperaturas ou chuvas.** −2,0 °C quer "
-            "dizer uma semana 2 °C mais fria que o normal daquela época; +30 mm, 30 mm a mais de chuva que o "
-            "normal da semana.")
-    st.caption(f"**EC46**, a previsão estendida do ECMWF, na média dos membros; rodada de {rodada:%d/%m %H} UTC "
-               "(sai uma por dia). **Anomalia** é a previsão da semana menos a normal do próprio modelo para a "
-               "mesma época, tirada das reprevisões do ECMWF dos últimos anos: branco é o normal; azul, mais "
-               "frio, e vermelho, mais quente; marrom, menos chuva, e verde, mais. Dá a tendência da semana, e "
-               "não o tempo de um dia. A semana vai de segunda a domingo. Previsão: "
-               "[Open-Meteo.com](https://open-meteo.com/), com dados do ECMWF "
-               "([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)).")
-
-    por_linha = min(len(paineis), MAPAS_POR_LINHA)
-    with st.spinner("Desenhando os mapas..."):
-        for primeiro in range(0, len(paineis), por_linha):
-            for coluna_tela, (mapa, semana, titulo) in zip(st.columns(por_linha),
-                                                            paineis[primeiro:primeiro + por_linha]):
-                with coluna_tela:
-                    painel_do_mapa_semanal(mapa, rodada, semana, rotulos, semanal_grade, pontos_grade,
-                                           semanal_estacoes, estacoes, titulo)
-    espacamento = f"{config.GRADE_PREVISAO:g}".replace(".", ",")
-    st.caption(f"A superfície é a do EC46 nos {len(pontos_grade)} pontos da grade de {espacamento}°, levada à "
-               "resolução do mapa por interpolação bilinear, como nos mapas dos dias. Os números sobre as "
-               "estações são a anomalia no ponto de cada uma, e são eles que entram no ranking do PNG do "
-               "boletim.")
-
-
 # =====================================================
 # PÁGINAS
 # =====================================================
-@st.cache_data(ttl=3600, show_spinner=False)
-def tabela_das_estacoes(uf: str) -> pd.DataFrame:
-    """As estações do estado, numeradas, com o município, a altitude e desde quando operam."""
-    return referencia.tabela_de_referencia(carregar_estacoes(uf), base_cartografica(uf).municipios)
-
-
-def mapa_das_estacoes(tabela: pd.DataFrame, destacadas: pd.Series, uf: str) -> pdk.Deck:
-    """O mapa navegável com cada estação e o nome dela ao lado; as que a busca achou, em vermelho."""
-    base = base_cartografica(uf)
-    pontos = pd.DataFrame({
-        "nome": tabela["Estação"], "municipio": tabela["Município"].fillna("—"), "codigo": tabela["Código"],
-        "altitude": tabela["Altitude (m)"].map(lambda metros: "—" if pd.isna(metros) else f"{metros} m"),
-        "desde": tabela["Em operação desde"].fillna("—"),
-        "Longitude": tabela["Longitude"], "Latitude": tabela["Latitude"],
-        "cor": [[200, 30, 30, 235] if destacada else [31, 78, 121, 225] for destacada in destacadas],
-    })
-    nomes = pdk.Layer("TextLayer", data=pontos, get_position=["Longitude", "Latitude"], get_text="nome",
-                      get_size=12, get_color=[20, 20, 20], get_pixel_offset=[9, 0],
-                      background=True, get_background_color=[255, 255, 255, 200])
-    # Como a imagem dos mapas: passados no construtor, o pydeck trataria os textos como expressões
-    nomes.get_text_anchor = "start"
-    nomes.get_alignment_baseline = "center"
-    nomes.font_family = "'Source Sans Pro', Arial, sans-serif"   # a do painel, e não a de máquina de escrever
-    camadas = [
-        pdk.Layer("GeoJsonLayer", data=base.municipios[[referencia.COLUNA_DO_MUNICIPIO, "geometry"]].__geo_interface__,
-                  stroked=True, filled=False, get_line_color=[110, 110, 110, 140], line_width_min_pixels=0.5),
-        pdk.Layer("GeoJsonLayer", data=base.uf.__geo_interface__, stroked=True, filled=False,
-                  get_line_color=[40, 40, 40], line_width_min_pixels=1.5),
-        pdk.Layer("ScatterplotLayer", data=pontos, get_position=["Longitude", "Latitude"], get_fill_color="cor",
-                  get_line_color=[255, 255, 255], stroked=True, line_width_min_pixels=1, get_radius=2500,
-                  radius_min_pixels=5, pickable=True),
-        nomes,
-    ]
-    # O mapa ocupa três quintos da largura: com o zoom do mapa largo, o leste do estado ficaria de fora
-    visao = visao_inicial(config.recorte_de(uf))
-    visao["zoom"] = round(visao["zoom"] - 0.7, 1)
-    return pdk.Deck(layers=camadas, map_style=MAPA_BASE, initial_view_state=pdk.ViewState(**visao),
-                    tooltip={"html": "<b>{nome}</b><br/>Município: {municipio}<br/>Código: {codigo}<br/>"
-                                     "Altitude: {altitude}<br/>Em operação desde: {desde}"})
-
-
-def pagina_estacoes() -> None:
-    """Onde fica cada estação do INMET em MS: o mapa, a lista com busca e o PNG de referência.
-
-    Os mapas das variáveis mostram números em pontos. Para o meteorologista é óbvio de quem é cada
-    ponto; para o público, não (pedido de uma colega da equipe, 22/10/2026). Só as do estado, e só
-    as em operação, que são as dos mapas.
-    """
-    uf = config.UF
-    st.title("Estações meteorológicas automáticas - INMET+SEMADESC")
-    aviso = st.container()
-    if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
-        st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
-        st.stop()
-    try:
-        tabela = tabela_das_estacoes(uf)
-    except fonte.ErroFonte:
-        sem_lista_de_estacoes(aviso, uf)
-    st.caption(f"As {len(tabela)} estações automáticas do INMET em operação em {uf}. São os pontos dos mapas do "
-               "painel: o número que cada mapa mostra num ponto é o que aquela estação mediu.")
-
-    busca = st.text_input("Procurar", key="busca_estacoes",
-                          placeholder="nome da estação, município ou código (ex.: Dourados, A702)")
-    achadas = referencia.procurar(tabela, busca)
-    procurando = bool(busca.strip())
-    if procurando and not achadas.any():
-        st.info(f"Nenhuma estação com \"{busca.strip()}\" no nome, no município ou no código.")
-
-    mapa, lista = st.columns([3, 2])
-    with mapa:
-        st.pydeck_chart(mapa_das_estacoes(tabela, achadas & procurando, uf), height=ALTURA_MAPA)
-        st.caption("Passe o mouse numa estação para ver o município, o código e a altitude; aproxime o mapa "
-                   "para os nomes deixarem de se cobrir. As que a busca achou ficam em vermelho. O mapa base "
-                   "vem do Carto, fora da SEMADESC.")
-    with lista:
-        colunas = ["Nº", "Estação", "Município", "Código", "Altitude (m)", "Em operação desde"]
-        st.dataframe(tabela[achadas][colunas], hide_index=True, height=ALTURA_MAPA)
-
-    # O PNG só é desenhado no clique, numa thread à parte: chega com a tabela e a base prontas
-    hoje = date.today()
-    base = base_cartografica(uf)
-    titulo = f"Estações meteorológicas do INMET em {uf}"
-    subtitulo = f"{len(tabela)} estações automáticas em operação em {hoje:%d/%m/%Y}"
-    st.download_button("Baixar o mapa de referência (PNG)",
-                       lambda: boletim.png(mapas.mapa_de_referencia(tabela, titulo, subtitulo, base)),
-                       mime="image/png", key="baixar_referencia", on_click="ignore",
-                       file_name=f"Mapa_Estacoes_INMET_{uf}_{hoje:%Y%m%d}.png",
-                       help="As estações numeradas no mapa, com a lista dos nomes ao lado, no padrão do boletim "
-                            "(título e logos), em 300 dpi: para boletins, relatórios e apresentações.")
-
-
-def _observado() -> None:
-    """O observado do INMET: é o resto deste arquivo, que segue depois da navegação."""
-
-
-# A previsão não usa nenhum filtro do observado (estado, período, estações), e numa aba ela ficaria
-# atrás deles; como página, ela só consulta o Open-Meteo quando alguém a abre. Os gráficos e os
-# mapas são páginas separadas pelo mesmo motivo: os mapas pedem a grade, os gráficos não.
-observado = st.Page(_observado, title="Observado (INMET)", icon=":material/history:", default=True)
-lembrar_filtros()
-pagina = st.navigation({
-    "": [observado, st.Page(pagina_estacoes, title="Localização Estações", icon=":material/location_on:",
-                            url_path="estacoes")],
-    "Previsão (MS)": [
-        st.Page(pagina_previsao, title="Estações", icon=":material/show_chart:", url_path="previsao"),
-        st.Page(pagina_mapas_previstos, title="Mapas", icon=":material/map:", url_path="previsao-mapas"),
-        st.Page(pagina_semanas, title="Semanas", icon=":material/date_range:", url_path="previsao-semanas"),
-    ],
-})
-pagina.run()
-if pagina is not observado:
-    st.stop()
-
 # =====================================================
-# FILTROS
+# FILTROS EM COMUM DAS PÁGINAS DO OBSERVADO
 # =====================================================
-st.title("Painel Meteorológico")
-# Lugar na área principal para os avisos que nascem dentro da barra lateral: escritos lá, ficariam
-# espremidos ao lado, onde quase ninguém olha.
-aviso_principal = st.container()
-
-if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
-    st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
-    st.stop()
-
-with st.sidebar:
-    st.header("Filtros")
+def filtros_de_estado_e_periodo() -> tuple[str, config.Recorte, tuple]:
     # O estado vem primeiro porque tudo abaixo depende dele: as estações, o fuso que define o
     # dia, os shapefiles do mapa. Só aparecem as UFs que têm shapefile na pasta shp/.
     ufs = config.ufs_disponiveis()
@@ -1905,121 +1584,1146 @@ with st.sidebar:
         st.info("Escolha a data inicial e a final.")
         st.stop()
     st.session_state["periodo_guardado"] = intervalo
+    return uf, recorte, intervalo
 
-    try:
-        estacoes = carregar_estacoes(uf).sort_values("Estação")
-    except fonte.ErroFonte:
-        sem_lista_de_estacoes(aviso_principal, uf)
-    # Sem estação escolhida de saída: quem abre decide o que quer ver, e nenhuma consulta
-    # à API acontece antes disso.
-    # As escolhidas que não são do estado saem antes do widget: trocando o estado, as do anterior
-    # não estão mais entre as opções, e o Streamlit recusaria o valor guardado
+
+def janela_do_periodo(intervalo: tuple, recorte: config.Recorte) -> tuple[datetime, datetime]:
+    # O dia é o do estado escolhido: em MS ele começa às 04 h UTC, no Paraná às 03 h
+    inicio = datetime.combine(intervalo[0], datetime.min.time(), tzinfo=recorte.fuso).astimezone(config.FUSO_UTC)
+    fim = (datetime.combine(intervalo[1], datetime.min.time(), tzinfo=recorte.fuso)
+           + timedelta(days=1)).astimezone(config.FUSO_UTC)
+    return inicio, fim
+
+
+# =====================================================
+# MAPAS INTERATIVOS (pydeck, sem mapa de fundo da internet)
+# =====================================================
+@st.cache_resource(show_spinner=False, max_entries=ESTADOS_NA_MEMORIA)
+def contornos_interativos(uf: str) -> tuple[dict, dict]:
+    base = base_cartografica(uf)
+    return base.uf.__geo_interface__, interativo.municipios(base)
+
+
+@st.cache_resource(show_spinner=False, max_entries=ESTADOS_NA_MEMORIA)
+def grade_do_ponto(uf: str) -> interativo.GradeDoPonto:
+    return interativo.grade_do_ponto(base_cartografica(uf))
+
+
+def coordenadas_das_estacoes(uf: str) -> pd.DataFrame:
+    cadastro = pd.concat([carregar_estacoes(uf), estacoes_vizinhas(uf, avisar=False), estacoes_do_cemaden(uf)],
+                         ignore_index=True)
+    return (cadastro.rename(columns={"VL_LATITUDE": "Latitude", "VL_LONGITUDE": "Longitude"})
+            [["Estação", "Longitude", "Latitude"]])
+
+
+@st.cache_data(show_spinner=False, max_entries=30)
+def celulas_do_ponto(valores: pd.Series, apoio: pd.Series, nome_produto: str, quando: str, uf: str,
+                     direcoes: pd.Series | None = None, nome: str | None = None) -> pd.DataFrame:
+    # As mesmas estações da superfície (as do estado e as vizinhas), para o balão bater com a cor.
+    # `nome` é o que o balão diz quando não é o nome do produto (na chuva, a janela: "Chuva 24 h")
+    produto = variaveis.por_nome(nome_produto)
+    nome = nome or nome_produto
+    entrada = pd.concat([_com_coordenadas(valores, nome, uf), _com_coordenadas(apoio, nome, uf)], ignore_index=True)
+    return interativo.celulas_do_ponto(grade_do_ponto(uf), entrada, nome, produto.unidade, produto.decimais, direcoes)
+
+
+@st.cache_data(show_spinner=False, max_entries=10)
+def celulas_do_imovel(_imovel: car.Imovel, chave: str, uf: str) -> np.ndarray:
+    # A chave identifica o imóvel no cache (a forma em si não entra na conta do cache)
+    return car.celulas_do_imovel(grade_do_ponto(uf), _imovel.forma)
+
+
+def visao_do_imovel(imovel: car.Imovel, em_3d: bool) -> dict:
+    # Centrado no imóvel, com folga para as células vizinhas. No 3D, não tão perto: os blocos de até
+    # 100 km encheriam a tela
+    oeste, sul, leste, norte = imovel.forma.bounds
+    zoom = ZOOM_POR_GRAU - math.log2(max(leste - oeste, norte - sul, LADO_MINIMO_DO_IMOVEL) * FOLGA_DO_IMOVEL)
+    return {"latitude": (sul + norte) / 2, "longitude": (oeste + leste) / 2,
+            "zoom": round(min(zoom, ZOOM_DO_IMOVEL_EM_3D) if em_3d else zoom, 1)}
+
+
+# Os rótulos dos mapas navegáveis (o número sobre cada estação, o nome no mapa das estações): caixa
+# branca de cantos arredondados, borda fina e o texto em seminegrito, na fonte do painel. A equipe o
+# escolheu entre seis estilos testados lado a lado (03/11/2026)
+ESTILO_DOS_ROTULOS = dict(get_size=12, get_color=[20, 20, 20], background=True,
+                          get_background_color=[255, 255, 255, 235], get_border_color=[60, 60, 60, 200],
+                          get_border_width=1, background_padding=[4, 1, 4, 1], background_border_radius=4,
+                          font_weight=600)
+FONTE_DO_PAINEL = "'Source Sans Pro', Arial, sans-serif"
+# Na chuva, o número de quem não é o maior do seu grupo de 15 km vai em metros: ~2 px com o estado
+# inteiro na tela, escondido atrás do maior, e os 12 px de sempre a partir do zoom ~8,7, quando as
+# estações do grupo já ficam a dezenas de px umas das outras
+TAMANHO_DOS_ESCONDIDOS_M = 4000
+
+
+def camada_de_rotulos(dados: pd.DataFrame, coluna: str, posicao: list[str], deslocamento: list[int],
+                      **extras) -> pdk.Layer:
+    camada = pdk.Layer("TextLayer", data=dados, get_position=posicao, get_text=coluna, get_pixel_offset=deslocamento,
+                       **{**ESTILO_DOS_ROTULOS, **extras})
+    # Como a imagem dos mapas: passada no construtor, a fonte viraria expressão, e não o nome dela
+    camada.font_family = FONTE_DO_PAINEL
+    return camada
+
+
+def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos: bool,
+                    celulas: pd.DataFrame | None = None,
+                    escolhido: list[int] = interativo.COR_DO_PONTO_ESCOLHIDO,
+                    relevo: pd.DataFrame | None = None, imovel: car.Imovel | None = None,
+                    cemaden: pd.DataFrame | None = None) -> pdk.Deck:
+    # Com o relevo (o 3D, de interativo.relevo ou relevo_de_classes), os blocos tomam o lugar da
+    # imagem, e as estações sobem à altura que vem na coluna "altura" dos pontos. Com o imóvel do
+    # CAR, o mapa abre nele, com o contorno e as células que ele toca. `cemaden` são os pluviômetros
+    # do CEMADEN no mapa da chuva (interativo.pontos_do_cemaden), numa camada própria
+    recorte = config.recorte_de(uf)
+    estado, municipios = contornos_interativos(uf)
+    com_celulas = celulas is not None and not celulas.empty
+    em_3d = com_celulas and relevo is not None
+    # O quadrado de cada célula sai do centro no navegador, para não mandar quatro cantos por célula
+    dx, dy = grade_do_ponto(uf).meio_passo
+    quadrado = (f"[[Longitude - {dx:.6f}, Latitude - {dy:.6f}], [Longitude + {dx:.6f}, Latitude - {dy:.6f}], "
+                f"[Longitude + {dx:.6f}, Latitude + {dy:.6f}], [Longitude - {dx:.6f}, Latitude + {dy:.6f}]]")
+    camadas = []
+    if em_3d:
+        # Os blocos vão numa GridCellLayer porque, no clique, o Streamlit apaga para 40% as camadas que
+        # conhece (PolygonLayer, ColumnLayer...), e o relevo inteiro ficaria translúcido; esta ele deixa
+        # como está. A grade que responde ao mouse vai por cima, em colunas de quatro lados com a mesma
+        # medida e a mesma altura dos blocos: o balão é o do bloco sob o cursor, e o escolhido fica na
+        # cor dele a 50%, como no mapa plano (veja abaixo). O nome é outro que o da grade plana: com o
+        # mesmo, ao ligar o 3D, o deck.gl passaria o estado da camada plana à de colunas, e ela quebra.
+        # Os limites vêm depois, como sobre a imagem: no chão, por cima do que fica no nível 0
+        lado = interativo.lado_do_bloco(grade_do_ponto(uf))
+        camadas.append(pdk.Layer(
+            "GridCellLayer", data=relevo.loc[relevo["pintada"], interativo.COLUNAS_DO_RELEVO], id="relevo",
+            get_position=["Longitude", "Latitude"], cell_size=lado, offset=[0, 0], extruded=True,
+            get_elevation="altura", get_fill_color="cor", pickable=False))
+        camadas.append(pdk.Layer(
+            "ColumnLayer", data=celulas[interativo.COLUNAS_DA_CAMADA].assign(altura=relevo["altura"].to_numpy()),
+            id=PONTOS_NO_RELEVO, get_position=["Longitude", "Latitude"], disk_resolution=4, angle=45,
+            radius=lado / math.sqrt(2), extruded=True, get_elevation="altura", get_fill_color=[*escolhido, 2],
+            opacity=0.5, pickable=True))
+    else:
+        # A imagem entra depois de criada a camada: passada no construtor, o pydeck a trataria como
+        # expressão a ser avaliada no navegador ("@@=data:image/png;...")
+        campo = pdk.Layer("BitmapLayer", data=None, bounds=superficie.limites(recorte))
+        campo.image = imagem
+        camadas.append(campo)
+    camadas += [
+        # Preenchidos quase transparentes: é o preenchimento que responde ao mouse com o nome. Com a
+        # grade do ponto por cima, quem responde é ela, que já traz o município; clicável, o
+        # município inteiro ficaria pintado no clique (veja a camada da grade)
+        pdk.Layer("GeoJsonLayer", data=municipios, id="municipios", stroked=True, filled=True,
+                  get_fill_color=[255, 255, 255, 1], get_line_color=[70, 70, 70, 150],
+                  line_width_min_pixels=0.6, pickable=not com_celulas),
+        # O contorno do estado com uma borda clara por baixo: no mapa de fundo escuro, a linha preta sumiria
+        pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[235, 235, 235, 220],
+                  line_width_min_pixels=3.5),
+        pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[25, 25, 25],
+                  line_width_min_pixels=1.6),
+    ]
+    if com_celulas and not em_3d:
+        # A grade invisível do valor em qualquer ponto, por cima dos municípios (o balão dela já traz
+        # o nome do município) e por baixo das estações, que continuam respondendo ao clique.
+        # No clique, o Streamlit pinta o objeto escolhido com a cor dele, mas opaca, e apaga os outros:
+        # a célula leva o vermelho quase transparente, e a opacidade da camada deixa o escolhido em 50%
+        camadas.append(pdk.Layer(
+            "PolygonLayer", data=celulas[interativo.COLUNAS_DA_CAMADA], id="pontos", filled=True,
+            stroked=False, get_fill_color=[*escolhido, 2], opacity=0.5, pickable=True, get_polygon=quadrado))
+    if imovel is not None and com_celulas:
+        # O imóvel do CAR: as células que ele toca em magenta translúcido (no 3D, um pouco acima dos
+        # blocos, para o topo delas aparecer) e o contorno dele com uma borda clara por baixo. Nada
+        # disso responde ao mouse: o balão continua sendo o da célula. Translúcidas, as células não
+        # mudam quando o Streamlit apaga as camadas no clique (ele só baixa o que passa de 40%)
+        dele = celulas["celula"].isin(celulas_do_imovel(imovel, imovel.chave, uf)).to_numpy()
+        quadrados = celulas.loc[dele, ["Longitude", "Latitude"]].assign(
+            altura=relevo["altura"].to_numpy()[dele] + ACIMA_DO_BLOCO if em_3d else 0.0)
+        camadas.append(pdk.Layer(
+            "PolygonLayer", data=quadrados, id="celulas_do_imovel", get_polygon=quadrado, filled=True,
+            stroked=True, extruded=em_3d, wireframe=em_3d, get_elevation="altura",
+            get_fill_color=[*COR_DO_IMOVEL, 70], get_line_color=[*COR_DO_IMOVEL, 230], line_width_min_pixels=1.5,
+            pickable=False))
+        contorno = gpd.GeoDataFrame(geometry=[imovel.forma], crs="EPSG:4326").__geo_interface__
+        ponto = imovel.forma.geom_type == "Point"
+        camadas += [
+            pdk.Layer("GeoJsonLayer", data=contorno, id="imovel_borda", stroked=True, filled=ponto,
+                      get_fill_color=[*COR_DO_IMOVEL, 255], get_line_color=[255, 255, 255, 230],
+                      line_width_min_pixels=4, point_radius_min_pixels=7, pickable=False),
+            pdk.Layer("GeoJsonLayer", data=contorno, id="imovel", stroked=True, filled=False,
+                      get_line_color=[*COR_DO_IMOVEL, 255], line_width_min_pixels=2, point_radius_min_pixels=7,
+                      pickable=False),
+        ]
+    # No 3D, as estações e os números ficam no alto e sempre na frente: no chão, sumiriam dentro dos blocos
+    posicao, na_frente = ((["Longitude", "Latitude", "altura"], {"parameters": {"depthCompare": "always"}})
+                          if em_3d and "altura" in pontos else (["Longitude", "Latitude"], {}))
+    camadas += [
+        pdk.Layer("ScatterplotLayer", data=pontos, id="estacoes", get_position=posicao,
+                  get_fill_color="cor", get_line_color=[25, 25, 25], stroked=True, line_width_min_pixels=1,
+                  get_radius=3000, radius_min_pixels=6, radius_max_pixels=14, pickable=True, **na_frente),
+    ]
+    com_cemaden = cemaden is not None and not cemaden.empty
+    if com_cemaden:
+        # Menores que as estações do INMET e em laranja: Campo Grande tem quatro, a poucos km
+        camadas.append(pdk.Layer(
+            "ScatterplotLayer", data=cemaden, id="cemaden", get_position=posicao, get_fill_color="cor",
+            get_line_color=interativo.COR_DO_CEMADEN, stroked=True, line_width_min_pixels=2, get_radius=2000,
+            radius_min_pixels=5, radius_max_pixels=10, pickable=True, **na_frente))
+    if escritos:
+        escritas = pd.concat([pontos, cemaden], ignore_index=True) if com_cemaden else pontos
+        if "maior_do_grupo" in escritas:
+            # Na chuva (veja mapa_navegavel_da_chuva), quem não é o maior do grupo vem antes, por baixo,
+            # com o número em metros: cresce ao aproximar o mapa. O CollisionFilterExtension do deck.gl,
+            # que esconderia os números que se encostam, apaga todos no Streamlit 1.64 (testado em 24/11/2026)
+            maior = escritas["maior_do_grupo"].astype(bool)
+            camadas.append(camada_de_rotulos(escritas[~maior], "rotulo", posicao, [0, -18], **na_frente,
+                                             get_size=TAMANHO_DOS_ESCONDIDOS_M, size_units="meters",
+                                             size_min_pixels=0, size_max_pixels=ESTILO_DOS_ROTULOS["get_size"]))
+            escritas = escritas[maior]
+        camadas.append(camada_de_rotulos(escritas, "rotulo", posicao, [0, -18], **na_frente))
+    if "angulo" in pontos:
+        # As setas do vento, ao lado de cada estação
+        setas = pdk.Layer("TextLayer", data=pontos.dropna(subset=["angulo"]).assign(seta="↑"),
+                          get_position=["Longitude", "Latitude"], get_text="seta", get_angle="angulo",
+                          get_size=22, get_color=[25, 25, 25], get_pixel_offset=[18, 0])
+        # Como a imagem acima: passado no construtor, o "↑" viraria expressão ("@@=↑") e a seta não sairia
+        setas.character_set = "↑"
+        camadas.append(setas)
+    visao = visao_inicial(recorte) if imovel is None else visao_do_imovel(imovel, em_3d)
+    visao = pdk.ViewState(**visao, **(VISAO_3D if em_3d else {}))
+    if st.session_state.get("fundo_interativo", True):
+        # O fundo da Carto, claro ou escuro como o tema (é o que o Streamlit põe com map_style=None):
+        # países, cidades, estradas e rios, da internet. Sem rede, só ele some
+        return pdk.Deck(layers=camadas, map_style=None, initial_view_state=visao, tooltip=interativo.BALAO)
+    return pdk.Deck(layers=camadas, map_provider=None, map_style=interativo.ESTILO_SEM_FUNDO,
+                    initial_view_state=visao, tooltip=interativo.BALAO)
+
+
+def legenda_do_risco(vertical: bool = False) -> str:
+    # Do mais alto para o mais baixo; na vertical, uma classe por linha, como numa escala
+    item = "display:flex;align-items:center;margin-bottom:0.3rem" if vertical else \
+        "display:inline-flex;align-items:center;margin-right:1.1rem"
+    itens = "".join(f'<span style="{item}">'
+                    f'<span style="width:0.9rem;height:0.9rem;border-radius:2px;margin-right:0.35rem;'
+                    f'background:{cor}"></span>{rotulo}</span>'
+                    for cor, rotulo in zip(reversed(config.CORES_RISCO), reversed(config.ROTULOS_RISCO)))
+    return f'<div style="font-size:{"0.8rem;color:#e0e0e0" if vertical else "0.85rem"}">{itens}</div>'
+
+
+def escala_no_mapa(chave: str, conteudo: str) -> None:
+    # A escala no canto de baixo à direita do mapa interativo, por cima dele e acima dos créditos do
+    # mapa de fundo. É um bloco de altura zero logo depois do mapa, com o conteúdo puxado para cima
+    # (medido no Streamlit 1.64: o pé da escala fica uns 48 px acima do pé do mapa); não recebe o
+    # mouse, para o mapa continuar respondendo embaixo. Na tela cheia do mapa ela não aparece
+    with st.container(key=chave):
+        st.markdown(
+            f"<style>.st-key-{chave} {{position: relative; height: 0; margin-bottom: -1rem; z-index: 3}}"
+            f".st-key-{chave} [data-testid='stElementContainer'] {{position: absolute; right: 10px; "
+            f"bottom: calc(1rem + 64px); width: auto !important; pointer-events: none}}</style>"
+            f"<div style='background: rgba(14, 17, 23, 0.72); border-radius: 6px; padding: 6px 8px'>"
+            f"{conteudo}</div>", unsafe_allow_html=True)
+
+
+def barra_no_mapa(chave: str, paleta: str, niveis: tuple, unidade: str) -> None:
+    imagem = base64.b64encode(barra_de_escala(paleta, niveis, unidade, vertical=True)).decode()
+    escala_no_mapa(chave, f"<img src='data:image/png;base64,{imagem}' style='height: 300px; display: block'>")
+
+
+# Os gráficos que abrem no clique dos mapas interativos (a estação ou o ponto) navegam como os das
+# séries: arrastar move e Shift+roda aproxima, só no tempo, e o cursor aponta o instante mais
+# próximo, com a régua e o balão. Sem o Shift, a roda aproximaria em vez de rolar a página.
+def _eixo_do_tempo(campo: str, por_dia: bool = False) -> alt.X:
+    # Hora em cima e data embaixo; por dia, só a data, com uma marca por dia
+    formato = ("[timeFormat(datum.value, '%d/%m')]" if por_dia
+               else "[timeFormat(datum.value, '%H:%M'), timeFormat(datum.value, '%d/%m')]")
+    return alt.X(f"{campo}:T", title=None, axis=alt.Axis(
+        grid=True, gridOpacity=0.25, labelAngle=0, labelExpr=formato, labelFontSize=FONTE_DOS_EIXOS,
+        tickCount="day" if por_dia else alt.Undefined))
+
+
+def _navegar_e_apontar(campo: str) -> tuple[alt.Parameter, alt.Parameter]:
+    return (alt.selection_interval(bind="scales", encodings=["x"], zoom="wheel![event.shiftKey]"),
+            alt.selection_point(fields=[campo], nearest=True, on="pointerover", empty=False))
+
+
+def _regua_do_instante(base: alt.Chart, apontar: alt.Parameter, balao: list) -> alt.Chart:
+    return (base.mark_rule(color="#9a9a9a", strokeWidth=1)
+            .encode(opacity=alt.condition(apontar, alt.value(0.5), alt.value(0)), tooltip=balao)
+            .add_params(apontar))
+
+
+def _quando_no_balao(campo: str, por_dia: bool = False) -> alt.Tooltip:
+    return alt.Tooltip(f"{campo}:T", title="Dia" if por_dia else "Hora",
+                       format="%d/%m/%Y" if por_dia else "%d/%m %H:%M")
+
+
+def graficos_do_risco(serie: pd.DataFrame, hora_local=None) -> list[alt.LayerChart]:
+    # Um gráfico por medida, cada um com a sua tela cheia
+    cores = alt.Scale(domain=["atendida", "não"], range=[config.CORES_RISCO[-1], "#9e9e9e"])
+    graficos = []
+    for medida, dela in serie.groupby("Medida", sort=False):
+        navegar, apontar = _navegar_e_apontar("dt_local")
+        base = alt.Chart(dela).encode(x=_eixo_do_tempo("dt_local"))
+        cor = alt.Color("Condição:N", scale=cores, legend=alt.Legend(orient="bottom", title=None))
+        camadas = [
+            base.mark_line(color="#607d8b", strokeWidth=1.4).encode(
+                y=alt.Y("valor:Q", title=medida, scale=alt.Scale(zero=False),
+                        axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS)))
+            .add_params(navegar),
+            base.mark_circle(size=26).encode(y="valor:Q", color=cor),
+            # O ponto da hora apontada cresce, para o número do balão ter onde morar no gráfico
+            base.mark_circle(size=150).encode(y="valor:Q", color=cor).transform_filter(apontar),
+            alt.Chart(dela.head(1)).mark_rule(color=config.CORES_RISCO[-1], strokeDash=[5, 4]).encode(y="limiar:Q"),
+            _regua_do_instante(base, apontar, [
+                _quando_no_balao("dt_local"), alt.Tooltip("valor:Q", title=medida, format=".1f"),
+                alt.Tooltip("limiar:Q", title="Limiar", format=".0f"), alt.Tooltip("Condição:N")]),
+        ]
+        if hora_local is not None:
+            camadas.append(alt.Chart(pd.DataFrame({"agora": [hora_local]})).mark_rule(color="#29b6f6", strokeWidth=2)
+                           .encode(x="agora:T"))
+        graficos.append(alt.layer(*camadas).properties(height=ALTURA_GRAFICO_DO_RISCO))
+    return graficos
+
+
+def grafico_da_chuva_na_estacao(serie: pd.DataFrame, por_dia: bool) -> alt.LayerChart:
+    navegar, apontar = _navegar_e_apontar("quando")
+    base = alt.Chart(serie).encode(x=_eixo_do_tempo("quando", por_dia))
+    # A barra do instante apontado acende e o acumulado ganha um ponto: o balão diz de que altura fala.
+    # As camadas ficam todas no mesmo nível (aninhadas, o Vega recusa o apontador repetido), e com o
+    # eixo vertical de cada uma independente: o ponto leva a mesma escala da linha do acumulado
+    acumulado = alt.Scale(domain=[0, max(float(serie["acumulado"].max()), 0.1)])
+    return alt.layer(
+        base.mark_bar(color="#1e88e5").encode(
+            y=alt.Y("chuva:Q", title="Chuva (mm)",
+                    axis=alt.Axis(orient="left", grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS)),
+            opacity=alt.condition(apontar, alt.value(1), alt.value(0.8)))
+        .add_params(navegar),
+        _regua_do_instante(base, apontar, [
+            _quando_no_balao("quando", por_dia), alt.Tooltip("chuva:Q", title="Chuva (mm)", format=".1f"),
+            alt.Tooltip("acumulado:Q", title="Acumulado (mm)", format=".1f")]),
+        base.mark_line(color="#90a4ae", strokeDash=[5, 3]).encode(
+            y=alt.Y("acumulado:Q", title="Acumulado (mm)", scale=acumulado,
+                    axis=alt.Axis(orient="right", labelFontSize=FONTE_DOS_EIXOS))),
+        base.mark_circle(size=90, color="#cfd8dc").encode(y=alt.Y("acumulado:Q", scale=acumulado, axis=None))
+        .transform_filter(apontar),
+    ).resolve_scale(y="independent").properties(height=240)
+
+
+def grafico_da_variavel_na_estacao(serie: pd.DataFrame, produto: variaveis.Produto, por_dia: bool,
+                                    momento=None) -> alt.LayerChart:
+    titulo = f"{produto.nome} ({produto.unidade})"
+    navegar, apontar = _navegar_e_apontar("quando")
+    base = alt.Chart(serie).encode(x=_eixo_do_tempo("quando", por_dia))
+    camadas = [
+        base.mark_line(color="#607d8b", strokeWidth=1.5).encode(
+            y=alt.Y("valor:Q", title=titulo, scale=alt.Scale(zero=produto.zero_na_base),
+                    axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS)))
+        .add_params(navegar),
+        base.mark_circle(size=24, color="#455a64").encode(y="valor:Q"),
+        # O ponto do instante apontado cresce, para o número do balão ter onde morar no gráfico
+        base.mark_circle(size=120, color="#cfd8dc").encode(y="valor:Q").transform_filter(apontar),
+        _regua_do_instante(base, apontar, [
+            _quando_no_balao("quando", por_dia),
+            alt.Tooltip("valor:Q", title=titulo, format=f".{produto.decimais}f")]),
+    ]
+    if momento is not None:
+        camadas.append(alt.Chart(pd.DataFrame({"agora": [momento]})).mark_rule(color="#29b6f6", strokeWidth=2)
+                       .encode(x="agora:T"))
+    return alt.layer(*camadas).properties(height=240)
+
+
+def mapa_navegavel_da_variavel(produto: variaveis.Produto, modo: str, momento, rotulo: str,
+                               leituras: pd.DataFrame, apoio: pd.DataFrame, estacoes: pd.DataFrame, fora: set[str],
+                               escritos: bool, niveis, uf: str, intervalo: tuple,
+                               imovel: car.Imovel | None = None) -> None:
+    # A vista navegável da página Mapas: a superfície da variável num mapa que se aproxima e se
+    # arrasta. O clique numa estação ou num ponto abre a série dele embaixo
+    fatia, fatia_apoio = (retiradas.retirar(variaveis.recorte(dados, modo, momento), fora)
+                          for dados in (leituras, apoio))
+    valores = variaveis.por_estacao(produto, fatia)
+    medidas = valores.dropna()
+    if len(medidas) < config.MIN_ESTACOES_INTERPOLACAO:
+        st.warning(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram {produto.nome.lower()} "
+                   f"em {rotulo}.")
+        return
+    valores_apoio = variaveis.por_estacao(produto, fatia_apoio)
+    imagem = camada_superficie(valores, produto.nome, rotulo, uf, tuple(niveis) if niveis is not None else None,
+                               valores_apoio)
+    pontos = interativo.pontos_de_valores(_com_coordenadas(valores, produto.nome, uf), produto.nome, produto.nome,
+                                          produto.unidade, produto.decimais)
+    setas = variaveis.direcoes(produto, fatia)
+    if not setas.empty:
+        pontos = interativo.com_direcao(pontos, setas)
+    rumos = pd.concat([setas, variaveis.direcoes(produto, fatia_apoio)]) if not setas.empty else None
+    celulas = celulas_do_ponto(valores, valores_apoio, produto.nome, rotulo, uf, rumos)
+    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos, celulas, imovel=imovel),
+                             on_select="rerun", selection_mode="single-object",
+                             key=chave_do_mapa("mapa_variavel_interativo", imovel=imovel), height=ALTURA_MAPA)
+    if niveis is not None:
+        barra_no_mapa("escala_mapa_variavel_interativo", produto.paleta, tuple(niveis), produto.unidade)
+    casas = produto.decimais
+    st.caption(f"{produto.nome}, {rotulo}: de {medidas.min():.{casas}f} a {medidas.max():.{casas}f} "
+               f"{produto.unidade} em {len(medidas)} estações · {produto.regra}. A superfície é a do mapa do "
+               "boletim (o IDW das estações, com as vizinhas na borda)"
+               + ("; a seta aponta para onde o vento vai" if not setas.empty else "")
+               + ". **Passe o mouse** em qualquer ponto para ler o valor interpolado, e **clique** para ver a "
+                 "série do ponto, ou a de uma estação."
+                 + nota_das_retiradas(fora))
+    carimbo = carimbo_do_momento(modo, momento, intervalo)
+    with menu_de_baixar(f"interativo_{produto.nome}"):
+        botoes_do_sig(f"interativo_{produto.nome}",
+                      boletim.nome_do_arquivo(produto.nome, uf, carimbo), valores, valores_apoio, produto.nome,
+                      produto.unidade, casas, uf, f"{momento:%d/%m/%Y %H:%M}" if modo == variaveis.HORA else rotulo)
+
+    # No período inteiro, a série é a do dia: o produto do período é o diário somado no tempo
+    modo_serie = variaveis.DIA if modo == variaveis.PERIODO else modo
+    marca = None if momento is None else pd.Timestamp(momento).tz_localize(None)
+    # A série do ponto e a do imóvel são o IDW refeito a cada instante: sem as retiradas, como o mapa
+    do_mapa = retiradas.retirar(pd.concat([leituras, apoio], ignore_index=True), fora)
+    if imovel is not None:
+        painel_do_imovel(produto, celulas, imovel, do_mapa, uf, modo_serie, marca)
+    objetos = evento.selection.get("objects", {}) if evento is not None else {}
+    if objetos.get("estacoes"):
+        st.session_state["escolha_mapa_interativo"] = ("estacao", objetos["estacoes"][0]["titulo"])
+    elif objetos.get("pontos"):
+        st.session_state["escolha_mapa_interativo"] = ("ponto", int(objetos["pontos"][0]["celula"]))
+    tipo, escolhida = st.session_state.get("escolha_mapa_interativo", (None, None))
+    if tipo == "ponto":
+        painel_do_ponto(produto, celulas, escolhida, do_mapa, uf, modo_serie, marca)
+    elif tipo == "estacao" and escolhida in set(estacoes["Estação"]):
+        serie = (interativo.serie_da_variavel(produto, leituras, escolhida, modo_serie)
+                 if modo_serie in produto.modos else pd.DataFrame())
+        st.subheader(escolhida)
+        if modo_serie not in produto.modos:
+            st.info(f"{produto.nome} só existe para o período inteiro: não há série dia a dia.")
+        elif serie.empty:
+            st.info(f"A estação não mediu {produto.nome.lower()} no período.")
+        else:
+            st.altair_chart(grafico_da_variavel_na_estacao(serie, produto, modo_serie == variaveis.DIA, marca),
+                            width="stretch")
+            st.caption(f"{produto.nome} na estação, " + ("dia a dia" if modo_serie == variaveis.DIA else "hora a hora")
+                       + " no período." + (" A linha azul é o instante do mapa." if marca is not None else "")
+                       + NAVEGAR_NO_GRAFICO)
+
+
+def boletim_da_variavel(produto: variaveis.Produto, modo: str, momento, rotulo: str, leituras: pd.DataFrame,
+                        apoio: pd.DataFrame, paradas: list, fora: set[str], escritos: bool, niveis,
+                        horas_janela: float, uf: str, intervalo: tuple, periodo_painel: config.Periodo) -> None:
+    # A vista do boletim da página Mapas: o PNG do mapa como o main.py desenha, com o menu de baixar,
+    # que no hora a hora e no por dia tem também o GIF da sequência
+    carimbo = carimbo_do_momento(modo, momento, intervalo)
+    fatia, fatia_apoio = (retiradas.retirar(variaveis.recorte(dados, modo, momento), fora)
+                          for dados in (leituras, apoio))
+    setas = variaveis.direcoes(produto, fatia)
+    _, meio, _ = st.columns([1, 3, 1])
+    with meio:
+        with st.spinner("Desenhando o mapa..."):
+            menu = painel_do_mapa(produto, variaveis.por_estacao(produto, fatia), rotulo,
+                                  boletim.subtitulo(modo, momento, periodo_painel), carimbo, escritos, uf, niveis,
+                                  None if setas.empty else setas, variaveis.por_estacao(produto, fatia_apoio))
+        # No período inteiro não há sequência: é um mapa só para a janela toda
+        if menu is not None and modo != variaveis.PERIODO:
+            painel_do_gif(menu, produto, retiradas.retirar(leituras, fora), modo, paradas, escritos, horas_janela,
+                          uf)
+
+
+def ponto_clicado(celulas: pd.DataFrame, celula: int, uf: str) -> tuple[pd.Series, float, float] | None:
+    escolhida = celulas[celulas["celula"] == celula]
+    if escolhida.empty:
+        return None
+    grade = grade_do_ponto(uf)
+    return escolhida.iloc[0], float(np.ravel(grade.lon)[celula]), float(np.ravel(grade.lat)[celula])
+
+
+def cabecalho_do_ponto(ponto: pd.Series, lon: float, lat: float, linha_do_valor: str,
+                       conta: str = "O valor é o IDW") -> None:
+    st.subheader(f"{ponto['titulo']} · {abs(lat):.2f}° S, {abs(lon):.2f}° O".replace(".", ","))
+    st.markdown(linha_do_valor)
+    st.caption(f"Estação mais próxima: **{ponto['mais_proxima']}**, a {ponto['km']:.0f} km. {conta} das "
+               f"{config.IDW_VIZINHOS} estações mais próximas que mediram, com peso pelo inverso do quadrado "
+               "da distância: o mesmo que pinta o mapa. Quanto mais longe das estações, menos ele representa o lugar.")
+
+
+def painel_do_ponto(produto: variaveis.Produto, celulas: pd.DataFrame, celula: int, leituras: pd.DataFrame,
+                    uf: str, modo_serie: str, marca) -> None:
+    # O ponto clicado: o valor interpolado do instante do mapa (o do balão), a estação mais próxima ao
+    # lado, e a série do próprio ponto, com o IDW refeito a cada instante
+    clicado = ponto_clicado(celulas, celula, uf)
+    if clicado is None:
+        return
+    ponto, lon, lat = clicado
+    valor = f"{ponto['valor']:.{produto.decimais}f}".replace(".", ",")
+    rumo = (f", de {ponto['graus']:.0f}° ({interativo.rumo(ponto['graus'])})" if pd.notna(ponto["graus"]) else "")
+    cabecalho_do_ponto(ponto, lon, lat, f"**{produto.nome} interpolado:** {valor} {produto.unidade}{rumo}")
+    if modo_serie not in produto.modos:
+        st.info(f"{produto.nome} só existe para o período inteiro: não há série dia a dia.")
+        return
+    serie = interativo.serie_do_ponto(produto, leituras, coordenadas_das_estacoes(uf), lon, lat, modo_serie,
+                                      grade_do_ponto(uf).centro)
+    if serie.empty:
+        st.info(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram {produto.nome.lower()} no período.")
+        return
+    st.altair_chart(grafico_da_variavel_na_estacao(serie, produto, modo_serie == variaveis.DIA, marca),
+                    width="stretch")
+    st.caption(f"{produto.nome} interpolado no ponto, " + ("dia a dia" if modo_serie == variaveis.DIA else "hora a hora")
+               + " no período." + (" A linha azul é o instante do mapa." if marca is not None else "")
+                       + NAVEGAR_NO_GRAFICO)
+
+
+def painel_do_risco_no_ponto(celulas: pd.DataFrame, celula: int, avaliadas: dict, uf: str, legenda: str,
+                             fuso, hora_local) -> None:
+    # O ponto clicado no risco: o nível do balão e as três medidas do próprio ponto, hora a hora no
+    # período, no mesmo gráfico da estação
+    clicado = ponto_clicado(celulas, celula, uf)
+    if clicado is None:
+        return
+    ponto, lon, lat = clicado
+    nivel = int(ponto["nivel"])
+    cabecalho_do_ponto(ponto, lon, lat, f"**{legenda}:** {config.ROTULOS_RISCO[nivel]} ({nivel} de 3)",
+                       conta="A regra 30-30-30 é aplicada no ponto, hora a hora, a cada uma das três medidas "
+                             "interpoladas pelo IDW")
+    serie = interativo.serie_do_risco_no_ponto(avaliadas, lon, lat, grade_do_ponto(uf).centro, fuso)
+    if serie.empty:
+        return
+    for grafico in graficos_do_risco(serie, hora_local):
+        st.altair_chart(grafico, width="stretch")
+    st.caption(f"As três medidas interpoladas no ponto, hora a hora. A linha tracejada é o limiar de cada condição "
+               f"({config.LIMIAR_TEMP_MAX:g} °C, {config.LIMIAR_UMIDADE_MIN:g} % e {config.LIMIAR_RAJADA:g} km/h); "
+               "os pontos vermelhos, as horas em que ela valeu." + (" A linha azul é a hora do mapa."
+                                                                     if hora_local is not None else "")
+               + NAVEGAR_NO_GRAFICO)
+
+
+@st.cache_data(show_spinner=False, max_entries=30)
+def celulas_do_risco(niveis: np.ndarray, estacoes: pd.DataFrame, legenda: str, uf: str, com_medidas: bool,
+                     horas_alto: np.ndarray | None = None) -> pd.DataFrame:
+    return interativo.celulas_do_risco(grade_do_ponto(uf), niveis, legenda, estacoes, com_medidas, horas_alto)
+
+
+def painel_da_chuva_no_ponto(celulas: pd.DataFrame, celula: int, leituras: pd.DataFrame, uf: str, legenda: str,
+                             quando: str, de, ate, por_dia: bool, acumulado: bool) -> None:
+    # O ponto clicado na chuva: o valor do balão e a chuva do próprio ponto na mesma janela da
+    # estação, com o IDW refeito a cada hora (ou dia)
+    clicado = ponto_clicado(celulas, celula, uf)
+    if clicado is None:
+        return
+    ponto, lon, lat = clicado
+    valor = f"{ponto['valor']:.1f}".replace(".", ",")
+    cabecalho_do_ponto(ponto, lon, lat, f"**{legenda} interpolada, {quando}:** {valor} mm")
+    serie = interativo.serie_da_chuva_no_ponto(leituras, coordenadas_das_estacoes(uf), lon, lat, de, ate, por_dia,
+                                               grade_do_ponto(uf).centro)
+    if serie.empty:
+        st.info(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram a chuva nessa janela.")
+        return
+    total = f"{serie['acumulado'].iloc[-1]:.1f}".replace(".", ",")
+    st.altair_chart(grafico_da_chuva_na_estacao(serie, por_dia), width="stretch")
+    st.caption(f"A chuva interpolada no ponto em cada {'dia' if por_dia else 'hora'}, de {de:%d/%m %H:%M} a "
+               f"{ate:%d/%m %H:%M}: {total} mm somados. A linha tracejada é o acumulado."
+               + (" O mapa interpola o total de cada estação; quando alguma deixou de mandar horas, a soma das "
+                  "barras sai um pouco diferente do valor dele." if acumulado else "") + NAVEGAR_NO_GRAFICO)
+
+
+# O imóvel do CAR (ou o ponto informado) na barra lateral: nos três mapas, o painel dele abre
+# embaixo do mapa, com as células que ele toca. Nas variáveis e na chuva, a média das células;
+# no risco, o pior nível delas
+def celulas_dele(celulas: pd.DataFrame, imovel: car.Imovel, uf: str) -> pd.DataFrame | None:
+    dele = celulas[celulas["celula"].isin(celulas_do_imovel(imovel, imovel.chave, uf))]
+    if dele.empty:
+        st.warning(f"**{imovel.titulo}** não toca nenhuma célula de {uf}: fica fora do estado, ou a latitude e "
+                   "a longitude vieram trocadas (a latitude vem primeiro).")
+        return None
+    return dele
+
+
+def coordenadas_das_celulas(dele: pd.DataFrame, uf: str) -> tuple[np.ndarray, np.ndarray]:
+    grade = grade_do_ponto(uf)
+    indices = dele["celula"].to_numpy()
+    return np.ravel(grade.lon)[indices], np.ravel(grade.lat)[indices]
+
+
+def mais_perto_do_centro(dele: pd.DataFrame, imovel: car.Imovel) -> pd.Series:
+    lon, lat = imovel.centro
+    return dele.iloc[int(np.argmin(np.hypot(dele["Longitude"] - lon, dele["Latitude"] - lat)))]
+
+
+def cabecalho_do_imovel(imovel: car.Imovel, dele: pd.DataFrame, linha_do_valor: str, uf: str, conta: str) -> None:
+    lon, lat = imovel.centro
+    perto = mais_perto_do_centro(dele, imovel)
+    lado = 2 * grade_do_ponto(uf).meio_passo[1] * interativo.METROS_POR_GRAU / 1000
+    coordenadas = f"{abs(lat):.2f}° S, {abs(lon):.2f}° O".replace(".", ",")
+    st.subheader(f"{imovel.titulo} · {perto['titulo']} · {coordenadas}")
+    st.markdown(linha_do_valor)
+    quantas = f"{len(dele)} {'célula' if len(dele) == 1 else 'células'} da grade de ~{lado:.0f} km"
+    de_onde = "do ponto" if imovel.ponto else "do centro do imóvel"
+    # Na previsão a célula não sai das estações, e a mais próxima não entra
+    estacao = (f" Estação mais próxima {de_onde}: **{perto['mais_proxima']}**, a {perto['km']:.0f} km."
+               if "mais_proxima" in perto else "")
+    st.caption(" · ".join(parte for parte in (imovel.detalhe, quantas) if parte)
+               + f", em magenta no mapa.{estacao} {conta}")
+
+
+def painel_do_imovel(produto: variaveis.Produto, celulas: pd.DataFrame, imovel: car.Imovel, leituras: pd.DataFrame,
+                     uf: str, modo_serie: str, marca) -> None:
+    # Nas variáveis: a média das células no instante do mapa e a série da média, com o IDW refeito
+    # em cada célula a cada instante
+    dele = celulas_dele(celulas, imovel, uf)
+    if dele is None:
+        return
+    cabecalho_do_imovel(imovel, dele, f"**{produto.nome} {imovel.onde}:** "
+                                      f"{car.resumo(dele['valor'], produto.decimais, produto.unidade)}", uf,
+                        conta="Cada célula leva o IDW das estações, o mesmo que pinta o mapa.")
+    if modo_serie not in produto.modos:
+        st.info(f"{produto.nome} só existe para o período inteiro: não há série dia a dia.")
+        return
+    lons, lats = coordenadas_das_celulas(dele, uf)
+    serie = interativo.serie_do_ponto(produto, leituras, coordenadas_das_estacoes(uf), lons, lats, modo_serie,
+                                      grade_do_ponto(uf).centro)
+    if serie.empty:
+        st.info(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram {produto.nome.lower()} no período.")
+        return
+    st.altair_chart(grafico_da_variavel_na_estacao(serie, produto, modo_serie == variaveis.DIA, marca),
+                    width="stretch")
+    st.caption(f"{produto.nome} {imovel.onde}, " + ("dia a dia" if modo_serie == variaveis.DIA else "hora a hora")
+               + " no período" + (f": a média das {len(dele)} células." if len(dele) > 1 else ".")
+               + (" A linha azul é o instante do mapa." if marca is not None else "") + NAVEGAR_NO_GRAFICO)
+
+
+def painel_da_chuva_no_imovel(celulas: pd.DataFrame, imovel: car.Imovel, leituras: pd.DataFrame, uf: str,
+                              legenda: str, quando: str, de, ate, por_dia: bool, acumulado: bool) -> None:
+    dele = celulas_dele(celulas, imovel, uf)
+    if dele is None:
+        return
+    cabecalho_do_imovel(imovel, dele, f"**{legenda} {imovel.onde}, {quando}:** {car.resumo(dele['valor'], 1, 'mm')}",
+                        uf, conta="Cada célula leva o IDW das estações, o mesmo que pinta o mapa.")
+    lons, lats = coordenadas_das_celulas(dele, uf)
+    serie = interativo.serie_da_chuva_no_ponto(leituras, coordenadas_das_estacoes(uf), lons, lats, de, ate, por_dia,
+                                               grade_do_ponto(uf).centro)
+    if serie.empty:
+        st.info(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram a chuva nessa janela.")
+        return
+    total = f"{serie['acumulado'].iloc[-1]:.1f}".replace(".", ",")
+    st.altair_chart(grafico_da_chuva_na_estacao(serie, por_dia), width="stretch")
+    st.caption(f"A chuva {imovel.onde} em cada {'dia' if por_dia else 'hora'}"
+               + (f" (a média das {len(dele)} células)" if len(dele) > 1 else "")
+               + f", de {de:%d/%m %H:%M} a {ate:%d/%m %H:%M}: {total} mm somados. A linha tracejada é o acumulado."
+               + (" O mapa interpola o total de cada estação; quando alguma deixou de mandar horas, a soma das "
+                  "barras sai um pouco diferente do valor dele." if acumulado else "") + NAVEGAR_NO_GRAFICO)
+
+
+def painel_do_risco_no_imovel(celulas: pd.DataFrame, imovel: car.Imovel, avaliadas: dict, uf: str, legenda: str,
+                              fuso, hora_local) -> None:
+    # No risco, o imóvel leva o pior nível das células dele, e as três medidas são as da célula de
+    # pior nível (entre as de mesmo nível, a mais perto do centro do imóvel)
+    dele = celulas_dele(celulas, imovel, uf)
+    if dele is None:
+        return
+    pior = int(dele["nivel"].max())
+    com_o_pior = dele[dele["nivel"] == pior]
+    escolhida = mais_perto_do_centro(com_o_pior, imovel)
+    quantas = ("" if len(dele) == 1 else f", nas {len(dele)} células" if len(com_o_pior) == len(dele)
+               else f", em {len(com_o_pior)} das {len(dele)} células")
+    nivel = f"{config.ROTULOS_RISCO[pior]} ({pior} de 3){quantas}"
+    cabecalho_do_imovel(imovel, dele, f"**{imovel.onde.capitalize()}, {legenda.lower()}:** {nivel}", uf,
+                        conta="A regra 30-30-30 é aplicada célula a célula, às três medidas interpoladas pelo IDW"
+                              + ("." if imovel.ponto else "; o imóvel leva o pior nível das células dele."))
+    grade = grade_do_ponto(uf)
+    serie = interativo.serie_do_risco_no_ponto(avaliadas, float(np.ravel(grade.lon)[escolhida["celula"]]),
+                                               float(np.ravel(grade.lat)[escolhida["celula"]]), grade.centro, fuso)
+    if serie.empty:
+        return
+    for grafico in graficos_do_risco(serie, hora_local):
+        st.altair_chart(grafico, width="stretch")
+    st.caption("As três medidas interpoladas hora a hora "
+               + ("na célula do ponto" if imovel.ponto else "na célula de pior nível do imóvel")
+               + (", a mais perto do centro dele entre as de mesmo nível" if len(com_o_pior) > 1 else "")
+               + f". A linha tracejada é o limiar de cada condição ({config.LIMIAR_TEMP_MAX:g} °C, "
+                 f"{config.LIMIAR_UMIDADE_MIN:g} % e {config.LIMIAR_RAJADA:g} km/h); os pontos vermelhos, as horas "
+                 "em que ela valeu." + (" A linha azul é a hora do mapa." if hora_local is not None else "")
+               + NAVEGAR_NO_GRAFICO)
+
+
+@st.cache_data(show_spinner="Lendo o arquivo do imóvel", max_entries=3)
+def camadas_do_car(arquivos: tuple[tuple[str, bytes], ...]) -> tuple[dict[str, tuple[gpd.GeoDataFrame, list[str]]],
+                                                                     list[str]]:
+    # As camadas com desenho, cada uma com os rótulos dos imóveis, e o que ficou de fora, com o porquê
+    fontes, de_fora = car.fontes(list(arquivos))
+    lidas = {}
+    for nome, fonte in fontes.items():
+        try:
+            tabela = car.ler(fonte)
+        except car.ErroDoArquivo as erro:
+            de_fora.append(f"{nome}: {erro}")
+            continue
+        if tabela.empty:
+            de_fora.append(f"{nome}: sem nenhum desenho")
+            continue
+        lidas[nome] = (tabela, car.rotulos(tabela))
+    return lidas, de_fora
+
+
+def imovel_da_barra() -> car.Imovel | None:
+    # Na barra lateral: as coordenadas de um ponto ou os arquivos do imóvel (um imóvel por vez), com
+    # o tipo de cada arquivo reconhecido pelo conteúdo. O arquivo fica só na memória: não é gravado
+    entrada = st.radio("Imóvel do CAR", ["Nenhum", "Coordenadas", "Arquivos"], horizontal=True,
+                       key="imovel_entrada",
+                       help="Para ver as condições num imóvel: nos três mapas aparecem o contorno dele e as células "
+                            "da grade que ele toca, e o painel do imóvel abre embaixo do mapa. O arquivo fica só "
+                            "na memória: não é gravado.")
+    imovel = None
+    if entrada == "Arquivos":
+        # Sem filtro de extensão: o tipo sai do conteúdo, e o que não for mapa fica de fora com aviso
+        arquivos = st.file_uploader("Arquivos do imóvel", accept_multiple_files=True, key="imovel_arquivos",
+                                    help="Shapefile (o .zip do SICAR, ou o .shp com o .dbf, o .shx e o .prj), "
+                                         "GeoJSON, GeoPackage, KML ou KMZ, soltos ou num .zip. O tipo de cada um é "
+                                         "reconhecido pelo conteúdo.")
+        if arquivos:
+            try:
+                lidas, de_fora = camadas_do_car(tuple((arquivo.name, arquivo.getvalue()) for arquivo in arquivos))
+            except car.ErroDoArquivo as erro:
+                st.error(str(erro))
+                lidas, de_fora = {}, []
+            if de_fora:
+                st.caption("Ficou de fora: " + "; ".join(de_fora) + ".")
+            if not lidas:
+                st.error("Nenhum mapa com desenho no que veio. Valem shapefile (com o .shp, o .shx e o .dbf), "
+                         "GeoJSON, GeoPackage, KML e KMZ.")
+            else:
+                nomes = sorted(lidas)
+                if len(nomes) == 1:
+                    camada = nomes[0]
+                    st.caption(f"Reconhecido: **{camada}**.")
+                else:
+                    camada = st.selectbox(
+                        "Camada", nomes, index=nomes.index(car.camada_padrao(nomes)), key="imovel_camada",
+                        help="Uma por arquivo (o GeoPackage e o KML podem ter várias), com o tipo reconhecido entre "
+                             "parênteses. Do SICAR, a da área do imóvel vem primeiro.")
+                tabela, rotulos = lidas[camada]
+                posicao = 0 if len(tabela) == 1 else st.selectbox(
+                    f"Imóvel ({len(tabela)} no arquivo)", range(len(tabela)), format_func=rotulos.__getitem__,
+                    key=f"imovel_escolhido_{camada}", help="Digite parte do código do CAR para procurar.")
+                imovel = car.imovel_da_linha(tabela, posicao)
+    elif entrada == "Coordenadas":
+        texto = st.text_input("Latitude e longitude", key="imovel_coordenadas", placeholder="-20.4697, -54.6201",
+                              help="A latitude primeiro, como sai do Google Maps, com ponto ou vírgula decimal; ou "
+                                   "em graus, minutos e segundos: 20°28'11\" S 54°37'12\" O.")
+        if texto.strip():
+            try:
+                imovel = car.imovel_do_ponto(*car.ler_coordenadas(texto))
+            except ValueError as erro:
+                st.error(str(erro))
+    # Imóvel novo: a escolha de antes (o ponto ou a estação clicada) sai, e o painel dele fica sozinho
+    chave = imovel.chave if imovel is not None else None
+    if chave != st.session_state.get("imovel_chave"):
+        for nome in ESCOLHAS_INTERATIVAS:
+            st.session_state.pop(nome, None)
+        st.session_state["imovel_chave"] = chave
+    return imovel
+
+
+def chave_do_mapa(nome: str, em_3d: bool = False, imovel: car.Imovel | None = None) -> str:
+    # Uma chave para cada modo e para cada imóvel: depois que a pessoa mexe no mapa, o Streamlit
+    # guarda a câmera, e sem a chave nova o mapa não inclinaria, não voltaria a ficar plano nem
+    # abriria no imóvel novo
+    return nome + ("_3d" if em_3d else "") + (f"_{imovel.chave}" if imovel is not None else "")
+
+
+def mapa_navegavel_da_chuva(produto: variaveis.Produto, valores: pd.Series, do_inmet: pd.Series,
+                            valores_apoio: pd.Series, valores_cemaden: pd.Series, niveis, escritos: bool,
+                            em_3d: bool, quando: str, legenda: str, nome_do_arquivo: str, carimbo: str,
+                            quando_no_arquivo: str, serie_de, serie_ate, acumulado: bool, leituras: pd.DataFrame,
+                            apoio: pd.DataFrame, do_cemaden: pd.DataFrame, cadastro_cemaden: pd.DataFrame,
+                            estacoes: pd.DataFrame, fora: set[str], uf: str, imovel: car.Imovel | None = None) -> None:
+    # A vista navegável da página Chuva: a superfície (ou o relevo) da janela escolhida, com os
+    # pluviômetros do CEMADEN em laranja. O clique abre a chuva do ponto ou da estação embaixo
+    medidas = valores.dropna()
+    if len(medidas) < config.MIN_ESTACOES_INTERPOLACAO:
+        st.warning(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram a chuva em {quando}.")
+        return
+    niveis = tuple(niveis) if niveis is not None else None
+    pontos = interativo.pontos_de_valores(_com_coordenadas(do_inmet, produto.nome, uf), produto.nome, legenda,
+                                          produto.unidade, produto.decimais)
+    pontos_cemaden = interativo.pontos_do_cemaden(_com_coordenadas(valores_cemaden, produto.nome, uf), produto.nome,
+                                                  legenda, produto.unidade, produto.decimais)
+    if escritos:
+        # Pedido da equipe (24/11/2026): com o estado inteiro na tela, o agrupamento de 15 km do boletim
+        # (mapas.o_maior_de_cada_grupo, as duas redes juntas); aproximando, o número de cada estação.
+        # O mapa_interativo escreve em metros o de quem não é o maior do grupo
+        juntos = pd.concat(
+            [tabela[["Longitude", "Latitude"]].assign(valor=tabela["Estação"].map(serie).to_numpy(dtype=float))
+             for tabela, serie in ((pontos, do_inmet), (pontos_cemaden, valores_cemaden))], ignore_index=True)
+        maior = juntos.index.isin(mapas.o_maior_de_cada_grupo(juntos, "valor", config.AGRUPAR_CHUVA_KM).index)
+        pontos, pontos_cemaden = (pontos.assign(maior_do_grupo=maior[:len(pontos)]),
+                                  pontos_cemaden.assign(maior_do_grupo=maior[len(pontos):]))
+    celulas = celulas_do_ponto(valores, valores_apoio, produto.nome, quando, uf, nome=legenda)
+    por_unidade = None
+    if em_3d:
+        por_unidade = interativo.metros_por_unidade(niveis, medidas)
+        imagem, relevo = None, interativo.relevo(celulas, produto.paleta, niveis, medidas, por_unidade)
+        pontos, pontos_cemaden = (tabela.assign(altura=tabela["Estação"].map(serie).fillna(0).to_numpy(dtype=float)
+                                                * por_unidade)
+                                  for tabela, serie in ((pontos, do_inmet), (pontos_cemaden, valores_cemaden)))
+    else:
+        imagem, relevo = camada_superficie(valores, produto.nome, quando, uf, niveis, valores_apoio), None
+    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, uf, escritos, celulas, relevo=relevo, imovel=imovel,
+                                             cemaden=pontos_cemaden),
+                             on_select="rerun", selection_mode="single-object",
+                             key=chave_do_mapa("mapa_chuva_interativa", em_3d, imovel), height=ALTURA_MAPA)
+    if niveis is not None:
+        barra_no_mapa("escala_mapa_chuva_interativa", produto.paleta, niveis, produto.unidade)
+    if medidas.max() == 0:
+        st.info(f"Não choveu em nenhuma estação em {quando}.")
+    st.caption(f"{legenda}, {quando}: de {medidas.min():.1f} a {medidas.max():.1f} mm em {estacoes_no_mapa(valores)}. "
+               "A superfície é a do mapa do boletim (o IDW das estações, com as vizinhas na borda), e abaixo "
+               "da primeira classe, onde não choveu, fica branca. **Passe o mouse** em qualquer ponto para ler a chuva interpolada, "
+               "e **clique** para ver a chuva do ponto, ou a de uma estação."
+               + (f" Com o estado inteiro na tela, das estações a até {config.AGRUPAR_CHUVA_KM:g} km umas das outras "
+                  "só aparece o número da que mais choveu, como no boletim: **aproxime o mapa** para ver o de "
+                  "cada estação." if escritos else "")
+               + (f" No relevo, {interativo.ALTURA_DO_TETO / por_unidade:g} mm sobem 100 km; **arraste com o "
+                  "botão direito** para inclinar e girar." if em_3d and por_unidade else "")
+               + nota_das_retiradas(fora)
+               + (" **Em laranja, os pluviômetros do CEMADEN**, que entram na superfície como as estações do "
+                  f"INMET. Dados: {mapas.CREDITO_COM_CEMADEN}." if not pontos_cemaden.empty else ""))
+    with menu_de_baixar("interativo_chuva"):
+        botoes_do_sig("interativo_chuva", boletim.nome_do_arquivo(nome_do_arquivo, uf, carimbo),
+                      valores, valores_apoio, legenda, produto.unidade, produto.decimais, uf, quando_no_arquivo)
+
+    objetos = evento.selection.get("objects", {}) if evento is not None else {}
+    celula_clicada = objetos.get("pontos") or objetos.get(PONTOS_NO_RELEVO)
+    clicada = objetos.get("estacoes") or objetos.get("cemaden")
+    if clicada:
+        st.session_state["escolha_chuva_interativa"] = ("estacao", clicada[0]["titulo"])
+    elif celula_clicada:
+        st.session_state["escolha_chuva_interativa"] = ("ponto", int(celula_clicada[0]["celula"]))
+    tipo, escolhida = st.session_state.get("escolha_chuva_interativa", (None, None))
+    # Hora a hora até 4 dias; mais que isso, por dia, para as barras caberem
+    por_dia = (serie_ate - serie_de) > timedelta(days=4)
+    # A chuva do ponto e a do imóvel, sem as retiradas e com o CEMADEN, como o mapa
+    do_mapa = retiradas.retirar(pd.concat([leituras, apoio, do_cemaden], ignore_index=True), fora)
+    if imovel is not None:
+        painel_da_chuva_no_imovel(celulas, imovel, do_mapa, uf, legenda, quando, serie_de, serie_ate, por_dia,
+                                  acumulado)
+    if tipo == "ponto":
+        painel_da_chuva_no_ponto(celulas, escolhida, do_mapa, uf, legenda, quando, serie_de, serie_ate, por_dia,
+                                 acumulado)
+    elif tipo == "estacao" and escolhida in set(estacoes["Estação"]) | set(cadastro_cemaden["Estação"]):
+        do_cemaden_clicada = escolhida in set(cadastro_cemaden["Estação"])
+        serie = interativo.serie_da_chuva(do_cemaden if do_cemaden_clicada else leituras, escolhida, serie_de,
+                                          serie_ate, por_dia)
+        total = serie["chuva"].sum(min_count=1)
+        st.subheader(f"{escolhida} — " + (f"{total:.1f} mm".replace(".", ",") if pd.notna(total) else "sem dado")
+                     + f" de {serie_de:%d/%m %H:%M} a {serie_ate:%d/%m %H:%M}")
+        if serie.empty or pd.isna(total):
+            st.info("A estação não registrou chuva nessa janela.")
+        else:
+            st.altair_chart(grafico_da_chuva_na_estacao(serie, por_dia), width="stretch")
+            st.caption("As barras são a chuva de cada " + ("dia" if por_dia else "hora")
+                       + "; a linha tracejada, o acumulado ao longo da janela." + NAVEGAR_NO_GRAFICO
+                       + (f" Dados: {mapas.CREDITO_COM_CEMADEN}." if do_cemaden_clicada else ""))
+
+
+def mapa_navegavel_do_risco(modo: str, hora, dia, avaliadas: dict, completas: list, do_produto: list,
+                            nomes_do_estado: set[str], fora: set[str], escritos: bool, em_3d: bool, uf: str,
+                            recorte: config.Recorte, intervalo: tuple, imovel: car.Imovel | None = None) -> None:
+    # A vista navegável da página Risco de Fogo: as classes da regra 30-30-30 no mapa que se aproxima
+    # e se arrasta, com as três medidas no balão (no hora a hora). O clique abre as medidas do ponto
+    # ou da estação no período
+    hora_local = None
+    if modo == variaveis.HORA:
+        grade, pontos = avaliadas[hora].grade, avaliadas[hora].estacoes
+        coluna, legenda = risco_fogo.COLUNA_NIVEL_HORA, "Na hora"
+        hora_local = hora.tz_convert(recorte.fuso).tz_localize(None)
+        das_celulas, horas_alto = avaliadas[hora].estacoes, None
+        momento, quando = hora_local, f"{hora_local:%d/%m/%Y %H:%M}"
+    elif modo == variaveis.DIA:
+        dias = risco.por_dia(avaliadas)
+        grade, pontos = dias[dia], risco.estacoes_do_dia(avaliadas, dia)
+        coluna, legenda = risco_fogo.COLUNA_NIVEL_HORA, "Pior nível do dia"
+        horas_alto = risco.horas_em_risco_alto(risco.do_dia(avaliadas, dia))
+        momento, quando = dia, f"{dia:%d/%m/%Y}"
+    else:
+        grade = risco.pior_nivel(avaliadas)
+        pontos = risco.resumo(do_produto, config.Periodo.de_datas(*intervalo, fuso=recorte.fuso), uf)
+        coluna, legenda = risco_fogo.COLUNA_NIVEL, "Pior nível do período"
+        horas_alto = risco.horas_em_risco_alto(avaliadas)
+        momento, quando = None, texto_do_periodo(intervalo)
+    if modo != variaveis.HORA:
+        das_celulas = pd.concat([avaliada.estacoes for avaliada in avaliadas.values()]).drop_duplicates("Estação")
+    # As vizinhas já entraram na superfície; nos pontos, só as do estado, e sem as retiradas (o
+    # resumo do período sai de todas)
+    do_estado = retiradas.retirar(pontos[pontos["Estação"].isin(nomes_do_estado)], fora)
+    nivel_da_estacao = do_estado.drop_duplicates("Estação").set_index("Estação")[coluna]
+    pontos = interativo.pontos_de_risco(do_estado, coluna, legenda)
+    com_medidas = modo == variaveis.HORA
+    colunas = ["Estação", "Longitude", "Latitude"] + (list(interativo.MEDIDAS_DO_RISCO) if com_medidas else [])
+    celulas = celulas_do_risco(grade, das_celulas[colunas].reset_index(drop=True), legenda, uf, com_medidas,
+                               horas_alto)
+    if em_3d:
+        imagem, relevo = None, interativo.relevo_de_classes(celulas)
+        pontos = pontos.assign(altura=pontos["Estação"].map(nivel_da_estacao).to_numpy(dtype=float)
+                               * interativo.metros_por_nivel())
+    else:
+        imagem, relevo = interativo.imagem_de_classes(grade, malha_fina(uf).dentro), None
+    mapa = mapa_interativo(imagem, pontos, uf, escritos, celulas, interativo.COR_DO_PONTO_ESCOLHIDO_NO_RISCO,
+                           relevo, imovel)
+    evento = st.pydeck_chart(mapa, on_select="rerun", selection_mode="single-object",
+                             key=chave_do_mapa("mapa_risco_interativo", em_3d, imovel), height=ALTURA_MAPA)
+    escala_no_mapa("escala_mapa_risco_interativo", legenda_do_risco(vertical=True))
+    st.caption("Role para aproximar, arraste para deslocar, passe o mouse em qualquer ponto para ver o nível"
+               + (" e as três medidas interpoladas" if com_medidas else " e as horas em risco alto")
+               + ", e **clique** para ver as três medidas do ponto, ou as de uma estação, no período. A superfície "
+               "é a mesma do mapa do boletim: as três variáveis interpoladas separadas e a regra aplicada célula a "
+               "célula."
+               + (f" No relevo, cada nível sobe {interativo.metros_por_nivel() / 1000:.0f} km; **arraste com o "
+                  "botão direito** para inclinar e girar." if em_3d else "")
+               + nota_das_retiradas(fora))
+    titulo = "Risco de fogo na hora" if modo == variaveis.HORA else f"Risco de fogo: {legenda.lower()}"
+    with menu_de_baixar("interativo_risco"):
+        botao_do_geotiff("interativo_risco",
+                         nome_do_geotiff(boletim.nome_do_arquivo("Risco de fogo", uf,
+                                                                 carimbo_do_momento(modo, momento, intervalo))),
+                         geotiff_da_grade(grade, uf, titulo, quando, mapas.CREDITO, METODO_DO_RISCO, classes=True),
+                         AJUDA_DO_GEOTIFF_DO_RISCO)
+
+    if imovel is not None:
+        painel_do_risco_no_imovel(celulas, imovel, avaliadas, uf, legenda, recorte.fuso, hora_local)
+    # O ponto ou a estação clicada fica escolhida enquanto o deslizante anda, até outro clique
+    objetos = evento.selection.get("objects", {}) if evento is not None else {}
+    celula_clicada = objetos.get("pontos") or objetos.get(PONTOS_NO_RELEVO)
+    if objetos.get("estacoes"):
+        st.session_state["escolha_risco_interativo"] = ("estacao", objetos["estacoes"][0]["titulo"])
+    elif celula_clicada:
+        st.session_state["escolha_risco_interativo"] = ("ponto", int(celula_clicada[0]["celula"]))
+    tipo, escolhida = st.session_state.get("escolha_risco_interativo", (None, None))
+    if tipo == "ponto":
+        painel_do_risco_no_ponto(celulas, escolhida, avaliadas, uf, legenda, recorte.fuso, hora_local)
+    elif tipo == "estacao" and escolhida in nomes_do_estado:
+        st.subheader(escolhida)
+        serie = interativo.serie_da_estacao(completas, escolhida, recorte.fuso)
+        for grafico in graficos_do_risco(serie, hora_local):
+            st.altair_chart(grafico, width="stretch")
+        st.caption(f"A linha tracejada é o limiar de cada condição ({config.LIMIAR_TEMP_MAX:g} °C, "
+                   f"{config.LIMIAR_UMIDADE_MIN:g} % e {config.LIMIAR_RAJADA:g} km/h); os pontos vermelhos, "
+                   "as horas em que ela valeu." + (" A linha azul é a hora do mapa." if hora_local is not None
+                                                   else "") + NAVEGAR_NO_GRAFICO)
+
+
+# =====================================================
+# PÁGINAS DO OBSERVADO: MAPAS, CHUVA E RISCO DE FOGO
+# =====================================================
+# Até a v0.4.4 cada assunto tinha duas páginas: o Painel, com os mapas do boletim, e os Mapas
+# interativos. Desde a v0.4.5 (pedido da equipe, 24/11/2026) é uma página por assunto, com o seletor
+# "Mapa: Navegável | Boletim" dos Raios, e uma variável por vez nas duas vistas. Os controles comuns
+# (a agregação, a variável, o instante) ficam em cima e valem para as duas: trocar de vista não
+# muda a escolha nem consulta de novo. O que não é mapa (as séries, as cascatas, os gráficos do
+# risco) vem embaixo, rolando a página
+VISTAS_DO_MAPA = ("Navegável", "Boletim")
+LOCALIZACAO = "Localização das estações"
+MODOS_DA_CHUVA = ("Acumulado", "Hora a hora", "Por dia")
+MAPAS_DO_PERIODO_NO_RISCO = ("Pior nível", "Horas em risco alto")
+
+
+def texto_do_periodo(intervalo: tuple) -> str:
+    return (f"{intervalo[0]:%d/%m/%Y}" if intervalo[0] == intervalo[1]
+            else f"{intervalo[0]:%d/%m/%Y} a {intervalo[1]:%d/%m/%Y}")
+
+
+def sem_token() -> None:
+    if config.TOKEN_INMET in ("", config.TOKEN_EXEMPLO):
+        st.error("Token do INMET não configurado. Preencha `TOKEN_INMET` no arquivo `.env` e recarregue a página.")
+        st.stop()
+
+
+def barra_do_observado(aviso) -> tuple[str, config.Recorte, tuple, pd.DataFrame, car.Imovel | None]:
+    # A barra lateral das três páginas: o estado e o período, que valem para tudo; o mapa de fundo e o
+    # imóvel do CAR, que valem para a vista navegável; e o cache local
+    with st.sidebar:
+        st.header("Filtros")
+        uf, recorte, intervalo = filtros_de_estado_e_periodo()
+        try:
+            estacoes = carregar_estacoes(uf).sort_values("Estação")
+        except fonte.ErroFonte:
+            sem_lista_de_estacoes(aviso, uf)
+        st.checkbox("Mapa de fundo", value=True, key="fundo_interativo",
+                    help="No mapa navegável: países, cidades, estradas e rios, para ver além do estado. Vem da "
+                         "internet: sem rede, o fundo some e o resto do mapa continua. Desligado, ficam só os "
+                         "limites do estado e dos municípios.")
+        imovel = imovel_da_barra()
+        st.divider()
+        guardadas, megabytes = coleta.tamanho_do_cache()
+        st.caption(f"Cache local: {guardadas} estações, {megabytes:.1f} MB")
+        if st.button("Limpar cache", width="stretch"):
+            st.cache_data.clear()
+            st.success(f"{coleta.limpar_cache()} arquivos removidos.")
+    return uf, recorte, intervalo, estacoes, imovel
+
+
+def carregar_todas_as_estacoes(uf: str, estacoes: pd.DataFrame, chave: str) -> bool:
+    # Os mapas usam todas as estações do estado, e não só as escolhidas nas séries. A primeira consulta
+    # demora: ela só sai quando alguém pede
+    if st.session_state.get("mapa_liberado"):
+        return True
+    st.info(f"O mapa usa as {len(estacoes)} estações do estado, mais as vizinhas para a borda. Na primeira vez a "
+            "consulta demora alguns minutos; depois vem do cache.")
+    if st.button(f"Carregar todas as estações de {uf}", type="primary", key=chave):
+        st.session_state["mapa_liberado"] = True
+        st.rerun()
+    return False
+
+
+# ----- MAPAS ---------------------------------------------------------------------------------
+def pagina_mapas() -> None:
+    st.title("Mapas")
+    aviso = st.container()
+    sem_token()
+    uf, recorte, intervalo, estacoes, imovel = barra_do_observado(aviso)
+    inicio, fim = janela_do_periodo(intervalo, recorte)
+    aba_mapas, aba_qualidade = st.tabs(["Mapas", "Qualidade dos dados"])
+    with aba_mapas:
+        mapa_das_variaveis(uf, recorte, intervalo, estacoes, inicio, fim, imovel)
+        st.divider()
+        tabela, falharam, nomes = series_das_estacoes(uf, intervalo, estacoes, inicio, fim)
+    with aba_qualidade:
+        qualidade_dos_dados(uf, estacoes, inicio, fim, tabela, falharam, nomes)
+
+
+def mapa_das_variaveis(uf: str, recorte: config.Recorte, intervalo: tuple, estacoes: pd.DataFrame,
+                       inicio: datetime, fim: datetime, imovel: car.Imovel | None) -> None:
+    agregacao, variavel, vista_tela = st.columns([1.4, 1.6, 1])
+    rotulo_modo = agregacao.segmented_control("Agregação", list(MODOS_MAPA), default=list(MODOS_MAPA)[0],
+                                              key="modo_mapa") or list(MODOS_MAPA)[0]
+    modo = MODOS_MAPA[rotulo_modo]
+    # A chuva tem página própria: os acumulados dela olham para trás do período
+    catalogo = [produto.nome for produto in variaveis.disponiveis(modo, variaveis.MAPA) if produto.grandeza != "Chuva"]
+    catalogo.append(LOCALIZACAO)
+    padrao = next((nome for nome in variaveis.PADRAO_MAPA[modo] if nome in catalogo), catalogo[0])
+    nome = variavel.selectbox("Variável", catalogo, index=catalogo.index(padrao), key=f"variavel_mapa_{modo}",
+                              help="Uma por vez. Cada uma traz a sua regra: a máxima do dia é a maior das máximas "
+                                   "horárias, nunca a média delas. A última mostra onde fica cada estação.")
+    if nome == LOCALIZACAO:
+        # Onde fica cada estação é a referência dos pontos dos outros mapas: não tem boletim
+        vista_tela.segmented_control("Mapa", VISTAS_DO_MAPA[:1], default=VISTAS_DO_MAPA[0], disabled=True,
+                                     key="vista_localizacao", help="A localização das estações não tem boletim.")
+        localizacao_das_estacoes(uf)
+        return
+    vista = vista_tela.segmented_control("Mapa", VISTAS_DO_MAPA, default=VISTAS_DO_MAPA[0],
+                                         key="vista_mapa") or VISTAS_DO_MAPA[0]
+    if not carregar_todas_as_estacoes(uf, estacoes, "liberar_mapas"):
+        return
+    leituras, ausentes = carregar_leituras(tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]), inicio, fim, uf)
+    # As vizinhas vêm numa consulta à parte para o caminho do produto ficar intocado: o que sai delas
+    # só alimenta a interpolação da borda
+    vizinhas = estacoes_vizinhas(uf)
+    apoio, _ = carregar_leituras(tuple(vizinhas["CD_ESTACAO"]), tuple(vizinhas["Estação"]), inicio, fim, uf,
+                                 "Consultando as estações vizinhas")
+    produto = variaveis.por_nome(nome)
+    if not all(coluna in leituras for coluna in produto.colunas):
+        st.warning(f"A API não devolveu {produto.nome.lower()} no período.")
+        return
+    # As estações retiradas da variável saem do ponto e da superfície nas duas vistas; a série da
+    # estação clicada fica com todas
+    gaveta_das_retiradas("mapas", [produto.grandeza], estacoes, vizinhas)
+    fora = retiradas_da_variavel(produto.grandeza)
+    paradas = variaveis.momentos(leituras, modo)
+    if modo == variaveis.PERIODO:
+        momento, rotulo = None, texto_do_periodo(intervalo)
+    elif not paradas:
+        st.warning("Sem leituras no período escolhido.")
+        return
+    else:
+        formatar = ((lambda marca: f"{marca:%d/%m/%Y}") if modo == variaveis.DIA
+                    else (lambda marca: f"{marca:%d/%m %H:%M}"))
+        momento = linha_do_tempo("Quando", paradas, f"quando_mapa_{modo}", formatar)
+        rotulo = formatar(momento)
+    marcar, ajustar_tela = st.columns(2)
+    escritos = marcar.checkbox("Mostrar o valor de cada estação", value=True, key="valores_mapa",
+                               help="Lado a lado os valores se cobrem: desligue para ler só o padrão das cores, ou "
+                                    "aproxime o mapa.")
+    ajustar = ajustar_tela.checkbox("Ajustar a escala ao dado", value=False, key="ajustar_mapa",
+                                    help="Desligada, a escala é fixa: a mesma cor quer dizer o mesmo valor em qualquer "
+                                         "dia. Ligue para ver o padrão de um dia sem variação, sabendo que as cores "
+                                         "mudam de significado.")
+    horas_janela = {variaveis.HORA: 1.0, variaveis.DIA: 24.0}.get(modo, (fim - inicio).total_seconds() / 3600)
+    niveis = niveis_da_escala(produto, horas_janela, ajustar)
+    if vista == VISTAS_DO_MAPA[0]:
+        mapa_navegavel_da_variavel(produto, modo, momento, rotulo, leituras, apoio, estacoes, fora, escritos,
+                                   niveis, uf, intervalo, imovel)
+    else:
+        boletim_da_variavel(produto, modo, momento, rotulo, leituras, apoio, paradas, fora, escritos, niveis,
+                            horas_janela, uf, intervalo, config.Periodo.de_datas(*intervalo, fuso=recorte.fuso))
+        st.caption(f"Interpolação IDW (potência {config.IDW_POTENCIA}, {config.IDW_VIZINHOS} vizinhos) sobre as "
+                   f"{len(estacoes)} estações do estado mais {len(vizinhas)} de fora dele, que seguram a superfície "
+                   "na borda sem entrar em tabela nem ranking.")
+    if ausentes:
+        st.caption(f"Sem dados no período ({len(ausentes)}): {', '.join(ausentes)}")
+
+
+def series_das_estacoes(uf: str, intervalo: tuple, estacoes: pd.DataFrame, inicio: datetime,
+                        fim: datetime) -> tuple[pd.DataFrame, list[str], list[str]]:
+    # As séries das estações escolhidas, embaixo do mapa. Elas e as grandezas são escolhidas aqui, e não
+    # na barra lateral: só as séries (e a Qualidade dos dados) usam essa escolha
+    st.header("Séries temporais")
+    escolha_estacoes, escolha_grandezas = st.columns([3, 2])
+    # As escolhidas que não são do estado saem antes do widget: trocando o estado, as do anterior não
+    # estão mais entre as opções, e o Streamlit recusaria o valor guardado
     st.session_state["estacoes"] = [nome for nome in st.session_state.get("estacoes", [])
                                     if nome in set(estacoes["Estação"])]
-    nomes = st.multiselect("Estações", estacoes["Estação"].tolist(), key="estacoes",
-                           help="Cada estação vira uma linha no gráfico. Os mapas usam sempre "
-                                "todas as estações do estado.")
-    # Uma grandeza dá um gráfico, com as suas séries dentro (máxima, mínima, média): escalas
-    # diferentes nunca se misturam num eixo só. A chuva ficou de fora: ela não vira linha, vira
-    # cascata, e a cascata mora na aba Chuva, junto do resto do que se lê dela.
+    nomes = escolha_estacoes.multiselect("Estações", estacoes["Estação"].tolist(), key="estacoes",
+                                         help="Cada estação vira uma linha no gráfico. Os mapas usam sempre todas "
+                                              "as estações do estado.")
+    # Uma grandeza dá um gráfico, com as suas séries dentro (máxima, mínima, média): escalas diferentes
+    # nunca se misturam num eixo só. A chuva fica na página dela, em cascata
     st.session_state.setdefault("grandezas", ["Temperatura", "Vento"])
-    escolhidas = st.multiselect("Grandezas",
-                                [nome for nome in variaveis.grandezas(variaveis.HORA, variaveis.GRAFICO)
-                                 if nome != "Chuva"],
-                                key="grandezas",
-                                help="Cada grandeza ganha o seu gráfico, com as séries que a equipe "
-                                     "de meteorologia definiu.")
-
-    st.divider()
-    guardadas, megabytes = coleta.tamanho_do_cache()
-    st.caption(f"Cache local: {guardadas} estações, {megabytes:.1f} MB")
-    if st.button("Limpar cache", width="stretch"):
-        st.cache_data.clear()
-        st.success(f"{coleta.limpar_cache()} arquivos removidos.")
-
-if not nomes:
-    st.info("Escolha ao menos uma estação na barra lateral.")
-    st.stop()
-
-# =====================================================
-# DADOS
-# =====================================================
-# O dia é o do estado escolhido: em MS ele começa às 04 h UTC, no Paraná às 03 h
-inicio = datetime.combine(intervalo[0], datetime.min.time(), tzinfo=recorte.fuso).astimezone(config.FUSO_UTC)
-fim = (datetime.combine(intervalo[1], datetime.min.time(), tzinfo=recorte.fuso)
-       + timedelta(days=1)).astimezone(config.FUSO_UTC)
-codigos = tuple(estacoes.set_index("Estação").loc[nomes, "CD_ESTACAO"])
-
-tabela, falharam = carregar_leituras(codigos, tuple(nomes), inicio, fim, uf)
-
-if tabela.empty:
-    st.warning("Nenhuma das estações escolhidas tem dados nesse período.")
-    st.stop()
-if falharam:
-    st.warning(f"Sem dados ou falha na consulta: {', '.join(falharam)}")
-
-horas_esperadas = int((fim - inicio).total_seconds() // 3600)
-periodo_escolhido = (f"{intervalo[0]:%d/%m/%Y}" if intervalo[0] == intervalo[1]
-                     else f"{intervalo[0]:%d/%m/%Y} a {intervalo[1]:%d/%m/%Y}")
-# O mesmo Periodo que o main.py montaria para essas datas: é dele o texto das janelas nos mapas
-# baixados para o boletim, e a tabela do risco sai com as colunas da planilha do produto.
-periodo_painel = config.Periodo.de_datas(*intervalo, fuso=recorte.fuso)
-aba_series, aba_mapa, aba_chuva, aba_risco, aba_navegavel, aba_qualidade = st.tabs(
-    ["Estações: Séries Temporais", "Mapas Boletim", "Chuva", "Risco de Fogo", "Mapa Navegação",
-     "Qualidade dos dados"])
-
-# =====================================================
-# SÉRIES TEMPORAIS
-# =====================================================
-with aba_series:
-    # A agregação mora aqui, e não na barra lateral: esta é a única aba em que ela vale, e as
-    # outras têm a sua própria. Na lateral ela parecia um filtro geral, e não era.
-    modo_grafico = MODOS_GRAFICO[st.radio("Agregação", list(MODOS_GRAFICO), horizontal=True,
-                                          key="modo_serie")]
+    escolhidas = escolha_grandezas.multiselect(
+        "Grandezas", [nome for nome in variaveis.grandezas(variaveis.HORA, variaveis.GRAFICO) if nome != "Chuva"],
+        key="grandezas", help="Cada grandeza ganha o seu gráfico, com as séries que a equipe de meteorologia definiu.")
+    if not nomes:
+        st.info("Escolha ao menos uma estação para ver as séries.")
+        return pd.DataFrame(), [], []
+    codigos = tuple(estacoes.set_index("Estação").loc[nomes, "CD_ESTACAO"])
+    tabela, falharam = carregar_leituras(codigos, tuple(nomes), inicio, fim, uf)
+    if tabela.empty:
+        st.warning("Nenhuma das estações escolhidas tem dados nesse período.")
+        return tabela, falharam, nomes
+    if falharam:
+        st.warning(f"Sem dados ou falha na consulta: {', '.join(falharam)}")
+    horas_esperadas = int((fim - inicio).total_seconds() // 3600)
+    modo_grafico = MODOS_GRAFICO[st.radio("Agregação", list(MODOS_GRAFICO), horizontal=True, key="modo_serie")]
     st.markdown(ESTILO_BALAO, unsafe_allow_html=True)
     st.caption(f"{len(tabela)} leituras de {tabela['Estação'].nunique()} estações · "
                f"{len(tabela) / (horas_esperadas * len(nomes)):.0%} das horas do período têm registro · "
                "Na legenda, **clique numa série** para deixar só ela no gráfico e no balão; "
                "**Shift+clique** na série destacada traz todas de volta.")
     if not escolhidas:
-        st.info("Escolha ao menos uma variável na barra lateral.")
-
+        st.info("Escolha ao menos uma grandeza acima.")
     for grandeza in escolhidas:
         longo, produtos = series_da_grandeza(tabela, grandeza, modo_grafico)
         if longo.empty:
             st.warning(f"{grandeza}: a API não devolveu essa medição no período.")
             continue
-
         st.subheader(grandeza)
-        # A direção sai num gráfico próprio: em graus, ela não divide o eixo com km/h — juntar
-        # duas unidades num eixo só é o tipo de gráfico que engana quem lê.
+        # A direção sai num gráfico próprio: em graus, ela não divide o eixo com km/h — juntar duas
+        # unidades num eixo só é o tipo de gráfico que engana quem lê
         circulares = [produto for produto in produtos if produto.colunas[0] in COLUNAS_CIRCULARES]
         for produto in circulares:
             rotulo = variaveis.rotulo_curto(produto)
-            st.altair_chart(desenhar(longo[longo["Série"] == rotulo],
-                                     f"{produto.nome} ({produto.unidade})", False, modo_grafico,
-                                     produto.decimais), width="stretch")
+            st.altair_chart(desenhar(longo[longo["Série"] == rotulo], f"{produto.nome} ({produto.unidade})", False,
+                                     modo_grafico, produto.decimais), width="stretch")
             st.caption("A direção ligada por linha engana: entre 350° e 10° o vento mal mudou, mas o traço "
                        "desce o gráfico inteiro. Para o rumo do período, veja a rosa dos ventos abaixo.")
             longo = longo[longo["Série"] != rotulo]
-
         restantes = [produto for produto in produtos if produto not in circulares]
         if not restantes:
             continue
         primeiro = restantes[0]
-        st.altair_chart(desenhar(longo, f"{grandeza} ({primeiro.unidade})", primeiro.zero_na_base,
-                                 modo_grafico, primeiro.decimais), width="stretch")
-        st.caption(" · ".join(f"**{variaveis.rotulo_curto(produto)}**: {produto.regra}"
-                              for produto in restantes))
+        st.altair_chart(desenhar(longo, f"{grandeza} ({primeiro.unidade})", primeiro.zero_na_base, modo_grafico,
+                                 primeiro.decimais), width="stretch")
+        st.caption(" · ".join(f"**{variaveis.rotulo_curto(produto)}**: {produto.regra}" for produto in restantes))
 
     if "VEN_DIR" in tabela and "VEN_VEL" in tabela:
         with st.expander("Rosa dos ventos do período"):
             st.caption("De onde o vento veio, em horas. Cada anel é uma faixa de velocidade; a faixa mais escura "
                        f"é a que interessa ao risco de fogo (≥ {FAIXAS_VENTO[-1][0]:g} km/h).")
             mostradas = nomes[:ROSAS_MAXIMAS]
-            # Sempre ROSAS_MAXIMAS colunas, deixando vazias as das pontas: assim uma rosa sozinha
-            # sai do mesmo tamanho das outras e no meio da tela, em vez de esticada na largura
-            # inteira — desenhada com 3 polegadas, ela viraria um cartaz.
+            # Sempre ROSAS_MAXIMAS colunas, deixando vazias as das pontas: assim uma rosa sozinha sai do
+            # mesmo tamanho das outras e no meio da tela, em vez de esticada na largura inteira
             colunas = st.columns(ROSAS_MAXIMAS)
             recuo = (ROSAS_MAXIMAS - len(mostradas)) // 2
             for coluna_tela, nome_estacao in zip(colunas[recuo:], mostradas):
@@ -2029,756 +2733,2524 @@ with aba_series:
                 st.caption(f"Mostrando as {ROSAS_MAXIMAS} primeiras de {len(nomes)} estações escolhidas.")
 
     with st.expander("Ver e baixar os dados"):
-        # Tudo o que a API devolveu, e não só as grandezas marcadas na barra lateral: quem baixa
-        # quer o dado bruto, e os códigos são os do próprio INMET.
+        # Tudo o que a API devolveu, e não só as grandezas escolhidas: quem baixa quer o dado bruto, e os
+        # códigos são os do próprio INMET
         visivel = coleta.planilha(tabela, uf)
-        st.caption("Todas as colunas que a API do INMET devolve para as estações e o período "
-                   "escolhidos, com os códigos dela — inclusive as que nenhum gráfico usa, como a "
-                   "sensação térmica (`TEM_SEN`) e a tensão da bateria (`TEN_BAT`). "
-                   "**Vento em km/h**: a API manda em m/s e o painel converte ao carregar, como "
-                   f"fazem os produtos. `{coleta.DATA_LOCAL} ({uf})` é o horário do estado; "
+        st.caption("Todas as colunas que a API do INMET devolve para as estações e o período escolhidos, com os "
+                   "códigos dela — inclusive as que nenhum gráfico usa, como a sensação térmica (`TEM_SEN`) e a "
+                   "tensão da bateria (`TEN_BAT`). **Vento em km/h**: a API manda em m/s e o painel converte ao "
+                   f"carregar, como fazem os produtos. `{coleta.DATA_LOCAL} ({uf})` é o horário do estado; "
                    "`DT_MEDICAO` e `HR_MEDICAO` são os da API, em UTC.")
         st.dataframe(visivel, width="stretch", height=300)
         st.download_button("Baixar CSV", visivel.to_csv(index=False).encode("utf-8-sig"),
                            file_name=f"leituras_{intervalo[0]:%Y%m%d}_a_{intervalo[1]:%Y%m%d}.csv", mime="text/csv")
-
-# =====================================================
-# MAPA
-# =====================================================
-with aba_mapa:
-    if not st.session_state.get("mapa_liberado"):
-        st.info(f"O mapa interpola as {len(estacoes)} estações do estado, e não só as escolhidas na barra "
-                "lateral. Na primeira vez a consulta demora alguns minutos; depois vem do cache.")
-        if st.button(f"Carregar todas as estações de {uf}", type="primary"):
-            st.session_state["mapa_liberado"] = True
-            st.rerun()
-    else:
-        leituras_mapa, ausentes_mapa = carregar_leituras(tuple(estacoes["CD_ESTACAO"]),
-                                                         tuple(estacoes["Estação"]), inicio, fim, uf)
-        # As vizinhas vêm numa consulta à parte para o caminho do produto ficar intocado: o que
-        # sai delas só alimenta a interpolação da borda.
-        vizinhas = estacoes_vizinhas(uf)
-        leituras_apoio, _ = carregar_leituras(tuple(vizinhas["CD_ESTACAO"]), tuple(vizinhas["Estação"]),
-                                              inicio, fim, uf, "Consultando as estações vizinhas")
-        # O modo mora aqui, e não na barra lateral, porque o mapa tem um a mais que o gráfico: o
-        # período inteiro, que é um mapa só para a janela toda, sem deslizante.
-        modo = MODOS_MAPA[st.radio("Agregação", list(MODOS_MAPA), horizontal=True, key="modo_mapa")]
-        # A chuva fica de fora: os acumulados dela olham para trás do período escolhido, e aqui
-        # todo mapa respeita a janela da barra lateral. Ela tem aba própria.
-        catalogo = [produto for produto in variaveis.disponiveis(modo, variaveis.MAPA)
-                    if produto.grandeza != "Chuva"
-                    and all(coluna in leituras_mapa for coluna in produto.colunas)]
-        escolhidos = st.multiselect(
-            "Mapas", [produto.nome for produto in catalogo],
-            default=[nome for nome in variaveis.PADRAO_MAPA[modo] if nome in {p.nome for p in catalogo}],
-            key=f"mapas_{modo}",
-            help="Cada um traz a sua regra: a máxima do dia é a maior das máximas horárias, "
-                 "nunca a média delas.")
-
-        if not escolhidos:
-            st.info("Escolha ao menos um mapa acima.")
-        else:
-            paradas = variaveis.momentos(leituras_mapa, modo)
-            if modo != variaveis.PERIODO and not paradas:
-                st.warning("Sem leituras no período escolhido.")
-            else:
-                if modo == variaveis.PERIODO:
-                    momento, rotulo = None, periodo_escolhido
-                    carimbo = f"{intervalo[0]:%Y%m%d}_a_{intervalo[1]:%Y%m%d}"
-                else:
-                    formatar = ((lambda marca: f"{marca:%d/%m/%Y}") if modo == variaveis.DIA
-                                else (lambda marca: f"{marca:%d/%m %H:%M}"))
-                    momento = linha_do_tempo("Quando", paradas, f"quando_{modo}", formatar)
-                    rotulo = formatar(momento)
-                    carimbo = (f"{momento:%Y%m%d}" if modo == variaveis.DIA else f"{momento:%Y%m%d_%H}h")
-
-                marcar, ajustar_escala = st.columns([1, 1])
-                with marcar:
-                    rotulos = st.checkbox("Mostrar o valor de cada estação", value=True,
-                                          help="Lado a lado os valores se cobrem: desligue para ler "
-                                               "só o padrão das cores, ou amplie o mapa na tela cheia.")
-                with ajustar_escala:
-                    ajustar = st.checkbox("Ajustar a escala ao dado", value=False, key="ajustar_mapa",
-                                          help="Desligada, a escala é fixa: a mesma cor quer dizer o "
-                                               "mesmo valor em qualquer dia. Ligue para ver o padrão de "
-                                               "um dia sem variação, sabendo que as cores mudam de "
-                                               "significado.")
-                horas_janela = {variaveis.HORA: 1.0, variaveis.DIA: 24.0}.get(
-                    modo, (fim - inicio).total_seconds() / 3600)
-
-                fatia = variaveis.recorte(leituras_mapa, modo, momento)
-                fatia_apoio = variaveis.recorte(leituras_apoio, modo, momento)
-                # À direita, flutuando, a lista das estações retiradas de cada variável na tela
-                gaveta_das_retiradas("boletim", list(dict.fromkeys(variaveis.por_nome(nome).grandeza
-                                                                   for nome in escolhidos)), estacoes, vizinhas)
-                # Todas as linhas com a mesma quantidade de colunas: se a última fosse dimensionada
-                # pelo que sobrou, os mapas dela sairiam maiores que os de cima. Com um mapa só, a
-                # coluna é uma e ele ocupa a largura inteira.
-                por_linha = min(len(escolhidos), MAPAS_POR_LINHA)
-                with st.spinner("Desenhando os mapas..."):
-                    for primeiro in range(0, len(escolhidos), por_linha):
-                        linha = escolhidos[primeiro:primeiro + por_linha]
-                        for coluna_tela, nome in zip(st.columns(por_linha), linha):
-                            with coluna_tela:
-                                produto = variaveis.por_nome(nome)
-                                fora = retiradas_da_variavel(produto.grandeza)
-                                do_mapa = retiradas.retirar(fatia, fora)
-                                setas = variaveis.direcoes(produto, do_mapa)
-                                painel_do_mapa(produto, variaveis.por_estacao(produto, do_mapa),
-                                               rotulo, boletim.subtitulo(modo, momento, periodo_painel),
-                                               carimbo, rotulos, uf,
-                                               niveis_da_escala(produto, horas_janela, ajustar),
-                                               None if setas.empty else setas,
-                                               variaveis.por_estacao(produto, retiradas.retirar(fatia_apoio, fora)))
-                                # No período inteiro não há sequência: é um mapa só para a janela
-                                if modo != variaveis.PERIODO:
-                                    painel_do_gif(produto, retiradas.retirar(leituras_mapa, fora), modo, paradas,
-                                                  rotulos, horas_janela, uf)
-
-                st.caption(f"Interpolação IDW (potência {config.IDW_POTENCIA}, {config.IDW_VIZINHOS} vizinhos) "
-                           f"sobre as {len(estacoes)} estações do estado mais {len(vizinhas)} de fora dele, "
-                           "que seguram a superfície na borda sem entrar em tabela nem ranking. Neste tamanho "
-                           "o mapa mostra o padrão, e a faixa de valores vai escrita sob cada um; para ler "
-                           "estação por estação, amplie o mapa no ícone de tela cheia.")
-                if ausentes_mapa:
-                    st.caption(f"Sem dados no período ({len(ausentes_mapa)}): {', '.join(ausentes_mapa)}")
-
-# =====================================================
-# CHUVA
-# =====================================================
-# A chuva tem aba própria porque é a única que precisa de dado fora do período escolhido: o
-# acumulado de 96 h, e o do mês, começam antes do início da janela da barra lateral.
-with aba_chuva:
-    # A cascata abre a aba porque é a única parte que não depende da consulta do mês: ela sai das
-    # estações escolhidas na barra lateral e da janela dela, que já estão em mãos. Vinha da aba de
-    # séries, onde a chuva era a única grandeza que não virava linha.
-    st.subheader("Cascata das estações escolhidas")
-    por_dia_cascata = MODOS_GRAFICO[st.radio("Agregação", list(MODOS_GRAFICO), horizontal=True,
-                                             key="modo_cascata")] == variaveis.DIA
-    barras = chuva_calc.cascata(tabela, por_dia=por_dia_cascata)
-    if barras.empty:
-        st.warning("A API não devolveu chuva nas estações escolhidas.")
-    elif barras["valor"].sum() == 0:
-        # Um quadro vazio parece defeito; a frase deixa claro que o dado existe e é zero
-        st.info("Não choveu em nenhuma das estações escolhidas " +
-                ("no período." if por_dia_cascata else "nas últimas 24 horas do período."))
-    else:
-        # Um gráfico por estação, e não um só com um painel para cada: assim cada um amplia sozinho
-        # na tela cheia. O teto do eixo é o mesmo em todos, para lado a lado se compararem.
-        nomes_cascata = sorted(barras["Estação"].unique())
-        teto_cascata = float(barras["topo"].max())
-        por_linha_cascata = min(len(nomes_cascata), 2)
-        for primeiro in range(0, len(nomes_cascata), por_linha_cascata):
-            linha = nomes_cascata[primeiro:primeiro + por_linha_cascata]
-            for coluna_tela, nome in zip(st.columns(por_linha_cascata), linha):
-                with coluna_tela:
-                    st.altair_chart(cascata_da_chuva(barras[barras["Estação"] == nome], por_dia_cascata,
-                                                     titulo=nome, teto=teto_cascata, altura=240),
-                                    width="stretch")
-        st.caption("Cada barra é a chuva daquele passo, empilhada no que já tinha caído; a barra "
-                   "escura no fim é o total. O rótulo só vai onde choveu — num período seco seriam "
-                   "dezenas de zeros cobrindo o desenho. " +
-                   ("Um dia por barra." if por_dia_cascata
-                    else "As últimas 24 horas do período — uma semana daria 168 barras."))
-
-    st.divider()
-    st.subheader("Todo o estado")
-    # O deslizante vem das horas do período, e não do dado: é ele que decide até quando somar, e
-    # portanto o que precisa ser baixado.
-    horas_do_periodo = pd.date_range(inicio.astimezone(recorte.fuso) + pd.Timedelta(hours=1),
-                                     fim.astimezone(recorte.fuso), freq="h")
-    ate = st.select_slider("Acumulados até", options=list(horas_do_periodo),
-                           value=horas_do_periodo[-1], key="referencia_chuva",
-                           format_func=lambda marca: f"{marca:%d/%m %H:%M}",
-                           help="Toda janela conta para trás a partir deste instante.")
-    inicio_chuva = chuva_calc.inicio_necessario(ate)
-
-    if not st.session_state.get("chuva_liberada"):
-        st.info(f"Os acumulados olham para trás da data escolhida: para fechar o do mês, a consulta "
-                f"vai até **{inicio_chuva:%d/%m}**. São as {len(estacoes)} estações do estado, e na "
-                "primeira vez demora; depois vem do cache.")
-        if st.button("Carregar a chuva do mês", type="primary"):
-            st.session_state["chuva_liberada"] = True
-            st.rerun()
-    else:
-        leituras_chuva, ausentes_chuva = carregar_leituras(
-            tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]),
-            inicio_chuva.astimezone(config.FUSO_UTC), ate.astimezone(config.FUSO_UTC), uf,
-            f"Consultando a chuva desde {inicio_chuva:%d/%m}")
-        vizinhas_chuva = estacoes_vizinhas(uf)
-        chuva_apoio, _ = carregar_leituras(
-            tuple(vizinhas_chuva["CD_ESTACAO"]), tuple(vizinhas_chuva["Estação"]),
-            inicio_chuva.astimezone(config.FUSO_UTC), ate.astimezone(config.FUSO_UTC), uf,
-            "Consultando a chuva das estações vizinhas")
-
-        if leituras_chuva.empty or chuva_calc.COLUNA not in leituras_chuva:
-            st.warning("A API não devolveu chuva no período.")
-        else:
-            # Sai do mesmo dado dos acumulados, então não custa consulta nenhuma: só reagrupa o
-            # que já veio. Vem antes dos mapas porque responde outra pergunta — quando choveu no
-            # período, e não onde —, e porque não depende de escolha nenhuma na barra lateral.
-            st.markdown("**Cascata do estado**")
-            por_dia_estado = MODOS_GRAFICO[st.radio("Agregação", list(MODOS_GRAFICO), horizontal=True,
-                                                    key="modo_cascata_estado")] == variaveis.DIA
-            barras_estado = chuva_calc.cascata_do_estado(leituras_chuva, por_dia=por_dia_estado)
-            if barras_estado["valor"].sum() == 0:
-                st.info(f"Nenhuma estação do estado registrou chuva até {ate:%d/%m %H:%M}.")
-            else:
-                st.altair_chart(cascata_da_chuva(barras_estado, por_dia_estado),
-                                width="stretch")
-                st.caption(f"**Soma das {len(estacoes)} estações** em cada passo, empilhada no que já "
-                           "tinha caído. É o ritmo da chuva no período, e **não** quanto choveu num "
-                           "lugar: milímetros de estações diferentes somados não descrevem ponto "
-                           "nenhum do mapa. Para quanto caiu onde, os acumulados e o mapa abaixo. " +
-                           (f"Um dia por barra, de {inicio_chuva:%d/%m} até {ate:%d/%m %H:%M}."
-                            if por_dia_estado else
-                            f"As últimas 24 horas até {ate:%d/%m %H:%M}."))
-            st.divider()
-
-            modo_chuva = st.radio("Mapas", ["Acumulados", "Hora a hora", "Por dia"], horizontal=True,
-                                  key="modo_chuva")
-
-            if modo_chuva == "Acumulados":
-                escolhidos = st.multiselect("Janelas", chuva_calc.rotulos(), default=PADRAO_CHUVA,
-                                            key="janelas_chuva",
-                                            help="Cada janela conta para trás a partir do instante "
-                                                 "escolhido acima. O mensal começa no dia 1º; o do "
-                                                 "período, no primeiro dia da barra lateral.")
-                # O do período pode começar antes da carga do mês (um período de 17/10 a 03/11 visto
-                # de 03/11). As horas que faltam vêm numa consulta à parte, só quando ele é escolhido:
-                # o cache de cada estação guarda o que já veio, e só o começo é baixado
-                inicio_local = inicio.astimezone(recorte.fuso)
-                leituras_periodo, apoio_periodo = leituras_chuva, chuva_apoio
-                if chuva_calc.PERIODO in escolhidos and inicio_local < inicio_chuva:
-                    leituras_periodo, _ = carregar_leituras(
-                        tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]),
-                        inicio, ate.astimezone(config.FUSO_UTC), uf, f"Consultando a chuva desde {inicio_local:%d/%m}")
-                    apoio_periodo, _ = carregar_leituras(
-                        tuple(vizinhas_chuva["CD_ESTACAO"]), tuple(vizinhas_chuva["Estação"]),
-                        inicio, ate.astimezone(config.FUSO_UTC), uf, "Consultando a chuva das estações vizinhas")
-                carga = {rotulo: (leituras_periodo, apoio_periodo) if rotulo == chuva_calc.PERIODO
-                         else (leituras_chuva, chuva_apoio) for rotulo in escolhidos}
-                curtas = [rotulo for rotulo in escolhidos
-                          if not chuva_calc.cobre(carga[rotulo][0], ate, rotulo, inicio_local)]
-                if curtas:
-                    st.warning(f"Sem dado que alcance o começo de: {', '.join(curtas)}. "
-                               "Esses acumulados mostrariam menos chuva do que caiu.")
-                mostrar = [rotulo for rotulo in escolhidos if rotulo not in curtas]
-
-                somas = {rotulo: chuva_calc.acumulado(carga[rotulo][0], ate, rotulo, inicio_local)
-                         for rotulo in mostrar}
-                chovidas = {rotulo: valores for rotulo, valores in somas.items()
-                            if not valores.dropna().empty and valores.max() > 0}
-                secas = [rotulo for rotulo in mostrar if rotulo not in chovidas]
-
-                st.caption(f"Acumulados até **{ate:%d/%m %H:%M}**, somando a chuva de cada hora para "
-                           "trás. A barra diz quanto choveu em cada estação; o mapa, onde choveu." +
-                           (f" O do período começa em **{inicio_local:%d/%m %H:%M}**, o primeiro dia da "
-                            "barra lateral." if chuva_calc.PERIODO in mostrar else ""))
-                if secas:
-                    st.info(f"Sem chuva em nenhuma estação em: {', '.join(secas)}.")
-
-                if chovidas:
-                    todas_estacoes = st.checkbox(f"Listar as {len(estacoes)} estações", value=False,
-                                                 key="todas_chuva",
-                                                 help="Desligada, a lista traz as 15 que mais choveram.")
-                    # As barras vêm primeiro porque são a leitura mais usada — quanto choveu em
-                    # cada estação, ordenado, que é o número que vai para o texto do boletim. O
-                    # mapa responde outra pergunta (onde choveu) e custa um desenho por janela no
-                    # servidor, então fica atrás de uma caixa.
-                    nomes_chovidos = list(chovidas)
-                    por_linha_barras = min(len(nomes_chovidos), 2)
-                    for primeiro in range(0, len(nomes_chovidos), por_linha_barras):
-                        linha = nomes_chovidos[primeiro:primeiro + por_linha_barras]
-                        for coluna_tela, rotulo in zip(st.columns(por_linha_barras), linha):
-                            with coluna_tela:
-                                quantas = (chovidas[rotulo] > 0).sum()
-                                st.markdown(f"**{chuva_calc.legenda(rotulo)}** — {quantas} de "
-                                            f"{len(estacoes)} estações com registro")
-                                st.altair_chart(barras_do_acumulado(chovidas[rotulo], "mm",
-                                                                    None if todas_estacoes else 15),
-                                                width="stretch")
-
-                    if st.checkbox("Gerar também os mapas destas janelas", value=False,
-                                   key="mapas_chuva"):
-                        # À direita, flutuando, a lista das estações retiradas dos mapas de chuva; as
-                        # barras acima continuam com todas, que é onde o valor errado aparece
-                        gaveta_das_retiradas("chuva", ["Chuva"], estacoes, vizinhas_chuva)
-                        fora_chuva = retiradas_da_variavel("Chuva")
-                        marcar, ajustar_escala = st.columns([1, 1])
-                        with marcar:
-                            rotulos_chuva = st.checkbox("Mostrar o valor de cada estação", value=True,
-                                                        key="valores_chuva")
-                        with ajustar_escala:
-                            ajustar_chuva = st.checkbox("Ajustar a escala ao dado", value=False,
-                                                        key="ajustar_chuva",
-                                                        help="Desligada, as classes são fixas: 20 mm "
-                                                             "têm a mesma cor em qualquer mapa.")
-                        acumulada = variaveis.por_nome("Chuva acumulada")
-                        por_linha = min(len(nomes_chovidos), MAPAS_POR_LINHA)
-                        with st.spinner("Desenhando os mapas..."):
-                            for primeiro in range(0, len(nomes_chovidos), por_linha):
-                                linha = nomes_chovidos[primeiro:primeiro + por_linha]
-                                for coluna_tela, rotulo in zip(st.columns(por_linha), linha):
-                                    with coluna_tela:
-                                        comeco, _ = chuva_calc.janela(ate, rotulo, inicio_local)
-                                        # O do período leva no nome do arquivo os dias que soma, como o
-                                        # "período inteiro" dos Mapas Boletim
-                                        if rotulo == chuva_calc.PERIODO:
-                                            carimbo = (f"{comeco:%Y%m%d}_a_{ate - timedelta(days=1):%Y%m%d}"
-                                                       if ate.hour == 0 else f"{comeco:%Y%m%d}_a_{ate:%Y%m%d_%H}h")
-                                        else:
-                                            carimbo = f"{ate:%Y%m%d_%H}h"
-                                        painel_da_chuva(
-                                            rotulo, retiradas.retirar(chovidas[rotulo], fora_chuva),
-                                            f"{comeco:%d/%m %H:%M} a {ate:%d/%m %H:%M}",
-                                            periodo_painel.descrever_janela(comeco, ate),
-                                            carimbo, rotulos_chuva, uf,
-                                            niveis_da_escala(acumulada,
-                                                             chuva_calc.horas_da_janela(ate, rotulo, inicio_local),
-                                                             ajustar_chuva),
-                                            retiradas.retirar(chuva_calc.acumulado(carga[rotulo][1], ate, rotulo,
-                                                                                   inicio_local), fora_chuva))
-            else:
-                # Hora a hora e por dia respeitam o período escolhido, como as outras abas
-                modo = variaveis.HORA if modo_chuva == "Hora a hora" else variaveis.DIA
-                do_periodo = leituras_chuva[leituras_chuva["dt_local"] > inicio.astimezone(recorte.fuso)]
-                paradas = variaveis.momentos(do_periodo, modo)
-                produto = variaveis.por_nome("Chuva na hora" if modo == variaveis.HORA else "Chuva acumulada")
-                if not paradas:
-                    st.warning("Sem leituras no período escolhido.")
-                else:
-                    formatar = ((lambda marca: f"{marca:%d/%m/%Y}") if modo == variaveis.DIA
-                                else (lambda marca: f"{marca:%d/%m %H:%M}"))
-                    momento = st.select_slider("Quando", options=paradas, value=paradas[-1],
-                                               format_func=formatar, key=f"quando_chuva_{modo}")
-                    rotulos_chuva = st.checkbox("Mostrar o valor de cada estação", value=True,
-                                                key="valores_chuva_momento")
-                    niveis_chuva = niveis_da_escala(produto, 1.0 if modo == variaveis.HORA else 24.0)
-                    carimbo = (f"{momento:%Y%m%d}" if modo == variaveis.DIA else f"{momento:%Y%m%d_%H}h")
-                    # À direita, flutuando, a lista das estações retiradas dos mapas de chuva
-                    gaveta_das_retiradas("chuva", ["Chuva"], estacoes, vizinhas_chuva)
-                    fora_chuva = retiradas_da_variavel("Chuva")
-                    fatia = retiradas.retirar(variaveis.recorte(do_periodo, modo, momento), fora_chuva)
-                    apoio_periodo = chuva_apoio[chuva_apoio["dt_local"] > inicio.astimezone(recorte.fuso)]
-                    fatia_apoio = retiradas.retirar(variaveis.recorte(apoio_periodo, modo, momento), fora_chuva)
-                    _, meio, _ = st.columns([1, 2, 1])
-                    with meio:
-                        painel_do_mapa(produto, variaveis.por_estacao(produto, fatia),
-                                       formatar(momento), boletim.subtitulo(modo, momento, periodo_painel),
-                                       carimbo, rotulos_chuva, uf, niveis_chuva,
-                                       apoio=variaveis.por_estacao(produto, fatia_apoio))
-
-            if ausentes_chuva:
-                st.caption(f"Sem dados no período ({len(ausentes_chuva)}): {', '.join(ausentes_chuva)}")
-
-# =====================================================
-# RISCO DE FOGO
-# =====================================================
-# A regra 30-30-30 é a mesma dos produtos, importada de modulos/produtos/risco_fogo.py: a tela e
-# o relatório não podem dizer números diferentes sobre a mesma hora. O dado também é o mesmo da
-# aba dos mapas — mesma janela, mesma chave de cache —, então esta aba não custa consulta nenhuma
-# a mais à API.
-with aba_risco:
-    st.caption(f"Conta quantas das três condições valem **em cada hora**: temperatura máxima "
-               f"≥ {config.LIMIAR_TEMP_MAX:g} °C, umidade mínima ≤ {config.LIMIAR_UMIDADE_MIN:g} % e "
-               f"rajada ≥ {config.LIMIAR_RAJADA:g} km/h. Hora a hora porque os extremos do dia "
-               "acontecem em horários diferentes: 32 °C às 15 h, 28 % às 18 h e rajada às 03 h não "
-               "são um dia de risco alto.")
-
-    if not st.session_state.get("mapa_liberado"):
-        st.info(f"Precisa das {len(estacoes)} estações do estado. Carregue-as na aba "
-                "**Mapas Boletim** — o risco usa o mesmo dado, sem consultar de novo.")
-    else:
-        leituras_risco, _ = carregar_leituras(tuple(estacoes["CD_ESTACAO"]),
-                                              tuple(estacoes["Estação"]), inicio, fim, uf)
-        vizinhas_risco = estacoes_vizinhas(uf)
-        risco_apoio, _ = carregar_leituras(tuple(vizinhas_risco["CD_ESTACAO"]),
-                                           tuple(vizinhas_risco["Estação"]), inicio, fim, uf,
-                                           "Consultando as estações vizinhas")
-        completas, avaliadas = risco_avaliado(
-            pd.concat([leituras_risco, risco_apoio], ignore_index=True),
-            pd.concat([estacoes, vizinhas_risco], ignore_index=True), uf)
-        do_produto = risco.da_uf(completas, uf)
-        nomes_do_estado = {estacao["Estação"] for estacao, _ in do_produto}
-        # Os mapas saem sem as estações retiradas (as três medidas delas); os gráficos e a tabela,
-        # com todas. Sem retirada nenhuma, a avaliação é a mesma e não se refaz
-        fora_risco = retiradas_da_variavel("Risco de Fogo")
-        avaliadas_mapa = avaliadas
-        if fora_risco and avaliadas:
-            _, avaliadas_mapa = risco_avaliado(
-                retiradas.retirar(pd.concat([leituras_risco, risco_apoio], ignore_index=True), fora_risco),
-                retiradas.retirar(pd.concat([estacoes, vizinhas_risco], ignore_index=True), fora_risco), uf)
-            if not avaliadas_mapa:
-                st.warning(f"Sem as estações retiradas, nenhuma hora fica com {config.MIN_ESTACOES_INTERPOLACAO} "
-                           "estações com as três medidas: os mapas abaixo saem com todas.")
-                avaliadas_mapa = avaliadas
-
-        if not completas:
-            st.warning("Nenhuma estação tem temperatura, umidade e rajada no período: sem as três "
-                       "não dá para dizer quantas condições valeram.")
-        elif not avaliadas:
-            st.warning(f"Nenhuma hora teve {config.MIN_ESTACOES_INTERPOLACAO} estações com as três "
-                       "medidas: com tão poucos pontos a superfície inventaria mais do que mostra.")
-        else:
-            horaria = risco.hora_a_hora(do_produto)
-            ordem = ordem_das_estacoes(horaria)
-            modo_risco = MODOS_MAPA[st.radio("Agregação", list(MODOS_MAPA), horizontal=True,
-                                             key="modo_risco")]
-            # Ligada por padrão desde 13/10/2026, a pedido da equipe: o nível de cada estação é o
-            # que se procura primeiro no mapa
-            detalhes = st.checkbox("Mostrar o nível e as condições de cada estação", value=True,
-                                   key="detalhes_risco",
-                                   help="O nível escrito em cada estação e, no hora a hora, um "
-                                        "ponto abaixo dela para cada condição atendida. Por dia e "
-                                        "no período inteiro sai só o nível: eles juntam horas "
-                                        "diferentes, e as condições de uma hora não representam o "
-                                        "dia. Lado a lado eles se cobrem: desligue para ler só as "
-                                        "cores, ou amplie o mapa.")
-
-            # --- hora a hora ---------------------------------------------------------------
-            if modo_risco == variaveis.HORA:
-                so_alto = st.checkbox(
-                    f"Só as horas em que alguma estação chegou ao {config.ROTULOS_RISCO[risco.NIVEL_ALTO].lower()}",
-                    value=False, key="so_risco_alto",
-                    help="O deslizante passa a parar só nessas horas. O critério é o nível medido "
-                         "nas estações, e não o da superfície: ela pode mostrar nível 2 onde "
-                         "nenhuma estação chegou a 2.")
-                mostradas = risco.horas_que_interessam(avaliadas_mapa) if so_alto else avaliadas_mapa
-
-                if not mostradas:
-                    st.info(f"Nenhuma estação chegou ao {config.ROTULOS_RISCO[risco.NIVEL_ALTO].lower()} "
-                            "em hora nenhuma do período. Desligue a caixa acima para ver todas as horas.")
-                else:
-                    quando = list(mostradas)
-                    hora = linha_do_tempo(
-                        "Quando", quando, "quando_risco",
-                        lambda marca: f"{marca.tz_convert(recorte.fuso):%d/%m %H:%M}",
-                        dia_de=lambda marca: marca.tz_convert(recorte.fuso).date())
-                    avaliada = mostradas[hora]
-                    # As de apoio já entraram na grade; nos pontos e na contagem, só as do estado
-                    do_estado_na_hora = avaliada.estacoes[avaliada.estacoes["Estação"].isin(nomes_do_estado)]
-                    local = hora.tz_convert(recorte.fuso)
-                    gaveta_das_retiradas("risco", ["Risco de Fogo"], estacoes, vizinhas_risco)
-                    _, meio, _ = st.columns([1, 3, 1])
-                    with meio:
-                        png = mapa_de_risco(avaliada.grade, do_estado_na_hora,
-                                            risco_fogo.COLUNA_NIVEL_HORA,
-                                            f"{local:%d/%m/%Y %H:%M}", detalhes, uf)
-                        if png is None:
-                            st.warning("Sem estações com as três medidas nessa hora.")
-                        else:
-                            st.image(png, width="stretch")
-                            quantas = (do_estado_na_hora[risco_fogo.COLUNA_NIVEL_HORA]
-                                       == risco.NIVEL_ALTO).sum()
-                            st.caption(f"{len(do_estado_na_hora)} estações do estado com as três medidas · "
-                                       f"{quantas} no risco alto · as três variáveis são "
-                                       "interpoladas separadas e a regra é aplicada célula a célula.")
-                            st.download_button("Baixar PNG — risco de fogo", png, mime="image/png",
-                                               key="baixar_risco",
-                                               file_name=f"Mapa_risco_fogo_{local:%Y%m%d_%H}h.png")
-                            # Com o nível e as condições de cada estação, como o mapa horário do
-                            # main.py, mesmo com a caixa de detalhes desligada na tela
-                            espec_hora = risco_fogo.espec_da_hora(local, uf)
-                            botao_do_boletim("risco de fogo", "risco",
-                                             f"{espec_hora.arquivo}_{local:%Y%m%d_%H}h.png",
-                                             desenho_de_classes(avaliada.grade, do_estado_na_hora,
-                                                                risco_fogo.COLUNA_NIVEL_HORA, espec_hora, uf,
-                                                                risco_fogo.indicadores_condicoes()))
-                            if st.button("Gerar GIF — risco de fogo", key="botao_gif_risco",
-                                         help=f"{len(animacao.passos(quando))} quadros."):
-                                st.session_state["gif_risco"] = True
-                            if st.session_state.get("gif_risco"):
-                                instantes = tuple(animacao.passos(quando))
-                                gif = gif_do_risco(instantes, detalhes, uf, mostradas, nomes_do_estado,
-                                                   tuple(sorted(fora_risco)))
-                                if gif is not None:
-                                    st.image(gif, width="stretch")
-                                    st.caption(f"{len(instantes)} quadros. {len(gif) / 1e6:.1f} MB.")
-                                    st.download_button("Baixar GIF — risco de fogo", gif,
-                                                       mime="image/gif", key="baixar_gif_risco",
-                                                       file_name=f"Animacao_risco_fogo_"
-                                                                 f"{intervalo[0]:%Y%m%d}_a_{intervalo[1]:%Y%m%d}.gif")
-
-            # --- por dia --------------------------------------------------------------------
-            elif modo_risco == variaveis.DIA:
-                dias = risco.por_dia(avaliadas_mapa)
-                dia = linha_do_tempo("Dia", list(dias), "dia_risco", lambda data: f"{data:%d/%m/%Y}")
-                gaveta_das_retiradas("risco", ["Risco de Fogo"], estacoes, vizinhas_risco)
-                _, meio, _ = st.columns([1, 3, 1])
-                with meio:
-                    do_dia = risco.estacoes_do_dia(avaliadas_mapa, dia)
-                    png = mapa_de_risco(dias[dia], do_dia[do_dia["Estação"].isin(nomes_do_estado)],
-                                        risco_fogo.COLUNA_NIVEL_HORA, f"{dia:%d/%m/%Y}", detalhes, uf)
-                    if png is None:
-                        st.warning("Sem estações com as três medidas nesse dia.")
-                    else:
-                        st.image(png, width="stretch")
-                        st.caption("O **pior** nível que cada lugar alcançou no dia — e não o de "
-                                   "uma hora específica. Um dia é de risco alto se houve uma hora "
-                                   "em que as três condições valeram juntas.")
-                        st.download_button("Baixar PNG — risco do dia", png, mime="image/png",
-                                           key="baixar_risco_dia",
-                                           file_name=f"Mapa_risco_fogo_{dia:%Y%m%d}.png")
-                        espec_dia = risco_fogo.espec_nivel_maximo(uf, f"{dia:%d/%m/%Y}")
-                        botao_do_boletim("risco do dia", "risco_dia",
-                                         f"{espec_dia.arquivo}_{dia:%Y%m%d}_interpolado.png",
-                                         desenho_de_classes(dias[dia], do_dia[do_dia["Estação"].isin(nomes_do_estado)],
-                                                            risco_fogo.COLUNA_NIVEL_HORA, espec_dia, uf))
-
-            # --- período inteiro ------------------------------------------------------------
-            else:
-                tabela_risco = risco.resumo(do_produto, periodo_painel, uf)
-                # Os pontos dos mapas sem as retiradas; a tabela abaixo, com todas
-                pontos_risco = retiradas.retirar(tabela_risco, fora_risco)
-                # Os nomes de arquivo que o main.py daria a esses dois mapas, para o mesmo período
-                sufixo = f"{periodo_painel.identificador}_interpolado.png"
-                janela_risco = periodo_painel.descrever_janela(*periodo_painel.janela)
-                gaveta_das_retiradas("risco", ["Risco de Fogo"], estacoes, vizinhas_risco)
-                esquerda, direita = st.columns(2)
-                with esquerda:
-                    st.markdown("**Pior nível do período**")
-                    pior = risco.pior_nivel(avaliadas_mapa)
-                    png = mapa_de_risco(pior, pontos_risco, risco_fogo.COLUNA_NIVEL, periodo_escolhido,
-                                        detalhes, uf)
-                    if png is not None:
-                        st.image(png, width="stretch")
-                        st.caption("O maior nível que cada lugar alcançou em alguma hora da janela.")
-                        espec_pior = risco_fogo.espec_nivel_maximo(uf, janela_risco)
-                        botao_do_boletim("pior nível", "risco_periodo", f"{espec_pior.arquivo}_{sufixo}",
-                                         desenho_de_classes(pior, pontos_risco, risco_fogo.COLUNA_NIVEL,
-                                                            espec_pior, uf))
-                with direita:
-                    st.markdown("**Horas em risco alto**")
-                    exposicao = risco.horas_em_risco_alto(avaliadas_mapa)
-                    png_horas = mapa_de_horas_altas(exposicao, pontos_risco, periodo_escolhido,
-                                                    detalhes, uf)
-                    if png_horas is not None:
-                        st.image(png_horas, width="stretch")
-                        st.caption(f"Em quantas horas cada lugar esteve no risco alto — no máximo "
-                                   f"{int(exposicao.max())} h em alguma célula do estado.")
-                        espec_horas = risco_fogo.espec_horas_em_risco_alto(uf, janela_risco)
-                        botao_do_boletim("horas em risco alto", "risco_horas",
-                                         f"{espec_horas.arquivo}_{sufixo}",
-                                         desenho_das_horas(exposicao, pontos_risco, espec_horas, uf))
-
-                st.subheader("Por estação")
-                st.caption("Da estação de maior risco para a de menor. As colunas são as mesmas da "
-                           "planilha que o `main.py` gera para o produto.")
-                st.dataframe(tabela_risco, width="stretch", hide_index=True, height=340)
-                st.download_button(
-                    "Baixar CSV", tabela_risco.to_csv(index=False).encode("utf-8-sig"),
-                    file_name=f"risco_fogo_{intervalo[0]:%Y%m%d}_a_{intervalo[1]:%Y%m%d}.csv",
-                    mime="text/csv", key="baixar_tabela_risco")
-
-            # --- gráficos, em qualquer modo --------------------------------------------------
-            st.divider()
-            st.subheader("Horas em cada nível")
-            st.caption("Quantas horas cada estação passou em cada nível, no período inteiro. A "
-                       "ordem das estações é a mesma nos três gráficos, para dar para comparar.")
-            st.altair_chart(barras_de_niveis(horaria, ordem), width="stretch")
-
-            st.subheader("Calendário")
-            st.caption("O pior nível de cada estação em cada dia. **Dia vazio, sem cor:** a estação "
-                       "não teve nenhuma hora com as três medidas (temperatura máxima, umidade mínima "
-                       "e rajada) — ficou sem transmitir, ou um dos sensores ficou sem dado. É "
-                       "diferente do **cinza**, em que ela mediu e nenhuma das condições valeu.")
-            st.altair_chart(calendario_de_risco(horaria, ordem), width="stretch")
-
-            st.subheader("Condições atendidas")
-            dias_com_dado = sorted(horaria["dia"].unique())
-            dia_condicoes = linha_do_tempo("Dia", dias_com_dado, "dia_condicoes",
-                                           lambda data: f"{data:%d/%m/%Y}")
-            st.caption("Quantas horas cada condição valeu naquele dia. É o gráfico que responde se "
-                       "o risco veio do calor, da secura ou do vento — o que o nível sozinho não diz.")
-            st.altair_chart(condicoes_do_dia(horaria, dia_condicoes, ordem), width="stretch")
+    return tabela, falharam, nomes
 
 
-# =====================================================
-# MAPA NAVEGÁVEL (EM TESTE)
-# =====================================================
-# A mesma superfície da aba anterior, mas sobre um mapa base que se aproxima e arrasta. Aqui o
-# desenho não é o do relatório: a interpolação é a mesma (modulos/calculos.py), o desenho é do
-# deck.gl. Em teste para decidir se substitui, complementa ou não vale a manutenção.
-with aba_navegavel:
-    st.caption("Em teste. A conta é a mesma dos relatórios; o desenho é outro — aproxime com a roda "
-               "do mouse, arraste para deslocar e passe o mouse numa estação para ver o valor.")
-    if not st.session_state.get("mapa_liberado"):
-        st.info(f"Precisa das {len(estacoes)} estações do estado. Carregue-as na aba **Mapas Boletim**.")
-    else:
-        leituras_navegavel, _ = carregar_leituras(tuple(estacoes["CD_ESTACAO"]),
-                                                  tuple(estacoes["Estação"]), inicio, fim, uf)
-        vizinhas_nav = estacoes_vizinhas(uf)
-        apoio_navegavel, _ = carregar_leituras(tuple(vizinhas_nav["CD_ESTACAO"]),
-                                               tuple(vizinhas_nav["Estação"]), inicio, fim, uf,
-                                               "Consultando as estações vizinhas")
-        modo_nav = MODOS_MAPA[st.radio("Agregação", list(MODOS_MAPA), horizontal=True, key="modo_navegavel")]
-        catalogo_nav = [produto for produto in variaveis.disponiveis(modo_nav, variaveis.MAPA)
-                        if produto.grandeza != "Chuva"
-                        and all(coluna in leituras_navegavel for coluna in produto.colunas)]
-
-        if not catalogo_nav:
-            st.warning("A API não devolveu nenhuma dessas medições no período.")
-        else:
-            # Um mapa por vez: aqui a comparação lado a lado dá lugar ao zoom
-            escolher, ajustar_nav_col = st.columns([2, 1])
-            with escolher:
-                nome_nav = st.selectbox("Mapa", [produto.nome for produto in catalogo_nav],
-                                        key="mapa_navegavel")
-            with ajustar_nav_col:
-                ajustar_nav = st.checkbox("Ajustar a escala ao dado", value=False, key="ajustar_nav",
-                                          help="Desligada, a escala é a mesma do mapa do boletim.")
-            produto_nav = variaveis.por_nome(nome_nav)
-            paradas_nav = variaveis.momentos(leituras_navegavel, modo_nav)
-
-            if modo_nav == variaveis.PERIODO:
-                momento_nav, rotulo_nav = None, periodo_escolhido
-            elif not paradas_nav:
-                momento_nav, rotulo_nav = None, periodo_escolhido
-                st.warning("Sem leituras no período escolhido.")
-            else:
-                formatar_nav = ((lambda marca: f"{marca:%d/%m/%Y}") if modo_nav == variaveis.DIA
-                                else (lambda marca: f"{marca:%d/%m %H:%M}"))
-                momento_nav = linha_do_tempo("Quando", paradas_nav, f"quando_nav_{modo_nav}", formatar_nav)
-                rotulo_nav = formatar_nav(momento_nav)
-
-            # As mesmas estações retiradas da variável nos mapas do boletim: a superfície é a mesma
-            fora_nav = retiradas_da_variavel(produto_nav.grandeza)
-            fatia_nav = retiradas.retirar(variaveis.recorte(leituras_navegavel, modo_nav, momento_nav), fora_nav)
-            valores_nav = variaveis.por_estacao(produto_nav, fatia_nav)
-
-            if valores_nav.notna().sum() < config.MIN_ESTACOES_INTERPOLACAO:
-                st.warning(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram "
-                           f"{produto_nav.nome.lower()} em {rotulo_nav}.")
-            else:
-                horas_nav = {variaveis.HORA: 1.0, variaveis.DIA: 24.0}.get(
-                    modo_nav, (fim - inicio).total_seconds() / 3600)
-                niveis_nav = niveis_da_escala(produto_nav, horas_nav, ajustar_nav)
-                with st.spinner("Desenhando o mapa..."):
-                    imagem = camada_superficie(valores_nav, produto_nav.nome, rotulo_nav, uf,
-                                               tuple(niveis_nav) if niveis_nav is not None else None,
-                                               variaveis.por_estacao(
-                                                   produto_nav,
-                                                   retiradas.retirar(variaveis.recorte(apoio_navegavel, modo_nav,
-                                                                                       momento_nav), fora_nav)))
-                pontos = _com_coordenadas(valores_nav, produto_nav.nome, uf)
-                pontos["Valor"] = pontos[produto_nav.nome].map(
-                    lambda valor: f"{valor:.{produto_nav.decimais}f} {produto_nav.unidade}")
-                # A imagem entra depois de criada a camada: passada no construtor, o pydeck a
-                # trataria como expressão a ser avaliada no navegador ("@@=data:image/png;...").
-                campo = pdk.Layer("BitmapLayer", data=None, bounds=superficie.limites(recorte))
-                campo.image = imagem
-                camadas = [
-                    campo,
-                    pdk.Layer("GeoJsonLayer", data=base_cartografica(uf).uf.__geo_interface__,
-                              stroked=True, filled=False, get_line_color=[40, 40, 40], line_width_min_pixels=1),
-                    pdk.Layer("ScatterplotLayer", data=pontos, get_position=["Longitude", "Latitude"],
-                              get_fill_color=[20, 20, 20, 200], get_line_color=[255, 255, 255],
-                              line_width_min_pixels=1, stroked=True, radius_min_pixels=4,
-                              get_radius=2500, pickable=True),
-                ]
-                if st.checkbox("Mostrar o valor de cada estação", value=True, key="valores_navegavel",
-                               help="Aproxime para os valores deixarem de se cobrir."):
-                    camadas.append(
-                        pdk.Layer("TextLayer", data=pontos, get_position=["Longitude", "Latitude"],
-                                  get_text="Valor", get_size=12,
-                                  get_color=[20, 20, 20], get_pixel_offset=[0, -14],
-                                  background=True, get_background_color=[255, 255, 255, 200]))
-
-                st.markdown(CENTRALIZAR_MAPA, unsafe_allow_html=True)
-                st.pydeck_chart(pdk.Deck(layers=camadas, map_style=MAPA_BASE,
-                                         initial_view_state=pdk.ViewState(**visao_inicial(recorte)),
-                                         tooltip={"text": "{Estação} — {Valor}"}),
-                                width=LARGURA_MAPA, height=ALTURA_MAPA)
-                if niveis_nav is not None:
-                    st.image(barra_de_escala(produto_nav.paleta, tuple(niveis_nav), produto_nav.unidade),
-                             width="content")
-                casas = produto_nav.decimais
-                st.caption(f"{valores_nav.min():.{casas}f} a {valores_nav.max():.{casas}f} "
-                           f"{produto_nav.unidade} · {valores_nav.notna().sum()} estações · "
-                           f"{produto_nav.regra}, em {rotulo_nav}. O mapa base vem do Carto, fora da SEMADESC."
-                           + (f" Sem as estações retiradas dos mapas de {produto_nav.grandeza.lower()} na aba "
-                              f"Mapas Boletim: {', '.join(sorted(fora_nav))}." if fora_nav else ""))
-
-# =====================================================
-# QUALIDADE DOS DADOS
-# =====================================================
-with aba_qualidade:
+def qualidade_dos_dados(uf: str, estacoes: pd.DataFrame, inicio: datetime, fim: datetime, tabela: pd.DataFrame,
+                        falharam: list[str], nomes: list[str]) -> None:
     todas = st.checkbox(f"Analisar todas as estações de {uf}", value=False,
-                        help="Ignora a seleção da barra lateral. Na primeira vez demora, porque baixa tudo; "
-                             "depois vem do cache.")
+                        help="Ignora as estações escolhidas nas séries temporais. Na primeira vez demora, porque "
+                             "baixa tudo; depois vem do cache.")
     if todas:
-        base, ausentes = carregar_leituras(tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]),
-                                           inicio, fim, uf)
+        base, ausentes = carregar_leituras(tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]), inicio, fim, uf)
+    elif not nomes:
+        st.info("Escolha as estações nas **Séries temporais**, embaixo do mapa na aba Mapas, ou marque a caixa "
+                "acima para analisar todas.")
+        return
     else:
         base, ausentes = tabela, falharam
-
     if base.empty:
         st.warning("Sem dados para analisar nesse período.")
+        return
+    horas_esperadas = int((fim - inicio).total_seconds() // 3600)
+    resumo = qualidade.resumo_por_estacao(base, horas_esperadas)
+    impossiveis = qualidade.valores_impossiveis(base)
+    travados = qualidade.sensores_travados(base)
+
+    metricas = st.columns(4)
+    metricas[0].metric("Estações analisadas", f"{len(resumo)}")
+    metricas[1].metric("Completude média", f"{resumo['Completude'].mean():.0f}%")
+    metricas[2].metric("Valores impossíveis", f"{len(impossiveis)}")
+    metricas[3].metric("Horas travadas", f"{int(resumo['Horas travadas'].sum())}")
+    if ausentes:
+        st.warning(f"Sem dados ou falha na consulta ({len(ausentes)}): {', '.join(ausentes)}")
+
+    st.subheader("Por estação")
+    st.caption("Da pior para a melhor. Completude é quanto das horas do período tem registro.")
+    st.dataframe(resumo, width="stretch", hide_index=True, height=340, column_config={
+        "Completude": st.column_config.ProgressColumn("Completude", format="%.0f%%", min_value=0, max_value=100),
+    })
+
+    st.subheader("Completude por dia")
+    completude = qualidade.completude_por_dia(base)
+    longo = (completude.reset_index()
+             .melt("Estação", var_name="Dia", value_name="Completude")
+             .assign(Dia=lambda dias: dias["Dia"].astype(str)))
+    st.altair_chart(
+        alt.Chart(longo).mark_rect().encode(
+            x=alt.X("Dia:O", title=None, axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)),
+            y=alt.Y("Estação:N", title=None, sort=list(resumo["Estação"]), axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)),
+            color=alt.Color("Completude:Q", title="% das horas", scale=alt.Scale(scheme="blues", domain=[0, 100])),
+            tooltip=["Estação", "Dia", alt.Tooltip("Completude:Q", format=".0f")],
+        ).properties(height=max(18 * len(completude), 120)),
+        width="stretch")
+
+    st.subheader("Completude por variável")
+    st.caption("A estação pode registrar a hora e mesmo assim não medir tudo. Aqui aparece o sensor que parou "
+               "sozinho, sem a estação sair do ar.")
+    por_variavel = qualidade.completude_por_variavel(base).rename(columns=NOMES_CURTOS)
+    longo_variavel = por_variavel.reset_index().melt("Estação", var_name="Variável", value_name="Completude")
+    st.altair_chart(
+        alt.Chart(longo_variavel).mark_rect().encode(
+            x=alt.X("Variável:N", title=None, axis=alt.Axis(labelAngle=-45, labelFontSize=FONTE_DOS_EIXOS)),
+            y=alt.Y("Estação:N", title=None, sort=list(resumo["Estação"]), axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)),
+            color=alt.Color("Completude:Q", title="% das horas", scale=alt.Scale(scheme="blues", domain=[0, 100])),
+            tooltip=["Estação", "Variável", alt.Tooltip("Completude:Q", format=".0f")],
+        ).properties(height=max(18 * len(por_variavel), 120)),
+        width="stretch")
+
+    with st.expander(f"Valores impossíveis ({len(impossiveis)})"):
+        impossiveis = impossiveis.assign(
+            Variável=impossiveis["Variável"].map(NOMES_CURTOS).fillna(impossiveis["Variável"]))
+        st.caption("Leituras fora da faixa plausível da variável — costuma ser defeito de sensor.")
+        st.dataframe(impossiveis, width="stretch", hide_index=True, height=260)
+
+    with st.expander(f"Sensores travados ({len(travados)} trecho{'s' if len(travados) != 1 else ''})"):
+        travados = travados.assign(Variável=travados["Variável"].map(NOMES_CURTOS).fillna(travados["Variável"]))
+        st.caption(f"A mesma leitura repetida por {qualidade.HORAS_TRAVADO} horas ou mais, em temperatura, umidade "
+                   "ou pressão. Chuva e vento ficam de fora: zero repetido ali é normal.")
+        st.dataframe(travados, width="stretch", hide_index=True, height=260)
+
+    st.caption(f"**Radiação negativa** à noite é ruído comum do sensor, não defeito — por isso aparece numa coluna "
+               f"própria, e não como valor impossível. **Bateria** abaixo de {qualidade.TENSAO_MINIMA:g} V costuma "
+               "anteceder a estação sair do ar.")
+
+
+# ----- CHUVA ---------------------------------------------------------------------------------
+# A chuva tem página própria porque é a única que precisa de dado fora do período escolhido: o
+# acumulado de 96 h, e o do mês, começam antes do início da janela da barra lateral. Uma consulta
+# só, desde o começo do mês da primeira hora do período, fecha qualquer janela de qualquer instante
+def pagina_chuva() -> None:
+    st.title("Chuva")
+    aviso = st.container()
+    sem_token()
+    uf, recorte, intervalo, estacoes, imovel = barra_do_observado(aviso)
+    inicio, fim = janela_do_periodo(intervalo, recorte)
+    inicio_local, fim_local = inicio.astimezone(recorte.fuso), fim.astimezone(recorte.fuso)
+    horas_do_periodo = pd.date_range(inicio_local + pd.Timedelta(hours=1), fim_local, freq="h")
+    desde = chuva_calc.inicio_necessario(horas_do_periodo[0])
+    agregacao, vista_tela = st.columns([2, 1])
+    modo = agregacao.segmented_control("Agregação", MODOS_DA_CHUVA, default=MODOS_DA_CHUVA[0],
+                                       key="modo_chuva") or MODOS_DA_CHUVA[0]
+    vista = vista_tela.segmented_control("Mapa", VISTAS_DO_MAPA, default=VISTAS_DO_MAPA[0],
+                                         key="vista_chuva") or VISTAS_DO_MAPA[0]
+    if not st.session_state.get("chuva_liberada"):
+        st.info(f"Os acumulados olham para trás: para fechar o mensal, a consulta vai até **{desde:%d/%m}**. São as "
+                f"{len(estacoes)} estações do estado, mais as vizinhas para a borda. Na primeira vez demora; depois "
+                "vem do cache.")
+        if st.button("Carregar a chuva do mês", type="primary", key="liberar_chuva"):
+            st.session_state["chuva_liberada"] = True
+            st.rerun()
+        return
+    leituras, ausentes = carregar_leituras(tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]),
+                                           desde.astimezone(config.FUSO_UTC), fim, uf,
+                                           f"Consultando a chuva desde {desde:%d/%m}")
+    vizinhas = estacoes_vizinhas(uf)
+    apoio, _ = carregar_leituras(tuple(vizinhas["CD_ESTACAO"]), tuple(vizinhas["Estação"]),
+                                 desde.astimezone(config.FUSO_UTC), fim, uf, "Consultando a chuva das estações vizinhas")
+    if leituras.empty or chuva_calc.COLUNA not in leituras:
+        st.warning("Não veio chuva de nenhuma estação no período.")
+        return
+    # Os pluviômetros do CEMADEN (lendo do banco) entram como as estações do INMET, e saem pela mesma gaveta
+    cadastro_cemaden = estacoes_do_cemaden(uf)
+    gaveta_das_retiradas("chuva", ["Chuva"], estacoes, vizinhas, cadastro_cemaden)
+    fora = retiradas_da_variavel("Chuva")
+    do_cemaden = carregar_chuva_cemaden(desde.astimezone(config.FUSO_UTC), fim, uf)
+    periodo_painel = config.Periodo.de_datas(*intervalo, fuso=recorte.fuso)
+    if modo == MODOS_DA_CHUVA[0]:
+        janela_tela, ate_tela = st.columns([1, 3])
+        rotulos_janela = chuva_calc.rotulos()
+        rotulo = janela_tela.selectbox("Janela", rotulos_janela, index=rotulos_janela.index("24 h"), key="janela_chuva",
+                                       help="Uma por vez. Cada janela conta para trás a partir do instante ao lado. O "
+                                            "mensal começa no dia 1º; o do período, no primeiro dia da barra lateral.")
+        ate = ate_tela.select_slider("Acumulado até", options=list(horas_do_periodo), value=horas_do_periodo[-1],
+                                     format_func=lambda marca: f"{marca:%d/%m %H:%M}", key="ate_chuva",
+                                     help="A janela conta para trás a partir deste instante.")
+        if not chuva_calc.cobre(leituras, ate, rotulo, inicio_local):
+            st.warning(f"Não há dado que alcance o começo da janela de {rotulo}: o acumulado mostraria menos chuva do "
+                       "que caiu.")
+            return
+        produto = variaveis.por_nome("Chuva acumulada")
+        valores, valores_apoio, valores_cemaden = (chuva_calc.acumulado(dados, ate, rotulo, inicio_local)
+                                                   for dados in (leituras, apoio, do_cemaden))
+        horas = chuva_calc.horas_da_janela(ate, rotulo, inicio_local)
+        comeco, _ = chuva_calc.janela(ate, rotulo, inicio_local)
+        quando, legenda = f"{comeco:%d/%m %H:%M} a {ate:%d/%m %H:%M}", chuva_calc.legenda(rotulo)
+        serie_de, serie_ate = comeco, ate
+        carimbo, nome_do_arquivo = carimbo_da_chuva(rotulo, comeco, ate), boletim.nome_da_chuva(rotulo)
+        quando_no_arquivo = f"{comeco:%d/%m/%Y %H:%M} a {ate:%d/%m/%Y %H:%M}"
+        subtitulo = periodo_painel.descrever_janela(comeco, ate)
     else:
-        resumo = qualidade.resumo_por_estacao(base, horas_esperadas)
-        impossiveis = qualidade.valores_impossiveis(base)
-        travados = qualidade.sensores_travados(base)
+        # Hora a hora e por dia respeitam o período escolhido, como as outras páginas
+        tipo = variaveis.HORA if modo == "Hora a hora" else variaveis.DIA
+        do_periodo, apoio_periodo, cemaden_periodo = (dados[dados["dt_local"] > inicio_local]
+                                                      for dados in (leituras, apoio, do_cemaden))
+        paradas = variaveis.momentos(do_periodo, tipo)
+        if not paradas:
+            st.warning("Sem leituras no período escolhido.")
+            return
+        formatar = ((lambda marca: f"{marca:%d/%m/%Y}") if tipo == variaveis.DIA
+                    else (lambda marca: f"{marca:%d/%m %H:%M}"))
+        momento = st.select_slider("Quando", options=paradas, value=paradas[-1], format_func=formatar,
+                                   key=f"quando_chuva_{tipo}")
+        produto = variaveis.por_nome("Chuva na hora" if tipo == variaveis.HORA else "Chuva acumulada")
+        valores, valores_apoio, valores_cemaden = (variaveis.por_estacao(produto, variaveis.recorte(dados, tipo, momento))
+                                                   for dados in (do_periodo, apoio_periodo, cemaden_periodo))
+        horas = 1.0 if tipo == variaveis.HORA else 24.0
+        quando = formatar(momento)
+        legenda = "Chuva na hora" if tipo == variaveis.HORA else "Chuva do dia"
+        serie_de, serie_ate = inicio_local, fim_local
+        carimbo, nome_do_arquivo = carimbo_do_momento(tipo, momento, intervalo), produto.nome
+        quando_no_arquivo = f"{momento:%d/%m/%Y}" if tipo == variaveis.DIA else f"{momento:%d/%m/%Y %H:%M}"
+        subtitulo = boletim.subtitulo(tipo, momento, periodo_painel)
+        ate = None
+    # As barras, embaixo, ficam com todas as estações (é onde o valor errado aparece); o mapa, sem as retiradas
+    todas_as_medidas = (pd.concat([valores, valores_cemaden]) if not valores_cemaden.dropna().empty else valores)
+    valores, valores_apoio, valores_cemaden = (retiradas.retirar(serie, fora)
+                                               for serie in (valores, valores_apoio, valores_cemaden))
+    do_inmet = valores
+    # Os pluviômetros do CEMADEN entram na superfície com o mesmo peso das estações do INMET
+    if not valores_cemaden.dropna().empty:
+        valores = pd.concat([valores, valores_cemaden])
+    marcar, ajustar_tela, relevo_tela = st.columns(3)
+    escritos = marcar.checkbox("Mostrar o valor de cada estação", value=True, key="valores_chuva",
+                               help="O número sobre cada estação. Desligado, fica só o ponto.")
+    ajustar = ajustar_tela.checkbox("Ajustar a escala ao dado", value=False, key="ajustar_chuva",
+                                    help="Desligada, as classes são as do boletim: 20 mm têm a mesma cor em qualquer "
+                                         "mapa.")
+    em_3d = vista == VISTAS_DO_MAPA[0] and relevo_tela.checkbox(
+        "Relevo 3D", value=False, key="relevo_chuva",
+        help="A chuva vira altura: o topo da escala sobe 100 km, e o mapa abre inclinado. Arraste com o botão "
+             "direito para inclinar e girar.")
+    niveis = niveis_da_escala(produto, horas, ajustar)
+    if vista == VISTAS_DO_MAPA[0]:
+        mapa_navegavel_da_chuva(produto, valores, do_inmet, valores_apoio, valores_cemaden, niveis, escritos, em_3d,
+                                quando, legenda, nome_do_arquivo, carimbo, quando_no_arquivo, serie_de, serie_ate,
+                                modo == MODOS_DA_CHUVA[0], leituras, apoio, do_cemaden, cadastro_cemaden, estacoes,
+                                fora, uf, imovel)
+    else:
+        _, meio, _ = st.columns([1, 3, 1])
+        with meio:
+            with st.spinner("Desenhando o mapa..."):
+                if modo == MODOS_DA_CHUVA[0]:
+                    painel_da_chuva(rotulo, valores, quando, subtitulo, carimbo, escritos, uf, niveis, valores_apoio)
+                else:
+                    painel_do_mapa(produto, valores, quando, subtitulo, carimbo, escritos, uf, niveis,
+                                   apoio=valores_apoio)
+    if modo == MODOS_DA_CHUVA[0]:
+        com_leitura = (do_cemaden.loc[do_cemaden["CHUVA"].notna(), "Estação"].nunique()
+                       if "CHUVA" in do_cemaden else 0)
+        barras_da_janela(rotulo, todas_as_medidas, len(estacoes) + com_leitura)
+    st.divider()
+    cascata_do_estado(leituras, estacoes, desde, ate if ate is not None else fim_local)
+    st.divider()
+    cascata_das_escolhidas(uf, estacoes, inicio, fim)
+    if ausentes:
+        st.caption(f"Sem dados no período ({len(ausentes)}): {', '.join(ausentes)}")
 
-        metricas = st.columns(4)
-        metricas[0].metric("Estações analisadas", f"{len(resumo)}")
-        metricas[1].metric("Completude média", f"{resumo['Completude'].mean():.0f}%")
-        metricas[2].metric("Valores impossíveis", f"{len(impossiveis)}")
-        metricas[3].metric("Horas travadas", f"{int(resumo['Horas travadas'].sum())}")
-        if ausentes:
-            st.warning(f"Sem dados ou falha na consulta ({len(ausentes)}): {', '.join(ausentes)}")
 
-        st.subheader("Por estação")
-        st.caption("Da pior para a melhor. Completude é quanto das horas do período tem registro.")
-        st.dataframe(resumo, width="stretch", hide_index=True, height=340, column_config={
-            "Completude": st.column_config.ProgressColumn("Completude", format="%.0f%%", min_value=0, max_value=100),
-        })
+def barras_da_janela(rotulo: str, valores: pd.Series, nas_contas: int) -> None:
+    # Quanto choveu em cada estação na janela, ordenado: é o número que vai para o texto do boletim
+    st.subheader(f"{chuva_calc.legenda(rotulo)} por estação")
+    if valores.dropna().empty or valores.max() <= 0:
+        st.info(f"Sem chuva em nenhuma estação em {rotulo}.")
+        return
+    quantas = int((valores > 0).sum())
+    todas = st.checkbox(f"Listar as {nas_contas} estações", value=False, key="todas_chuva",
+                        help="Desligada, a lista traz as 15 que mais choveram.")
+    st.caption(f"{quantas} de {nas_contas} estações com registro. Aqui entram todas, mesmo as retiradas do mapa.")
+    st.altair_chart(barras_do_acumulado(valores, "mm", None if todas else 15), width="stretch")
 
-        st.subheader("Completude por dia")
-        completude = qualidade.completude_por_dia(base)
-        longo = (completude.reset_index()
-                 .melt("Estação", var_name="Dia", value_name="Completude")
-                 .assign(Dia=lambda tabela: tabela["Dia"].astype(str)))
-        st.altair_chart(
-            alt.Chart(longo).mark_rect().encode(
-                x=alt.X("Dia:O", title=None, axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)),
-                y=alt.Y("Estação:N", title=None, sort=list(resumo["Estação"]),
-                        axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)),
-                color=alt.Color("Completude:Q", title="% das horas",
-                                scale=alt.Scale(scheme="blues", domain=[0, 100])),
-                tooltip=["Estação", "Dia", alt.Tooltip("Completude:Q", format=".0f")],
-            ).properties(height=max(18 * len(completude), 120)),
-            width="stretch")
 
-        st.subheader("Completude por variável")
-        st.caption("A estação pode registrar a hora e mesmo assim não medir tudo. Aqui aparece o sensor que "
-                   "parou sozinho, sem a estação sair do ar.")
-        por_variavel = qualidade.completude_por_variavel(base).rename(columns=NOMES_CURTOS)
-        longo_variavel = (por_variavel.reset_index()
-                          .melt("Estação", var_name="Variável", value_name="Completude"))
-        st.altair_chart(
-            alt.Chart(longo_variavel).mark_rect().encode(
-                x=alt.X("Variável:N", title=None, axis=alt.Axis(labelAngle=-45, labelFontSize=FONTE_DOS_EIXOS)),
-                y=alt.Y("Estação:N", title=None, sort=list(resumo["Estação"]),
-                        axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)),
-                color=alt.Color("Completude:Q", title="% das horas",
-                                scale=alt.Scale(scheme="blues", domain=[0, 100])),
-                tooltip=["Estação", "Variável", alt.Tooltip("Completude:Q", format=".0f")],
-            ).properties(height=max(18 * len(por_variavel), 120)),
-            width="stretch")
+def cascata_do_estado(leituras: pd.DataFrame, estacoes: pd.DataFrame, desde, ate) -> None:
+    # Sai do mesmo dado dos acumulados, então não custa consulta nenhuma: responde quando choveu no
+    # período, e não onde
+    st.subheader("Cascata do estado")
+    por_dia = MODOS_GRAFICO[st.radio("Agregação", list(MODOS_GRAFICO), horizontal=True,
+                                     key="modo_cascata_estado")] == variaveis.DIA
+    barras = chuva_calc.cascata_do_estado(leituras[leituras["dt_local"] <= ate], por_dia=por_dia)
+    if barras["valor"].sum() == 0:
+        st.info(f"Nenhuma estação do estado registrou chuva até {ate:%d/%m %H:%M}.")
+        return
+    st.altair_chart(cascata_da_chuva(barras, por_dia), width="stretch")
+    st.caption(f"**Soma das {len(estacoes)} estações** em cada passo, empilhada no que já tinha caído. É o ritmo da "
+               "chuva no período, e **não** quanto choveu num lugar: milímetros de estações diferentes somados não "
+               "descrevem ponto nenhum do mapa. " +
+               (f"Um dia por barra, de {desde:%d/%m} até {ate:%d/%m %H:%M}." if por_dia
+                else f"As últimas 24 horas até {ate:%d/%m %H:%M}."))
 
-        with st.expander(f"Valores impossíveis ({len(impossiveis)})"):
-            impossiveis = impossiveis.assign(
-                Variável=impossiveis["Variável"].map(NOMES_CURTOS).fillna(impossiveis["Variável"]))
-            st.caption("Leituras fora da faixa plausível da variável — costuma ser defeito de sensor.")
-            st.dataframe(impossiveis, width="stretch", hide_index=True, height=260)
 
-        with st.expander(f"Sensores travados ({len(travados)} trecho{'s' if len(travados) != 1 else ''})"):
-            travados = travados.assign(Variável=travados["Variável"].map(NOMES_CURTOS).fillna(travados["Variável"]))
-            st.caption(f"A mesma leitura repetida por {qualidade.HORAS_TRAVADO} horas ou mais, em temperatura, "
-                       "umidade ou pressão. Chuva e vento ficam de fora: zero repetido ali é normal.")
-            st.dataframe(travados, width="stretch", hide_index=True, height=260)
+def cascata_das_escolhidas(uf: str, estacoes: pd.DataFrame, inicio: datetime, fim: datetime) -> None:
+    st.subheader("Cascata das estações escolhidas")
+    # As mesmas estações das séries temporais da página Mapas (a escolha vale para as duas páginas)
+    st.session_state["estacoes"] = [nome for nome in st.session_state.get("estacoes", [])
+                                    if nome in set(estacoes["Estação"])]
+    nomes = st.multiselect("Estações", estacoes["Estação"].tolist(), key="estacoes",
+                           help="As mesmas das séries temporais, na página Mapas.")
+    if not nomes:
+        st.info("Escolha ao menos uma estação para ver a cascata dela.")
+        return
+    por_dia = MODOS_GRAFICO[st.radio("Agregação", list(MODOS_GRAFICO), horizontal=True,
+                                     key="modo_cascata")] == variaveis.DIA
+    codigos = tuple(estacoes.set_index("Estação").loc[nomes, "CD_ESTACAO"])
+    tabela, _ = carregar_leituras(codigos, tuple(nomes), inicio, fim, uf)
+    barras = chuva_calc.cascata(tabela, por_dia=por_dia)
+    if barras.empty:
+        st.warning("A API não devolveu chuva nas estações escolhidas.")
+        return
+    if barras["valor"].sum() == 0:
+        # Um quadro vazio parece defeito; a frase deixa claro que o dado existe e é zero
+        st.info("Não choveu em nenhuma das estações escolhidas " +
+                ("no período." if por_dia else "nas últimas 24 horas do período."))
+        return
+    # Um gráfico por estação, e não um só com um painel para cada: assim cada um amplia sozinho na tela
+    # cheia. O teto do eixo é o mesmo em todos, para lado a lado se compararem
+    nomes_cascata = sorted(barras["Estação"].unique())
+    teto = float(barras["topo"].max())
+    por_linha = min(len(nomes_cascata), 2)
+    for primeiro in range(0, len(nomes_cascata), por_linha):
+        linha = nomes_cascata[primeiro:primeiro + por_linha]
+        for coluna_tela, nome in zip(st.columns(por_linha), linha):
+            with coluna_tela:
+                st.altair_chart(cascata_da_chuva(barras[barras["Estação"] == nome], por_dia, titulo=nome, teto=teto,
+                                                 altura=240), width="stretch")
+    st.caption("Cada barra é a chuva daquele passo, empilhada no que já tinha caído; a barra escura no fim é o "
+               "total. O rótulo só vai onde choveu — num período seco seriam dezenas de zeros cobrindo o desenho. " +
+               ("Um dia por barra." if por_dia else "As últimas 24 horas do período — uma semana daria 168 barras."))
 
-        st.caption(f"**Radiação negativa** à noite é ruído comum do sensor, não defeito — por isso aparece numa "
-                   f"coluna própria, e não como valor impossível. **Bateria** abaixo de "
-                   f"{qualidade.TENSAO_MINIMA:g} V costuma anteceder a estação sair do ar.")
+
+# ----- RISCO DE FOGO -------------------------------------------------------------------------
+# A regra 30-30-30 é a mesma dos produtos, importada de modulos/produtos/risco_fogo.py: a tela e o
+# relatório não podem dizer números diferentes sobre a mesma hora. O dado é o mesmo da página Mapas
+# (mesma janela, mesma chave de cache): esta página não custa consulta nenhuma a mais à API
+def pagina_risco() -> None:
+    st.title("Risco de Fogo")
+    aviso = st.container()
+    sem_token()
+    uf, recorte, intervalo, estacoes, imovel = barra_do_observado(aviso)
+    inicio, fim = janela_do_periodo(intervalo, recorte)
+    periodo_painel = config.Periodo.de_datas(*intervalo, fuso=recorte.fuso)
+    st.caption(f"Conta quantas das três condições valem **em cada hora**: temperatura máxima ≥ "
+               f"{config.LIMIAR_TEMP_MAX:g} °C, umidade mínima ≤ {config.LIMIAR_UMIDADE_MIN:g} % e rajada ≥ "
+               f"{config.LIMIAR_RAJADA:g} km/h. Hora a hora porque os extremos do dia acontecem em horários "
+               "diferentes: 32 °C às 15 h, 28 % às 18 h e rajada às 03 h não são um dia de risco alto.")
+    agregacao, vista_tela = st.columns([2, 1])
+    rotulo_modo = agregacao.segmented_control("Agregação", list(MODOS_MAPA), default=list(MODOS_MAPA)[0],
+                                              key="modo_risco") or list(MODOS_MAPA)[0]
+    modo = MODOS_MAPA[rotulo_modo]
+    vista = vista_tela.segmented_control("Mapa", VISTAS_DO_MAPA, default=VISTAS_DO_MAPA[0],
+                                         key="vista_risco") or VISTAS_DO_MAPA[0]
+    if not carregar_todas_as_estacoes(uf, estacoes, "liberar_risco"):
+        return
+    leituras, _ = carregar_leituras(tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]), inicio, fim, uf)
+    vizinhas = estacoes_vizinhas(uf)
+    apoio, _ = carregar_leituras(tuple(vizinhas["CD_ESTACAO"]), tuple(vizinhas["Estação"]), inicio, fim, uf,
+                                 "Consultando as estações vizinhas")
+    completas, avaliadas = risco_avaliado(pd.concat([leituras, apoio], ignore_index=True),
+                                          pd.concat([estacoes, vizinhas], ignore_index=True), uf)
+    do_produto = risco.da_uf(completas, uf)
+    nomes_do_estado = {estacao["Estação"] for estacao, _ in do_produto}
+    if not completas:
+        st.warning("Nenhuma estação tem temperatura, umidade e rajada no período: sem as três não dá para dizer "
+                   "quantas condições valeram.")
+        return
+    if not avaliadas:
+        st.warning(f"Nenhuma hora teve {config.MIN_ESTACOES_INTERPOLACAO} estações com as três medidas: com tão "
+                   "poucos pontos a superfície inventaria mais do que mostra.")
+        return
+    # Os mapas saem sem as estações retiradas (as três medidas delas); os gráficos e a tabela, com todas.
+    # Sem retirada nenhuma, a avaliação é a mesma e não se refaz
+    gaveta_das_retiradas("risco", ["Risco de Fogo"], estacoes, vizinhas)
+    fora = retiradas_da_variavel("Risco de Fogo")
+    avaliadas_mapa = avaliadas
+    if fora:
+        _, sem_elas = risco_avaliado(retiradas.retirar(pd.concat([leituras, apoio], ignore_index=True), fora),
+                                     retiradas.retirar(pd.concat([estacoes, vizinhas], ignore_index=True), fora), uf)
+        if sem_elas:
+            avaliadas_mapa = sem_elas
+        else:
+            st.warning(f"Sem as estações retiradas, nenhuma hora fica com {config.MIN_ESTACOES_INTERPOLACAO} estações "
+                       "com as três medidas: os mapas saem com todas.")
+            fora = set()
+    horaria = risco.hora_a_hora(do_produto)
+    ordem = ordem_das_estacoes(horaria)
+    tabela_risco = risco.resumo(do_produto, periodo_painel, uf)
+
+    detalhes_tela, opcao_tela, relevo_tela = st.columns(3)
+    # Ligada por padrão desde 13/10/2026, a pedido da equipe: o nível de cada estação é o que se procura
+    # primeiro no mapa
+    detalhes = detalhes_tela.checkbox(
+        "Mostrar o nível de cada estação", value=True, key="detalhes_risco",
+        help="O nível escrito em cada estação e, no boletim hora a hora, um ponto abaixo dela para cada condição "
+             "atendida. Por dia e no período inteiro sai só o nível: eles juntam horas diferentes, e as condições de "
+             "uma hora não representam o dia.")
+    em_3d = vista == VISTAS_DO_MAPA[0] and relevo_tela.checkbox(
+        "Relevo 3D", value=False, key="relevo_risco",
+        help="O nível vira altura: cada nível sobe um degrau, e o risco alto chega a 100 km; o mapa abre inclinado. "
+             "Arraste com o botão direito para inclinar e girar.")
+    hora = dia = None
+    mostradas, mapa_do_periodo = avaliadas_mapa, MAPAS_DO_PERIODO_NO_RISCO[0]
+    if modo == variaveis.HORA:
+        so_alto = opcao_tela.checkbox(
+            f"Só as horas em que alguma estação chegou ao {config.ROTULOS_RISCO[risco.NIVEL_ALTO].lower()}",
+            value=False, key="so_risco_alto",
+            help="O deslizante passa a parar só nessas horas. O critério é o nível medido nas estações, e não o da "
+                 "superfície: ela pode mostrar nível 2 onde nenhuma estação chegou a 2.")
+        mostradas = risco.horas_que_interessam(avaliadas_mapa) if so_alto else avaliadas_mapa
+        if not mostradas:
+            st.info(f"Nenhuma estação chegou ao {config.ROTULOS_RISCO[risco.NIVEL_ALTO].lower()} em hora nenhuma do "
+                    "período. Desligue a caixa acima para ver todas as horas.")
+        else:
+            hora = linha_do_tempo("Quando", list(mostradas), "quando_risco",
+                                  lambda marca: f"{marca.tz_convert(recorte.fuso):%d/%m %H:%M}",
+                                  dia_de=lambda marca: marca.tz_convert(recorte.fuso).date())
+    elif modo == variaveis.DIA:
+        dia = linha_do_tempo("Dia", list(risco.por_dia(avaliadas_mapa)), "dia_risco", lambda data: f"{data:%d/%m/%Y}")
+    elif vista == VISTAS_DO_MAPA[1]:
+        # No navegável do período, o pior nível traz as horas em risco alto no balão; no boletim, um por vez
+        mapa_do_periodo = opcao_tela.segmented_control("Mapa do período", MAPAS_DO_PERIODO_NO_RISCO,
+                                                       default=MAPAS_DO_PERIODO_NO_RISCO[0],
+                                                       key="mapa_periodo_risco") or MAPAS_DO_PERIODO_NO_RISCO[0]
+    if modo != variaveis.HORA or hora is not None:
+        if vista == VISTAS_DO_MAPA[0]:
+            mapa_navegavel_do_risco(modo, hora, dia, avaliadas_mapa, completas, do_produto, nomes_do_estado, fora,
+                                    detalhes, em_3d, uf, recorte, intervalo, imovel)
+        else:
+            boletim_do_risco(modo, hora, dia, mostradas, avaliadas_mapa, tabela_risco, nomes_do_estado, fora,
+                             detalhes, mapa_do_periodo, uf, recorte, intervalo, periodo_painel)
+
+    # --- embaixo, em qualquer modo e nas duas vistas ---------------------------------------------
+    st.divider()
+    st.subheader("Por estação, no período")
+    st.caption("Da estação de maior risco para a de menor. As colunas são as mesmas da planilha que o `main.py` "
+               "gera para o produto.")
+    st.dataframe(tabela_risco, width="stretch", hide_index=True, height=340)
+    st.download_button("Baixar CSV", tabela_risco.to_csv(index=False).encode("utf-8-sig"),
+                       file_name=f"risco_fogo_{intervalo[0]:%Y%m%d}_a_{intervalo[1]:%Y%m%d}.csv",
+                       mime="text/csv", key="baixar_tabela_risco")
+
+    st.subheader("Horas em cada nível")
+    st.caption("Quantas horas cada estação passou em cada nível, no período inteiro. A ordem das estações é a "
+               "mesma nos três gráficos, para dar para comparar.")
+    st.altair_chart(barras_de_niveis(horaria, ordem), width="stretch")
+
+    st.subheader("Calendário")
+    st.caption("O pior nível de cada estação em cada dia. **Dia vazio, sem cor:** a estação não teve nenhuma hora "
+               "com as três medidas (temperatura máxima, umidade mínima e rajada) — ficou sem transmitir, ou um dos "
+               "sensores ficou sem dado. É diferente do **cinza**, em que ela mediu e nenhuma das condições valeu.")
+    st.altair_chart(calendario_de_risco(horaria, ordem), width="stretch")
+
+    st.subheader("Condições atendidas")
+    dias_com_dado = sorted(horaria["dia"].unique())
+    dia_condicoes = linha_do_tempo("Dia", dias_com_dado, "dia_condicoes", lambda data: f"{data:%d/%m/%Y}")
+    st.caption("Quantas horas cada condição valeu naquele dia. É o gráfico que responde se o risco veio do calor, "
+               "da secura ou do vento — o que o nível sozinho não diz.")
+    st.altair_chart(condicoes_do_dia(horaria, dia_condicoes, ordem), width="stretch")
+
+
+def boletim_do_risco(modo: str, hora, dia, mostradas: dict, avaliadas: dict, tabela_risco: pd.DataFrame,
+                     nomes_do_estado: set[str], fora: set[str], detalhes: bool, mapa_do_periodo: str, uf: str,
+                     recorte: config.Recorte, intervalo: tuple, periodo_painel: config.Periodo) -> None:
+    # A vista do boletim da página Risco de Fogo: o PNG do mapa como o main.py desenha, com o menu de
+    # baixar, que no hora a hora tem também o GIF da sequência
+    _, meio, _ = st.columns([1, 3, 1])
+    with meio:
+        if modo == variaveis.HORA:
+            avaliada = avaliadas[hora]
+            # As de apoio já entraram na grade; nos pontos e na contagem, só as do estado
+            do_estado_na_hora = avaliada.estacoes[avaliada.estacoes["Estação"].isin(nomes_do_estado)]
+            local = hora.tz_convert(recorte.fuso)
+            png = mapa_de_risco(avaliada.grade, do_estado_na_hora, risco_fogo.COLUNA_NIVEL_HORA,
+                                f"{local:%d/%m/%Y %H:%M}", detalhes, uf)
+            if png is None:
+                st.warning("Sem estações com as três medidas nessa hora.")
+                return
+            st.image(png, width="stretch")
+            quantas = (do_estado_na_hora[risco_fogo.COLUNA_NIVEL_HORA] == risco.NIVEL_ALTO).sum()
+            st.caption(f"{len(do_estado_na_hora)} estações do estado com as três medidas · {quantas} no risco alto · "
+                       "as três variáveis são interpoladas separadas e a regra é aplicada célula a célula.")
+            # Com o nível e as condições de cada estação, como o mapa horário do main.py, mesmo com a caixa
+            # do nível desligada na tela
+            espec_hora = risco_fogo.espec_da_hora(local, uf)
+            instantes = tuple(animacao.passos(list(mostradas)))
+            gif = None
+            with menu_de_baixar("risco"):
+                botao_do_png(png, "baixar_risco", f"Mapa_risco_fogo_{local:%Y%m%d_%H}h.png")
+                botao_do_boletim("risco", f"{espec_hora.arquivo}_{local:%Y%m%d_%H}h.png",
+                                 desenho_de_classes(avaliada.grade, do_estado_na_hora, risco_fogo.COLUNA_NIVEL_HORA,
+                                                    espec_hora, uf, risco_fogo.indicadores_condicoes()))
+                botao_do_geotiff("risco",
+                                 nome_do_geotiff(f"{espec_hora.arquivo}_{local:%Y%m%d_%H}h.png"),
+                                 geotiff_da_grade(avaliada.grade, uf, "Risco de fogo na hora",
+                                                  f"{local:%d/%m/%Y %H:%M}", mapas.CREDITO, METODO_DO_RISCO,
+                                                  classes=True),
+                                 AJUDA_DO_GEOTIFF_DO_RISCO)
+                # Como nos Mapas: o "Gerar GIF" desenha ali mesmo e vira "Baixar GIF"
+                if not st.session_state.get("gif_risco"):
+                    st.button("Gerar GIF", key="botao_gif_risco", help=f"{len(instantes)} quadros.",
+                              on_click=lambda: st.session_state.update(gif_risco=True), **estilo_do_menu(ICONE_GIF))
+                else:
+                    gif = gif_do_risco(instantes, detalhes, uf, mostradas, nomes_do_estado, tuple(sorted(fora)))
+                    if gif is not None:
+                        st.download_button("Baixar GIF", gif, mime="image/gif", key="baixar_gif_risco",
+                                           on_click="ignore", **estilo_do_menu(ICONE_GIF),
+                                           file_name=f"Animacao_risco_fogo_{intervalo[0]:%Y%m%d}_a_"
+                                                     f"{intervalo[1]:%Y%m%d}.gif")
+            if gif is not None:
+                st.image(gif, width="stretch")
+                st.caption(f"{len(instantes)} quadros. {len(gif) / 1e6:.1f} MB.")
+        elif modo == variaveis.DIA:
+            dias = risco.por_dia(avaliadas)
+            do_dia = risco.estacoes_do_dia(avaliadas, dia)
+            do_dia = do_dia[do_dia["Estação"].isin(nomes_do_estado)]
+            png = mapa_de_risco(dias[dia], do_dia, risco_fogo.COLUNA_NIVEL_HORA, f"{dia:%d/%m/%Y}", detalhes, uf)
+            if png is None:
+                st.warning("Sem estações com as três medidas nesse dia.")
+                return
+            st.image(png, width="stretch")
+            st.caption("O **pior** nível que cada lugar alcançou no dia — e não o de uma hora específica. Um dia é de "
+                       "risco alto se houve uma hora em que as três condições valeram juntas.")
+            espec_dia = risco_fogo.espec_nivel_maximo(uf, f"{dia:%d/%m/%Y}")
+            with menu_de_baixar("risco_dia"):
+                botao_do_png(png, "baixar_risco_dia", f"Mapa_risco_fogo_{dia:%Y%m%d}.png")
+                botao_do_boletim("risco_dia", f"{espec_dia.arquivo}_{dia:%Y%m%d}_interpolado.png",
+                                 desenho_de_classes(dias[dia], do_dia, risco_fogo.COLUNA_NIVEL_HORA, espec_dia, uf))
+                botao_do_geotiff("risco_dia",
+                                 nome_do_geotiff(f"{espec_dia.arquivo}_{dia:%Y%m%d}_interpolado.png"),
+                                 geotiff_da_grade(dias[dia], uf, "Risco de fogo: pior nível do dia",
+                                                  f"{dia:%d/%m/%Y}", mapas.CREDITO, METODO_DO_RISCO, classes=True),
+                                 AJUDA_DO_GEOTIFF_DO_RISCO)
+        else:
+            # Os pontos dos mapas sem as retiradas; a tabela embaixo, com todas. Os nomes de arquivo são os
+            # que o main.py daria a esses mapas, para o mesmo período
+            pontos_risco = retiradas.retirar(tabela_risco, fora)
+            sufixo = f"{periodo_painel.identificador}_interpolado.png"
+            janela_risco = periodo_painel.descrever_janela(*periodo_painel.janela)
+            periodo_escolhido = texto_do_periodo(intervalo)
+            if mapa_do_periodo == MAPAS_DO_PERIODO_NO_RISCO[0]:
+                pior = risco.pior_nivel(avaliadas)
+                png = mapa_de_risco(pior, pontos_risco, risco_fogo.COLUNA_NIVEL, periodo_escolhido, detalhes, uf)
+                if png is None:
+                    return
+                st.image(png, width="stretch")
+                st.caption("O maior nível que cada lugar alcançou em alguma hora da janela.")
+                espec_pior = risco_fogo.espec_nivel_maximo(uf, janela_risco)
+                with menu_de_baixar("risco_periodo"):
+                    botao_do_boletim("risco_periodo", f"{espec_pior.arquivo}_{sufixo}",
+                                     desenho_de_classes(pior, pontos_risco, risco_fogo.COLUNA_NIVEL, espec_pior, uf))
+                    botao_do_geotiff("risco_periodo", nome_do_geotiff(f"{espec_pior.arquivo}_{sufixo}"),
+                                     geotiff_da_grade(pior, uf, "Risco de fogo: pior nível do período", janela_risco,
+                                                      mapas.CREDITO, METODO_DO_RISCO, classes=True),
+                                     AJUDA_DO_GEOTIFF_DO_RISCO)
+            else:
+                exposicao = risco.horas_em_risco_alto(avaliadas)
+                png_horas = mapa_de_horas_altas(exposicao, pontos_risco, periodo_escolhido, detalhes, uf)
+                if png_horas is None:
+                    return
+                st.image(png_horas, width="stretch")
+                st.caption(f"Em quantas horas cada lugar esteve no risco alto — no máximo {int(exposicao.max())} h em "
+                           "alguma célula do estado.")
+                espec_horas = risco_fogo.espec_horas_em_risco_alto(uf, janela_risco)
+                with menu_de_baixar("risco_horas"):
+                    botao_do_boletim("risco_horas", f"{espec_horas.arquivo}_{sufixo}",
+                                     desenho_das_horas(exposicao, pontos_risco, espec_horas, uf))
+                    botao_do_geotiff("risco_horas",
+                                     nome_do_geotiff(f"{espec_horas.arquivo}_{sufixo}"),
+                                     geotiff_da_grade(exposicao, uf, "Horas em risco alto", janela_risco,
+                                                      mapas.CREDITO, METODO_DO_RISCO, classes=False, unidade="h"),
+                                     AJUDA_DO_GEOTIFF_DAS_HORAS)
+
+
+# =====================================================
+# MAPAS INTERATIVOS DA PREVISÃO
+# =====================================================
+# A vista navegável das páginas da previsão (veja PÁGINAS DA PREVISÃO): por dia ou hora a hora de um
+# modelo, ou por semana do EC46. A superfície é a do modelo (a mesma bilinear do boletim), e não o
+# IDW das estações: o número de qualquer ponto é o do modelo ali. No clique, o ponto, a estação ou o
+# imóvel do CAR mostram os três modelos lado a lado; nas semanas, cada semana contra a normal da época
+ESCOLHA_PREVISTA = "escolha_previsao_interativa"
+POR_DIA, HORA_A_HORA, SEMANAS = "Por dia", "Hora a hora", "Semanas (EC46)"
+GRANDEZAS_EM_RELEVO = ("Chuva", "Risco")   # as que ganham o 3D, como no observado
+PADRAO_PREVISTO = {POR_DIA: "Temperatura máxima", HORA_A_HORA: "Temperatura", SEMANAS: "Anomalia da temperatura média"}
+LEGENDA_DO_RISCO_PREVISTO = {POR_DIA: "Pior nível do dia", HORA_A_HORA: "Na hora"}
+AJUDA_DOS_VALORES = "A previsão do mesmo modelo no ponto de cada estação."
+CONTA_DO_PONTO = ("Cada modelo pela interpolação bilinear dos quatro pontos da grade dele em volta, a mesma conta que "
+                  "pinta o mapa; o ICON vai só até o dia 7.")
+CREDITO_DA_PREVISAO = ("Previsão: [Open-Meteo.com](https://open-meteo.com/), com dados do ECMWF, da NOAA e do DWD "
+                       "([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)).")
+
+
+def numero_br(valor: float, casas: int, com_sinal: bool = False) -> str:
+    return f"{valor:{'+' if com_sinal else ''}.{casas}f}".replace(".", ",")
+
+
+def origem_da_grade(modelo: str, pontos_grade: pd.DataFrame) -> str:
+    passo = previsao.espacamento(pontos_grade)
+    km = passo * interativo.METROS_POR_GRAU / 1000
+    return f"{openmeteo.NOMES[modelo]}, grade de {passo:g}° (~{km:.0f} km)".replace(".", ",")
+
+
+def pontos_da_origem(origem: str, pontos_grade: pd.DataFrame) -> str:
+    return f"{len(pontos_grade)} pontos da {origem.split(', ', 1)[1]}"   # "607 pontos da grade de 0,25° (~28 km)"
+
+
+def aviso_da_grade(da_grade: str) -> None:
+    st.caption("O mapa navegável se aproxima, se arrasta e responde ao clique. **Aproximar não deixa a previsão mais "
+               f"precisa:** o modelo vê o estado em {da_grade}, e o que acontece entre eles fica de fora.")
+
+
+@st.cache_data(show_spinner=False, max_entries=40)
+def superficies_previstas(chave: tuple, _valores: pd.Series, _pontos: pd.DataFrame,
+                          _direcoes: pd.Series | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray | None] | None:
+    # A superfície do mapa em duas malhas, da mesma bilinear: a fina vira a imagem, e a do ponto dá o
+    # número de cada célula (e o rumo, nos mapas com seta). `chave` diz de que mapa são os valores (o
+    # modo, o modelo, a rodada, o mapa e o instante), que não entram na conta do cache
+    malha, grade = malha_fina(previsao.UF), grade_do_ponto(previsao.UF)
+    fina = previsao.superficie(_valores, _pontos, malha.lon, malha.lat)
+    na_grade = previsao.superficie(_valores, _pontos, grade.lon, grade.lat)
+    if fina is None or na_grade is None:
+        return None
+    graus = (previsao.rumo_na_grade(_valores, _direcoes, _pontos, grade.lon, grade.lat)
+             if _direcoes is not None else None)
+    return fina, na_grade, graus
+
+
+@st.cache_data(show_spinner=False, max_entries=40)
+def imagem_prevista(chave: tuple, paleta: str, niveis: tuple | None, _fina: np.ndarray, _medidas: pd.Series) -> str:
+    return superficie.como_uri(superficie.png_da_grade(_fina, malha_fina(previsao.UF), paleta, niveis, _medidas))
+
+
+@st.cache_data(show_spinner=False, max_entries=40)
+def celulas_previstas(chave: tuple, nome: str, unidade: str, casas: int, origem: str, com_sinal: bool,
+                      _campo: np.ndarray, _graus: np.ndarray | None) -> pd.DataFrame:
+    return interativo.celulas_da_grade(grade_do_ponto(previsao.UF), _campo, nome, unidade, casas, origem, _graus,
+                                       com_sinal)
+
+
+@st.cache_data(show_spinner=False, max_entries=20)
+def celulas_do_risco_previsto(modelo: str, rodada: datetime, dia: date, origem: str, _nivel: np.ndarray,
+                              _horas: np.ndarray) -> pd.DataFrame:
+    return interativo.celulas_do_risco_na_grade(grade_do_ponto(previsao.UF), _nivel, _horas,
+                                                LEGENDA_DO_RISCO_PREVISTO[POR_DIA], origem)
+
+
+@st.cache_data(show_spinner=False, max_entries=40)
+def risco_da_hora_previsto(modelo: str, rodada: datetime, hora: pd.Timestamp, origem: str, _horaria: pd.DataFrame,
+                           _pontos: pd.DataFrame) -> tuple[np.ndarray, pd.DataFrame] | None:
+    # O nível de cada célula, para a imagem, e as células com as três medidas, para o balão
+    grade = grade_do_ponto(previsao.UF)
+    campos = previsao.risco_da_hora(_horaria, _pontos, hora, grade.lon, grade.lat)
+    if campos is None:
+        return None
+    return (risco_fogo.contar_condicoes(*campos),
+            interativo.celulas_do_risco_da_hora(grade, campos, LEGENDA_DO_RISCO_PREVISTO[HORA_A_HORA], origem))
+
+
+@st.cache_data(show_spinner=False, max_entries=6)
+def largos_do_risco_previsto(modelo: str, rodada: datetime, _horaria: pd.DataFrame) -> tuple[pd.DataFrame, ...]:
+    return previsao.largos_do_risco(_horaria)
+
+
+@st.cache_data(show_spinner=False, max_entries=24)
+def por_hora_e_ponto_previsto(conjunto: str, modelo: str, rodada: datetime, coluna: str,
+                              _horaria: pd.DataFrame) -> pd.DataFrame:
+    return previsao.por_hora_e_ponto(_horaria, coluna)
+
+
+def previsoes_dos_tres(pontos_grade: pd.DataFrame) -> list[pd.DataFrame]:
+    # A grade dos três modelos, só quando alguém clica: o mapa pede um modelo só
+    tabelas, avisos = previsao_dos_pontos("grade", pontos_grade, config.MODELOS_PREVISAO)
+    for texto in avisos:
+        st.warning(texto)
+    return tabelas
+
+
+def caixas_do_mapa(ajustavel: bool, com_relevo: bool, ajuda_dos_valores: str = AJUDA_DOS_VALORES,
+                   rotulo_dos_valores: str = "Mostrar o valor de cada estação") -> tuple[bool, ...]:
+    # A linha de caixas sob os controles do mapa: os valores das estações, a escala e o 3D (este só
+    # no navegável)
+    caixas = iter(st.columns(1 + ajustavel + com_relevo))
+    with next(caixas):
+        escritos = st.checkbox(rotulo_dos_valores, value=True, key="previsao_interativa_valores",
+                               help=ajuda_dos_valores)
+    ajustar = em_3d = False
+    if ajustavel:
+        with next(caixas):
+            ajustar = st.checkbox("Ajustar a escala ao dado", value=False, key="previsao_interativa_ajustar",
+                                  help="Desligada, a escala é a mesma dos mapas do observado: a mesma cor quer dizer "
+                                       "o mesmo valor, previsto ou medido.")
+    if com_relevo:
+        with next(caixas):
+            em_3d = st.checkbox("Relevo 3D", value=False, key="previsao_interativa_3d",
+                                help="O valor vira altura (o topo da escala sobe 100 km; no risco, um degrau por "
+                                     "nível), e o mapa abre inclinado. Arraste com o botão direito para inclinar e "
+                                     "girar.")
+    return escritos, ajustar, em_3d
+
+
+def mapa_previsto_na_tela(imagem: str | None, pontos: pd.DataFrame, celulas: pd.DataFrame, relevo: pd.DataFrame | None,
+                          imovel: car.Imovel | None, chave: str, risco: bool, classes: bool, escala: tuple | None,
+                          paleta: str, unidade: str, texto: str, escritos: bool) -> tuple:
+    # O mapa, a escala por cima dele e a legenda embaixo. Devolve o que está escolhido (o ponto ou a
+    # estação clicada), que fica enquanto o instante, o mapa e o modelo mudam, até outro clique. No
+    # risco, a célula clicada em ciano, como no observado: vermelho se confundiria com o risco alto
+    escolhido = interativo.COR_DO_PONTO_ESCOLHIDO_NO_RISCO if risco else interativo.COR_DO_PONTO_ESCOLHIDO
+    evento = st.pydeck_chart(mapa_interativo(imagem, pontos, previsao.UF, escritos, celulas, escolhido, relevo, imovel),
+                             on_select="rerun", selection_mode="single-object", key=chave, height=ALTURA_MAPA)
+    if classes:
+        escala_no_mapa("escala_previsao_interativa", legenda_do_risco(vertical=True))
+    elif escala is not None:
+        barra_no_mapa("escala_previsao_interativa", paleta, escala, unidade)
+    st.caption(texto)
+    objetos = evento.selection.get("objects", {}) if evento is not None else {}
+    celula_clicada = objetos.get("pontos") or objetos.get(PONTOS_NO_RELEVO)
+    if objetos.get("estacoes"):
+        st.session_state[ESCOLHA_PREVISTA] = ("estacao", objetos["estacoes"][0]["titulo"])
+    elif celula_clicada:
+        st.session_state[ESCOLHA_PREVISTA] = ("ponto", int(celula_clicada[0]["celula"]))
+    return st.session_state.get(ESCOLHA_PREVISTA, (None, None))
+
+
+def legenda_do_mapa(nome: str, quando: str, resumo: str, regra: str, conta: str, em_3d: bool) -> str:
+    return (f"{nome}, {quando}: {resumo} · {regra}. A superfície {conta}. **Passe o mouse** em qualquer ponto para "
+            "ler o valor do modelo ali, e **clique** para ver os três modelos no ponto, ou numa estação."
+            + (" No relevo, **arraste com o botão direito** para inclinar e girar." if em_3d else ""))
+
+
+def resumo_do_risco(no_estado: np.ndarray) -> str:
+    # Uma classe que aparece em poucas células não some como "0%"
+    partes = []
+    for classe in range(len(config.CORES_RISCO) - 1, -1, -1):
+        parte = (no_estado == classe).mean()
+        if parte > 0:
+            partes.append(f"{config.ROTULOS_RISCO[classe].replace('Risco ', '').capitalize()} em "
+                          + (f"{parte:.0%}" if parte >= 0.005 else "menos de 1%"))
+    return f"{' · '.join(partes)} do estado"
+
+
+def cabecalho_do_ponto_previsto(ponto: pd.Series, lon: float, lat: float, linha: str) -> None:
+    st.subheader(f"{ponto['titulo']} · {abs(lat):.2f}° S, {abs(lon):.2f}° O".replace(".", ","))
+    st.markdown(linha)
+
+
+def valor_da_celula(mapa, ponto: pd.Series) -> str:
+    if mapa.risco in ("nivel", "hora"):
+        return f"{config.ROTULOS_RISCO[int(ponto['nivel'])]} ({int(ponto['nivel'])} de 3)"
+    if mapa.risco == "horas":
+        return f"{int(ponto['valor'])} h"
+    texto = f"{numero_br(ponto['valor'], mapa.decimais)} {mapa.unidade}"
+    if pd.notna(ponto.get("graus")):
+        texto += f", de {ponto['graus']:.0f}° ({interativo.rumo(ponto['graus'])})"
+    return texto
+
+
+def legenda_da_rodada(modelo: str, rodada: datetime) -> None:
+    st.caption(f"**{openmeteo.NOMES[modelo]}**, rodada de {rodada:%d/%m %H} UTC. {CREDITO_DA_PREVISAO}")
+
+
+# --- por dia ------------------------------------------------------------------------------
+def dias_interativos(prevista: Prevista, mapa: previsao.MapaPrevisto, dia: date, hoje: date, escritos: bool,
+                     ajustar: bool, em_3d: bool, estacoes: pd.DataFrame, imovel: car.Imovel | None) -> None:
+    # A vista navegável de um mapa do dia, já escolhidos o mapa, o dia e as caixas
+    modelo, rodada, horaria = prevista.modelo, prevista.rodada, prevista.horaria
+    pontos_grade, origem = prevista.pontos_grade, prevista.origem
+    diaria_grade = diario_previsto("grade", modelo, rodada, horaria)
+    diaria_estacoes = dias_das_estacoes(prevista)
+
+    grade, malha = grade_do_ponto(previsao.UF), malha_fina(previsao.UF)
+    da_grade = pontos_da_origem(origem, pontos_grade)
+    tabela_estacoes = previsao.nas_estacoes(diaria_estacoes, estacoes, mapa, dia, hoje)
+    da_estacao = tabela_estacoes.set_index("Estação")[mapa.nome]
+    relevo = altura = None
+    if mapa.risco:
+        calculado = risco_na_grade_prevista(modelo, rodada, dia, _horaria=horaria, _pontos=pontos_grade)
+        if calculado is None:
+            st.info(f"O {openmeteo.NOMES[modelo]} não traz as três variáveis da regra para {previsao.nome_do_dia(dia)}.")
+            return
+        nivel, horas_alto = calculado
+        celulas = celulas_do_risco_previsto(modelo, rodada, dia, origem, _nivel=nivel, _horas=horas_alto)
+        no_estado = (nivel if mapa.risco == "nivel" else horas_alto)[grade.dentro]
+        if mapa.risco == "nivel":
+            pontos = interativo.pontos_de_risco(tabela_estacoes, mapa.nome, LEGENDA_DO_RISCO_PREVISTO[POR_DIA])
+            imagem, niveis = interativo.imagem_de_classes(nivel, malha.dentro), None
+            if em_3d:
+                relevo, altura = interativo.relevo_de_classes(celulas), interativo.metros_por_nivel()
+            resumo = resumo_do_risco(no_estado)
+        else:
+            pontos = interativo.pontos_de_valores(tabela_estacoes, mapa.nome, mapa.nome, "h", 0)
+            escala = niveis_das_horas(horas_alto)
+            niveis = tuple(float(valor) for valor in escala) if np.ndim(escala) else None
+            medidas = pd.Series(no_estado.astype(float))
+            imagem = superficie.como_uri(superficie.png_da_grade(interativo.na_malha_fina(horas_alto, malha.dentro.shape),
+                                                                 malha, mapa.paleta, niveis, medidas))
+            if em_3d:
+                altura = interativo.metros_por_unidade(niveis, medidas)
+                relevo = interativo.relevo(celulas, mapa.paleta, niveis, medidas, altura)
+            resumo = f"0 a {int(no_estado.max())} h"
+        conta = (f"sai das três medidas de cada hora nos {da_grade}, levadas a cada célula pela interpolação "
+                 "bilinear, com a regra 30-30-30 aplicada célula a célula")
+        gravar = geotiff_do_risco_previsto(mapa, nivel, horas_alto, previsao.subtitulo_do_risco(dia), modelo, rodada)
+        ajuda = AJUDA_DO_GEOTIFF_DO_RISCO if mapa.risco == "nivel" else AJUDA_DO_GEOTIFF_DAS_HORAS
+    else:
+        chave = ("dia", modelo, rodada, mapa.nome, dia, hoje)
+        valores = previsao.valores_do_dia(diaria_grade, mapa, dia, hoje)
+        gravar = geotiff_previsto(valores, pontos_grade, mapa.nome, mapa.unidade, previsao.subtitulo(mapa, dia, hoje),
+                                  metodo_previsto(modelo, rodada, pontos_grade))
+        ajuda = AJUDA_DO_GEOTIFF
+        calculadas = superficies_previstas(chave, _valores=valores, _pontos=pontos_grade,
+                                           _direcoes=previsao.direcoes_do_dia(diaria_grade, dia) if mapa.setas else None)
+        if calculadas is None:
+            st.info(f"O {openmeteo.NOMES[modelo]} não traz {mapa.nome.lower()} para {previsao.nome_do_dia(dia)}.")
+            return
+        fina, na_grade, graus = calculadas
+        escala = previsao.niveis(mapa, previsao.dias_somados(mapa, dia, hoje), ajustar)
+        niveis = None if escala is None else tuple(float(nivel) for nivel in escala)
+        celulas = celulas_previstas(chave, mapa.nome, mapa.unidade, mapa.decimais, origem, False, _campo=na_grade,
+                                    _graus=graus)
+        pontos = interativo.pontos_de_valores(tabela_estacoes, mapa.nome, mapa.nome, mapa.unidade, mapa.decimais)
+        if mapa.setas and "Direção (°)" in tabela_estacoes:
+            pontos = interativo.com_direcao(pontos, tabela_estacoes.set_index("Estação")["Direção (°)"])
+        imagem = imagem_prevista(chave, mapa.paleta, niveis, _fina=fina, _medidas=valores.dropna())
+        if em_3d:
+            altura = interativo.metros_por_unidade(niveis, valores.dropna())
+            relevo = interativo.relevo(celulas, mapa.paleta, niveis, valores.dropna(), altura)
+        no_estado = na_grade[grade.dentro]
+        resumo = (f"{numero_br(np.nanmin(no_estado), mapa.decimais)} a {numero_br(np.nanmax(no_estado), mapa.decimais)} "
+                  f"{mapa.unidade} no estado")
+        conta = (f"é a do próprio modelo, nos {da_grade} que cobrem o estado, levada ao mapa por interpolação "
+                 "bilinear: não é IDW de estação")
+    if em_3d:
+        imagem = None
+        pontos = pontos.assign(altura=pontos["Estação"].map(da_estacao).fillna(0).to_numpy(dtype=float) * altura)
+
+    tipo, escolhida = mapa_previsto_na_tela(
+        imagem, pontos, celulas, relevo, imovel, chave_do_mapa("mapa_previsto_interativo", em_3d, imovel),
+        bool(mapa.risco), mapa.risco == "nivel", niveis, mapa.paleta, "horas" if mapa.risco else mapa.unidade,
+        legenda_do_mapa(mapa.nome, previsao.nome_do_dia(dia), resumo, mapa.regra, conta, em_3d), escritos)
+    with menu_de_baixar("previsto_interativo_dia"):
+        botao_do_geotiff("previsto_interativo_dia",
+                         nome_do_geotiff(boletim.nome_do_arquivo(mapa.titulo.replace(" — ", " "), previsao.UF,
+                                                                 previsao.carimbo(modelo, rodada, mapa, dia, hoje))),
+                         gravar, ajuda)
+    if imovel is not None:
+        painel_previsto_no_imovel(mapa, celulas, imovel, pontos_grade, modelo, dia, hoje)
+    if tipo == "ponto":
+        painel_previsto_no_ponto(mapa, celulas, escolhida, pontos_grade, modelo, dia, hoje)
+    elif tipo == "estacao" and escolhida in set(estacoes["Estação"]):
+        painel_previsto_na_estacao(mapa, escolhida, estacoes, dia, hoje)
+
+
+def _com_o_valor(mapa: previsao.MapaPrevisto, pedacos: list[pd.DataFrame]) -> pd.DataFrame:
+    # Um dia por linha e modelo, com o número do mapa em "valor" (no risco, o nível ou as horas)
+    coluna = {"nivel": "risco_max", "horas": "horas_risco_alto"}.get(mapa.risco, mapa.coluna)
+    colunas = ["modelo", "dia_previsto", "valor", "risco_max", "horas_risco_alto"]
+    tabela = pd.concat(pedacos, ignore_index=True) if pedacos else pd.DataFrame()
+    if coluna not in tabela:
+        return pd.DataFrame(columns=colunas)
+    tabela = tabela.assign(valor=tabela[coluna]).dropna(subset=["valor"])
+    for falta in ("risco_max", "horas_risco_alto"):
+        if falta not in tabela:
+            tabela[falta] = np.nan
+    return tabela[colunas].sort_values(["modelo", "dia_previsto"], ignore_index=True)
+
+
+def dias_no_ponto(mapa: previsao.MapaPrevisto, tabelas: list[pd.DataFrame], pontos_grade: pd.DataFrame, lons, lats,
+                  hoje: date) -> pd.DataFrame:
+    # Os três modelos no ponto (ou nas células do imóvel), pela mesma bilinear que pinta o mapa
+    pedacos = []
+    for horaria in tabelas:
+        modelo, rodada = horaria["modelo"].iloc[0], previsao.rodada_da(horaria)
+        if mapa.risco:
+            dias = previsao.risco_no_ponto(largos_do_risco_previsto(modelo, rodada, horaria), pontos_grade, lons,
+                                           lats, hoje)
+        else:
+            serie = previsao.diario_no_ponto(diario_previsto("grade", modelo, rodada, horaria), pontos_grade, lons,
+                                             lats, mapa.coluna, hoje)
+            dias = pd.DataFrame({"dia_previsto": serie.index, mapa.coluna: serie.to_numpy()})
+        pedacos.append(dias.assign(modelo=modelo))
+    return _com_o_valor(mapa, pedacos)
+
+
+def dias_na_estacao(mapa: previsao.MapaPrevisto, tabelas: list[pd.DataFrame], codigo: str, hoje: date) -> pd.DataFrame:
+    # A previsão de cada modelo no ponto da estação, a mesma da página Estações
+    pedacos = []
+    for horaria in tabelas:
+        diaria = diario_previsto("estações", horaria["modelo"].iloc[0], previsao.rodada_da(horaria), horaria)
+        pedacos.append(diaria[(diaria["ponto"] == codigo) & (diaria["horas"] == 24) & (diaria["dia_previsto"] >= hoje)])
+    return _com_o_valor(mapa, pedacos)
+
+
+def graficos_previstos(mapa: previsao.MapaPrevisto, dias: pd.DataFrame) -> None:
+    # Os gráficos da página Estações: barras na chuva e nas horas em risco alto, o calendário no
+    # nível do risco e linhas nas outras
+    if mapa.risco == "nivel":
+        st.altair_chart(calendario_do_risco_previsto(dias), width="stretch")
+        return
+    longo = dias.assign(dt_local=pd.to_datetime(dias["dia_previsto"]).dt.tz_localize(config.FUSO_MS),
+                        Modelo=dias["modelo"].map(openmeteo.NOMES))
+    if mapa.risco == "horas":
+        grafico = barras_da_chuva_prevista(longo, "Horas em risco alto", ".0f")
+    elif mapa.grandeza == "Chuva":
+        grafico = barras_da_chuva_prevista(longo)
+    else:
+        grandeza = previsao.GRANDEZAS.get(mapa.grandeza)
+        linhas = longo.assign(Série=mapa.nome).rename(columns={"Modelo": "Estação"})[["dt_local", "Estação", "valor",
+                                                                                    "Série"]]
+        grafico = desenhar(linhas, f"{mapa.nome} ({mapa.unidade})", grandeza.zero_na_base if grandeza else False,
+                           variaveis.DIA, mapa.decimais, cores=previsao.CORES)
+    st.altair_chart(grafico, width="stretch")
+
+
+def no_dia_escolhido(mapa: previsao.MapaPrevisto, dias: pd.DataFrame, dia: date, hoje: date) -> str:
+    # O número de cada modelo no dia do mapa (na chuva acumulada, a soma até ele), na ordem das cores
+    partes = []
+    for modelo in config.MODELOS_PREVISAO:
+        dele = dias[dias["modelo"] == modelo]
+        if mapa.acumulado:
+            janela = dele[dele["dia_previsto"] <= dia]
+            if len(janela) != previsao.dias_somados(mapa, dia, hoje):
+                continue
+            valor = janela["valor"].sum()
+        elif (dele["dia_previsto"] == dia).any():
+            valor = dele.loc[dele["dia_previsto"] == dia, "valor"].iloc[0]
+        else:
+            continue
+        if mapa.risco == "nivel":
+            texto = config.ROTULOS_RISCO[int(valor)].lower()
+        else:
+            texto = f"{numero_br(valor, mapa.decimais)} {mapa.unidade}".strip()
+        partes.append(f"{openmeteo.NOMES[modelo]} {texto}")
+    if not partes:
+        return ""
+    quando = f"de hoje até {previsao.nome_do_dia(dia)}" if mapa.acumulado else f"em {previsao.nome_do_dia(dia)}"
+    return f"**{mapa.nome} {quando}:** " + " · ".join(partes) + "."
+
+
+def painel_previsto_no_ponto(mapa: previsao.MapaPrevisto, celulas: pd.DataFrame, celula: int,
+                             pontos_grade: pd.DataFrame, modelo: str, dia: date, hoje: date) -> None:
+    clicado = ponto_clicado(celulas, celula, previsao.UF)
+    if clicado is None:
+        return
+    ponto, lon, lat = clicado
+    cabecalho_do_ponto_previsto(ponto, lon, lat, f"**No mapa ({openmeteo.NOMES[modelo]}, {previsao.nome_do_dia(dia)}):** "
+                                                 f"{valor_da_celula(mapa, ponto)}")
+    dias = dias_no_ponto(mapa, previsoes_dos_tres(pontos_grade), pontos_grade, lon, lat, hoje)
+    if dias.empty:
+        st.info(f"Nenhum modelo traz {mapa.nome.lower()} para esse ponto.")
+        return
+    graficos_previstos(mapa, dias)
+    st.caption(" ".join(parte for parte in (no_dia_escolhido(mapa, dias, dia, hoje),
+                                            f"Os três modelos no ponto, dia a dia. {CONTA_DO_PONTO}") if parte))
+
+
+def painel_previsto_na_estacao(mapa: previsao.MapaPrevisto, nome: str, estacoes: pd.DataFrame, dia: date,
+                               hoje: date) -> None:
+    codigo = str(estacoes.set_index("Estação").loc[nome, "CD_ESTACAO"])
+    tabelas, avisos = previsao_dos_pontos("estações", openmeteo.pontos_das_estacoes(estacoes), config.MODELOS_PREVISAO)
+    for texto in avisos:
+        st.warning(texto)
+    st.subheader(nome)
+    dias = dias_na_estacao(mapa, tabelas, codigo, hoje)
+    if dias.empty:
+        st.info(f"Nenhum modelo traz {mapa.nome.lower()} para {nome}.")
+        return
+    graficos_previstos(mapa, dias)
+    st.caption(" ".join(parte for parte in (no_dia_escolhido(mapa, dias, dia, hoje),
+                                            "Os três modelos no ponto da estação, dia a dia, como na página Estações.")
+                        if parte))
+
+
+def painel_previsto_no_imovel(mapa: previsao.MapaPrevisto, celulas: pd.DataFrame, imovel: car.Imovel,
+                              pontos_grade: pd.DataFrame, modelo: str, dia: date, hoje: date) -> None:
+    # Nas variáveis e na chuva, a média das células do imóvel; no risco, o pior delas, como no observado
+    dele = celulas_dele(celulas, imovel, previsao.UF)
+    if dele is None:
+        return
+    quando = f"{openmeteo.NOMES[modelo]}, {previsao.nome_do_dia(dia)}"
+    if mapa.risco == "nivel":
+        pior = int(dele["nivel"].max())
+        linha = f"**{imovel.onde.capitalize()} ({quando}):** {config.ROTULOS_RISCO[pior]} ({pior} de 3)"
+    elif mapa.risco == "horas":
+        linha = f"**Horas em risco alto {imovel.onde} ({quando}):** {int(dele['valor'].max())} h"
+    else:
+        linha = f"**{mapa.nome} {imovel.onde} ({quando}):** {car.resumo(dele['valor'], mapa.decimais, mapa.unidade)}"
+    pior_ou_media = "o pior" if mapa.risco else "a média"
+    cabecalho_do_imovel(imovel, dele, linha, previsao.UF,
+                        conta="Cada célula leva o valor do modelo, a mesma bilinear que pinta o mapa"
+                              + (f"; o imóvel leva {pior_ou_media} delas." if len(dele) > 1 else "."))
+    lons, lats = coordenadas_das_celulas(dele, previsao.UF)
+    dias = dias_no_ponto(mapa, previsoes_dos_tres(pontos_grade), pontos_grade, lons, lats, hoje)
+    if dias.empty:
+        st.info(f"Nenhum modelo traz {mapa.nome.lower()} para o imóvel.")
+        return
+    graficos_previstos(mapa, dias)
+    celulas_no_texto = f" ({pior_ou_media} das {len(dele)} células)" if len(dele) > 1 else ""
+    st.caption(" ".join(parte for parte in (no_dia_escolhido(mapa, dias, dia, hoje),
+                                            f"Os três modelos {imovel.onde}{celulas_no_texto}, dia a dia. "
+                                            f"{CONTA_DO_PONTO}") if parte))
+
+
+# --- hora a hora --------------------------------------------------------------------------
+def horas_interativas(prevista: Prevista, mapa: previsao.MapaPrevisto, hora: pd.Timestamp, desde: pd.Timestamp,
+                      escritos: bool, ajustar: bool, em_3d: bool, estacoes: pd.DataFrame,
+                      imovel: car.Imovel | None) -> None:
+    # A vista navegável de um mapa da hora, já escolhidos o mapa, a hora e as caixas
+    modelo, rodada, horaria = prevista.modelo, prevista.rodada, prevista.horaria
+    horaria_estacoes, pontos_grade, origem = prevista.horaria_estacoes, prevista.pontos_grade, prevista.origem
+
+    grade, malha = grade_do_ponto(previsao.UF), malha_fina(previsao.UF)
+    da_grade = pontos_da_origem(origem, pontos_grade)
+    tabela_estacoes = previsao.nas_estacoes_na_hora(horaria_estacoes, estacoes, mapa, hora)
+    hora_local = hora.tz_convert(config.FUSO_MS)
+    quando = f"Previsão para {hora_local:%d/%m/%Y %H:%M}"
+    da_estacao = tabela_estacoes.set_index("Estação")[mapa.nome]
+    relevo = altura = None
+    if mapa.risco:
+        calculado = risco_da_hora_previsto(modelo, rodada, hora, origem, _horaria=horaria, _pontos=pontos_grade)
+        if calculado is None:
+            st.info(f"O {openmeteo.NOMES[modelo]} não traz as três variáveis da regra para {previsao.nome_da_hora(hora)}.")
+            return
+        nivel, celulas = calculado
+        pontos = interativo.pontos_de_risco(tabela_estacoes, mapa.nome, LEGENDA_DO_RISCO_PREVISTO[HORA_A_HORA])
+        imagem, niveis = interativo.imagem_de_classes(nivel, malha.dentro), None
+        if em_3d:
+            relevo, altura = interativo.relevo_de_classes(celulas), interativo.metros_por_nivel()
+        resumo = resumo_do_risco(nivel[grade.dentro])
+        conta = (f"sai das três medidas da hora nos {da_grade}, levadas a cada célula pela interpolação bilinear, "
+                 "com a regra 30-30-30 aplicada célula a célula (no balão, ✔ e ✘ em cada uma)")
+        gravar = geotiff_da_grade(nivel, previsao.UF, mapa.titulo, quando, previsao.CREDITO,
+                                  metodo_do_risco_previsto(modelo, rodada), classes=True)
+        ajuda = AJUDA_DO_GEOTIFF_DO_RISCO
+    else:
+        chave = ("hora", modelo, rodada, mapa.nome, hora)
+        valores = previsao.valores_da_hora(horaria, mapa.coluna, hora)
+        gravar = geotiff_previsto(valores, pontos_grade, mapa.nome, mapa.unidade, quando,
+                                  metodo_previsto(modelo, rodada, pontos_grade))
+        ajuda = AJUDA_DO_GEOTIFF
+        calculadas = superficies_previstas(chave, _valores=valores, _pontos=pontos_grade,
+                                           _direcoes=previsao.valores_da_hora(horaria, "direcao", hora)
+                                           if mapa.setas else None)
+        if calculadas is None:
+            st.info(f"O {openmeteo.NOMES[modelo]} não traz {mapa.nome.lower()} para {previsao.nome_da_hora(hora)}.")
+            return
+        fina, na_grade, graus = calculadas
+        escala = previsao.niveis(mapa, ajustar=ajustar, horas=1.0)
+        niveis = None if escala is None else tuple(float(nivel) for nivel in escala)
+        celulas = celulas_previstas(chave, mapa.nome, mapa.unidade, mapa.decimais, origem, False, _campo=na_grade,
+                                    _graus=graus)
+        pontos = interativo.pontos_de_valores(tabela_estacoes, mapa.nome, mapa.nome, mapa.unidade, mapa.decimais)
+        if mapa.setas and "Direção (°)" in tabela_estacoes:
+            pontos = interativo.com_direcao(pontos, tabela_estacoes.set_index("Estação")["Direção (°)"])
+        imagem = imagem_prevista(chave, mapa.paleta, niveis, _fina=fina, _medidas=valores.dropna())
+        if em_3d:
+            altura = interativo.metros_por_unidade(niveis, valores.dropna())
+            relevo = interativo.relevo(celulas, mapa.paleta, niveis, valores.dropna(), altura)
+        no_estado = na_grade[grade.dentro]
+        resumo = (f"{numero_br(np.nanmin(no_estado), mapa.decimais)} a {numero_br(np.nanmax(no_estado), mapa.decimais)} "
+                  f"{mapa.unidade} no estado")
+        conta = (f"é a do próprio modelo, nos {da_grade} que cobrem o estado, levada ao mapa por interpolação "
+                 "bilinear: não é IDW de estação")
+    if em_3d:
+        imagem = None
+        pontos = pontos.assign(altura=pontos["Estação"].map(da_estacao).fillna(0).to_numpy(dtype=float) * altura)
+
+    tipo, escolhida = mapa_previsto_na_tela(
+        imagem, pontos, celulas, relevo, imovel, chave_do_mapa("mapa_previsto_interativo", em_3d, imovel),
+        bool(mapa.risco), bool(mapa.risco), niveis, mapa.paleta, mapa.unidade,
+        legenda_do_mapa(mapa.nome, previsao.nome_da_hora(hora), resumo, mapa.regra, conta, em_3d), escritos)
+    carimbo = f"{openmeteo.NOMES[modelo]}_{hora_local:%Y%m%d_%H}h_rodada_{rodada:%Y%m%d_%H}UTC"
+    with menu_de_baixar("previsto_interativo_hora"):
+        botao_do_geotiff("previsto_interativo_hora",
+                         nome_do_geotiff(boletim.nome_do_arquivo(mapa.titulo.replace(" — ", " "), previsao.UF,
+                                                                 carimbo)),
+                         gravar, ajuda)
+    if imovel is not None:
+        painel_horario_no_imovel(mapa, celulas, imovel, pontos_grade, modelo, hora, desde)
+    if tipo == "ponto":
+        painel_horario_no_ponto(mapa, celulas, escolhida, pontos_grade, modelo, hora, desde)
+    elif tipo == "estacao" and escolhida in set(estacoes["Estação"]):
+        painel_horario_na_estacao(mapa, escolhida, estacoes, hora, desde)
+
+
+COLUNAS_DA_HORA = ["dt_local", "Estação", "valor"]   # "Estação" é o modelo, como na página Estações
+
+
+def _serie_da_hora(serie: pd.Series, modelo: str, desde: pd.Timestamp) -> pd.DataFrame:
+    serie = serie[serie.index >= desde].dropna()
+    return pd.DataFrame({"dt_local": pd.DatetimeIndex(serie.index).tz_convert(config.FUSO_MS),
+                         "Estação": openmeteo.NOMES[modelo], "valor": serie.to_numpy()})
+
+
+def horas_no_ponto(coluna: str, tabelas: list[pd.DataFrame], pontos_grade: pd.DataFrame, lons, lats,
+                   desde: pd.Timestamp) -> pd.DataFrame:
+    # Os três modelos no ponto (ou na média das células do imóvel), hora a hora, pela bilinear do mapa
+    pedacos = []
+    for horaria in tabelas:
+        modelo, rodada = horaria["modelo"].iloc[0], previsao.rodada_da(horaria)
+        largo = por_hora_e_ponto_previsto("grade", modelo, rodada, coluna, horaria)
+        pedacos.append(_serie_da_hora(previsao.horario_no_ponto(largo, pontos_grade, lons, lats), modelo, desde))
+    return pd.concat(pedacos, ignore_index=True) if pedacos else pd.DataFrame(columns=COLUNAS_DA_HORA)
+
+
+def horas_na_estacao(coluna: str, tabelas: list[pd.DataFrame], codigo: str, desde: pd.Timestamp) -> pd.DataFrame:
+    pedacos = []
+    for horaria in tabelas:
+        modelo, rodada = horaria["modelo"].iloc[0], previsao.rodada_da(horaria)
+        largo = por_hora_e_ponto_previsto("estações", modelo, rodada, coluna, horaria)
+        if codigo in largo.columns:
+            pedacos.append(_serie_da_hora(largo[codigo], modelo, desde))
+    return pd.concat(pedacos, ignore_index=True) if pedacos else pd.DataFrame(columns=COLUNAS_DA_HORA)
+
+
+def grafico_da_medida_prevista(longo: pd.DataFrame, nome: str, unidade: str, limiar: float,
+                               hora_local: pd.Timestamp) -> alt.LayerChart:
+    # Uma medida da regra nos três modelos, com o limiar dela tracejado e a hora do mapa em azul
+    navegar = alt.selection_interval(bind="scales", encodings=["x"], zoom="wheel![event.shiftKey]")
+    base = alt.Chart(longo).encode(x=_eixo_do_tempo("dt_local"),
+                                   color=alt.Color("Estação:N", title=None, legend=alt.Legend(orient="bottom"),
+                                                   scale=_escala_das_cores(previsao.CORES, longo["Estação"])))
+    titulo = f"{nome} ({unidade})"
+    return alt.layer(
+        base.mark_line(strokeWidth=1.6).encode(
+            y=alt.Y("valor:Q", title=titulo, scale=alt.Scale(zero=False),
+                    axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS))).add_params(navegar),
+        base.mark_circle(size=18).encode(y="valor:Q", tooltip=[_quando_no_balao("dt_local"),
+                                                               alt.Tooltip("Estação:N", title="Modelo"),
+                                                               alt.Tooltip("valor:Q", title=titulo, format=".1f")]),
+        alt.Chart(pd.DataFrame({"limiar": [limiar]})).mark_rule(color=config.CORES_RISCO[-1], strokeDash=[5, 4])
+        .encode(y="limiar:Q"),
+        alt.Chart(pd.DataFrame({"agora": [hora_local]})).mark_rule(color="#29b6f6", strokeWidth=2).encode(x="agora:T"),
+    ).properties(height=ALTURA_GRAFICO_DO_RISCO)
+
+
+def na_hora_escolhida(mapa: previsao.MapaPrevisto, por_medida: dict[str, pd.DataFrame], hora: pd.Timestamp) -> str:
+    # O número de cada modelo na hora do mapa; no risco, o nível que as três medidas dão
+    local = hora.tz_convert(config.FUSO_MS)
+    partes = []
+    for modelo in config.MODELOS_PREVISAO:
+        nome = openmeteo.NOMES[modelo]
+        na_hora = [longo.loc[(longo["Estação"] == nome) & (longo["dt_local"] == local), "valor"]
+                   for longo in por_medida.values()]
+        if any(valor.empty for valor in na_hora):
+            continue
+        if mapa.risco:
+            nivel = int(risco_fogo.contar_condicoes(*(valor.iloc[0] for valor in na_hora)))
+            partes.append(f"{nome} {config.ROTULOS_RISCO[nivel].lower()}")
+        else:
+            partes.append(f"{nome} {numero_br(na_hora[0].iloc[0], mapa.decimais)} {mapa.unidade}")
+    return f"**{mapa.nome} em {previsao.nome_da_hora(hora)}:** " + " · ".join(partes) + "." if partes else ""
+
+
+def graficos_da_hora(mapa: previsao.MapaPrevisto, medir, hora: pd.Timestamp, de_onde: str) -> None:
+    # `medir(coluna)` dá a série de uma coluna nos três modelos. No risco, um gráfico por medida da regra
+    if mapa.risco:
+        por_medida = {coluna: medir(coluna) for coluna, *_ in interativo.MEDIDAS_PREVISTAS_DO_RISCO}
+        if any(longo.empty for longo in por_medida.values()):
+            st.info("Nenhum modelo traz as três medidas da regra para esse ponto.")
+            return
+        for coluna, nome, unidade, limiar, _ in interativo.MEDIDAS_PREVISTAS_DO_RISCO:
+            st.altair_chart(grafico_da_medida_prevista(por_medida[coluna], nome, unidade, limiar,
+                                                       hora.tz_convert(config.FUSO_MS)), width="stretch")
+        explicacao = (f"A linha tracejada é o limiar de cada condição ({config.LIMIAR_TEMP_MAX:g} °C, "
+                      f"{config.LIMIAR_UMIDADE_MIN:g} % e {config.LIMIAR_RAJADA:g} km/h); a azul, a hora do mapa. "
+                      "Arraste o gráfico para deslocar, use **Shift + roda do mouse** para aproximar e passe o mouse "
+                      "num ponto para ler o número.")
+        navegar = ""
+    else:
+        por_medida = {mapa.coluna: medir(mapa.coluna)}
+        longo = por_medida[mapa.coluna]
+        if longo.empty:
+            st.info(f"Nenhum modelo traz {mapa.nome.lower()} para esse ponto.")
+            return
+        grandeza = previsao.GRANDEZAS.get(mapa.grandeza)
+        st.altair_chart(desenhar(longo.assign(Série=mapa.nome), f"{mapa.nome} ({mapa.unidade})",
+                                 grandeza.zero_na_base if grandeza else False, variaveis.HORA, mapa.decimais,
+                                 cores=previsao.CORES), width="stretch")
+        explicacao, navegar = "", NAVEGAR_NO_GRAFICO
+    st.caption(" ".join(parte for parte in (na_hora_escolhida(mapa, por_medida, hora), de_onde, explicacao) if parte)
+               + navegar)
+
+
+def painel_horario_no_ponto(mapa: previsao.MapaPrevisto, celulas: pd.DataFrame, celula: int,
+                            pontos_grade: pd.DataFrame, modelo: str, hora: pd.Timestamp, desde: pd.Timestamp) -> None:
+    clicado = ponto_clicado(celulas, celula, previsao.UF)
+    if clicado is None:
+        return
+    ponto, lon, lat = clicado
+    cabecalho_do_ponto_previsto(ponto, lon, lat, f"**No mapa ({openmeteo.NOMES[modelo]}, {previsao.nome_da_hora(hora)}):** "
+                                                 f"{valor_da_celula(mapa, ponto)}")
+    tabelas = previsoes_dos_tres(pontos_grade)
+    graficos_da_hora(mapa, lambda coluna: horas_no_ponto(coluna, tabelas, pontos_grade, lon, lat, desde), hora,
+                     f"Os três modelos no ponto, hora a hora. {CONTA_DO_PONTO}")
+
+
+def painel_horario_na_estacao(mapa: previsao.MapaPrevisto, nome: str, estacoes: pd.DataFrame, hora: pd.Timestamp,
+                              desde: pd.Timestamp) -> None:
+    codigo = str(estacoes.set_index("Estação").loc[nome, "CD_ESTACAO"])
+    tabelas, avisos = previsao_dos_pontos("estações", openmeteo.pontos_das_estacoes(estacoes), config.MODELOS_PREVISAO)
+    for texto in avisos:
+        st.warning(texto)
+    st.subheader(nome)
+    graficos_da_hora(mapa, lambda coluna: horas_na_estacao(coluna, tabelas, codigo, desde), hora,
+                     "Os três modelos no ponto da estação, hora a hora, como na página Estações.")
+
+
+def painel_horario_no_imovel(mapa: previsao.MapaPrevisto, celulas: pd.DataFrame, imovel: car.Imovel,
+                             pontos_grade: pd.DataFrame, modelo: str, hora: pd.Timestamp, desde: pd.Timestamp) -> None:
+    # Nas variáveis, a média das células do imóvel; no risco, as três medidas na célula de pior nível
+    # (entre as de mesmo nível, a mais perto do centro do imóvel), como no observado
+    dele = celulas_dele(celulas, imovel, previsao.UF)
+    if dele is None:
+        return
+    quando = f"{openmeteo.NOMES[modelo]}, {previsao.nome_da_hora(hora)}"
+    if mapa.risco:
+        pior = int(dele["nivel"].max())
+        com_o_pior = dele[dele["nivel"] == pior]
+        escolhida = mais_perto_do_centro(com_o_pior, imovel)
+        linha = f"**{imovel.onde.capitalize()} ({quando}):** {config.ROTULOS_RISCO[pior]} ({pior} de 3)"
+        lons, lats = coordenadas_das_celulas(com_o_pior.loc[[escolhida.name]], previsao.UF)
+        de_onde = ("As três medidas na célula " + ("do ponto" if imovel.ponto else "de pior nível do imóvel")
+                   + ", hora a hora, nos três modelos.")
+    else:
+        linha = f"**{mapa.nome} {imovel.onde} ({quando}):** {car.resumo(dele['valor'], mapa.decimais, mapa.unidade)}"
+        lons, lats = coordenadas_das_celulas(dele, previsao.UF)
+        de_onde = (f"Os três modelos {imovel.onde}" + (f" (a média das {len(dele)} células)" if len(dele) > 1 else "")
+                   + f", hora a hora. {CONTA_DO_PONTO}")
+    cabecalho_do_imovel(imovel, dele, linha, previsao.UF,
+                        conta="Cada célula leva o valor do modelo, a mesma bilinear que pinta o mapa"
+                              + ("; o imóvel leva o pior nível delas." if mapa.risco and len(dele) > 1 else "."))
+    tabelas = previsoes_dos_tres(pontos_grade)
+    graficos_da_hora(mapa, lambda coluna: horas_no_ponto(coluna, tabelas, pontos_grade, lons, lats, desde), hora,
+                     de_onde)
+
+
+# --- semanas ------------------------------------------------------------------------------
+def semanas_interativas(semanal: Semanal, mapa: previsao.MapaSemanal, semana: date, escritos: bool,
+                        estacoes: pd.DataFrame, imovel: car.Imovel | None) -> None:
+    # A vista navegável de um mapa da semana, já escolhidos o mapa, a semana e os valores
+    rodada, semanal_grade, semanal_estacoes = semanal.rodada, semanal.grade, semanal.estacoes
+    pontos_grade, origem = semanal.pontos_grade, semanal.origem
+    da_grade = pontos_da_origem(origem, pontos_grade)
+
+    chave = ("semana", rodada, mapa.nome, semana)
+    valores = previsao.valores_da_semana(semanal_grade, mapa, semana)
+    calculadas = superficies_previstas(chave, _valores=valores, _pontos=pontos_grade)
+    if calculadas is None:
+        st.info(f"O EC46 não traz {mapa.nome.lower()} para a semana de {previsao.nome_da_semana(semana)}.")
+        return
+    fina, na_grade, _ = calculadas
+    escala = tuple(float(nivel) for nivel in mapa.niveis)
+    celulas = celulas_previstas(chave, mapa.nome, mapa.unidade, mapa.decimais, origem, True, _campo=na_grade,
+                                _graus=None)
+    tabela_estacoes = previsao.nas_estacoes_na_semana(semanal_estacoes, estacoes, mapa, semana)
+    pontos = interativo.pontos_de_valores(tabela_estacoes, mapa.titulo, mapa.nome, mapa.unidade, mapa.decimais,
+                                          com_sinal=True)
+    imagem = imagem_prevista(chave, mapa.paleta, escala, _fina=fina, _medidas=valores.dropna())
+    no_estado = na_grade[grade_do_ponto(previsao.UF).dentro]
+    texto = (f"{mapa.nome}, semana de {previsao.nome_da_semana(semana)}: de "
+             f"{numero_br(np.nanmin(no_estado), mapa.decimais, True)} a "
+             f"{numero_br(np.nanmax(no_estado), mapa.decimais, True)} {mapa.unidade} em relação ao normal · {mapa.regra}. A superfície é a do próprio EC46, nos {da_grade} que "
+             "cobrem o estado, levada ao mapa por interpolação bilinear. **Passe o mouse** em qualquer ponto para ler a "
+             "anomalia ali, e **clique** para ver, no ponto ou numa estação, cada semana contra a normal da época.")
+    tipo, escolhida = mapa_previsto_na_tela(
+        imagem, pontos, celulas, None, imovel, chave_do_mapa("mapa_semanal_interativo", imovel=imovel), False, False,
+        escala, mapa.paleta, f"{mapa.unidade} em relação ao normal", texto, escritos)
+    with menu_de_baixar("semanal_interativo"):
+        botao_do_geotiff("semanal_interativo",
+                         nome_do_geotiff(boletim.nome_do_arquivo(mapa.titulo, previsao.UF,
+                                                                 previsao.carimbo_da_semana(rodada, semana))),
+                         geotiff_semanal(mapa, valores, pontos_grade, semana, rodada))
+    if imovel is not None:
+        painel_semanal_no_imovel(mapa, celulas, imovel, semanal_grade, pontos_grade, semana, rodada)
+    if tipo == "ponto":
+        painel_semanal_no_ponto(mapa, celulas, escolhida, semanal_grade, pontos_grade, semana, rodada)
+    elif tipo == "estacao" and escolhida in set(estacoes["Estação"]):
+        painel_semanal_na_estacao(mapa, escolhida, estacoes, semanal_estacoes, semana, rodada)
+
+
+def grafico_semanal(mapa: previsao.MapaSemanal, tabela: pd.DataFrame, semana: date, de_onde: str) -> None:
+    # O gráfico da página Semanas: cada semana prevista contra a normal da época, com a anomalia entre as duas
+    if tabela.empty:
+        st.info(f"O EC46 não traz {mapa.nome.lower()} para esse ponto.")
+        return
+    st.altair_chart(semana_contra_o_normal(tabela, previsao.PREVISTA_DA_ANOMALIA[mapa.coluna][1], mapa.unidade),
+                    width="stretch")
+    da_semana = tabela[tabela["semana"] == semana]
+    resumo = ""
+    if not da_semana.empty:
+        linha = da_semana.iloc[0]
+        resumo = (f"**Semana de {previsao.nome_da_semana(semana)}:** prevista {numero_br(linha['prevista'], 1)} "
+                  f"{mapa.unidade}, normal {numero_br(linha['normal'], 1)} {mapa.unidade}, anomalia "
+                  f"{numero_br(linha['anomalia'], 1, True)} {mapa.unidade}.")
+    st.caption(" ".join(parte for parte in (
+        resumo, de_onde, "A linha cinza tracejada é a normal da época, a do próprio modelo; a azul, a previsão do EC46 "
+                         "(na chuva, o total da semana). A barra entre as duas é a anomalia, o número do mapa.")
+        if parte))
+
+
+def painel_semanal_no_ponto(mapa: previsao.MapaSemanal, celulas: pd.DataFrame, celula: int, semanal: pd.DataFrame,
+                            pontos_grade: pd.DataFrame, semana: date, rodada: datetime) -> None:
+    clicado = ponto_clicado(celulas, celula, previsao.UF)
+    if clicado is None:
+        return
+    ponto, lon, lat = clicado
+    cabecalho_do_ponto_previsto(ponto, lon, lat, f"**No mapa (EC46, semana de {previsao.nome_da_semana(semana)}):** "
+                                                 f"{numero_br(ponto['valor'], mapa.decimais, True)} {mapa.unidade} em "
+                                                 "relação ao normal")
+    grafico_semanal(mapa, previsao.semana_no_ponto(semanal, pontos_grade, lon, lat, mapa, rodada), semana,
+                    "No ponto, pela interpolação bilinear dos quatro pontos da grade do EC46 em volta, a mesma conta que "
+                    "pinta o mapa.")
+
+
+def painel_semanal_na_estacao(mapa: previsao.MapaSemanal, nome: str, estacoes: pd.DataFrame,
+                              semanal_estacoes: pd.DataFrame, semana: date, rodada: datetime) -> None:
+    codigo = str(estacoes.set_index("Estação").loc[nome, "CD_ESTACAO"])
+    st.subheader(nome)
+    grafico_semanal(mapa, previsao.semana_na_estacao(semanal_estacoes, codigo, mapa, rodada), semana,
+                    "No ponto da estação, como na página Semanas.")
+
+
+def painel_semanal_no_imovel(mapa: previsao.MapaSemanal, celulas: pd.DataFrame, imovel: car.Imovel,
+                             semanal: pd.DataFrame, pontos_grade: pd.DataFrame, semana: date, rodada: datetime) -> None:
+    dele = celulas_dele(celulas, imovel, previsao.UF)
+    if dele is None:
+        return
+    media = numero_br(dele["valor"].mean(), mapa.decimais, True)
+    faixa = (f" em média (de {numero_br(dele['valor'].min(), mapa.decimais, True)} a "
+             f"{numero_br(dele['valor'].max(), mapa.decimais, True)} nas {len(dele)} células)" if len(dele) > 1 else "")
+    cabecalho_do_imovel(imovel, dele, f"**{mapa.nome} {imovel.onde} (EC46, semana de {previsao.nome_da_semana(semana)}):** "
+                                      f"{media} {mapa.unidade}{faixa}", previsao.UF,
+                        conta="Cada célula leva o valor do EC46, a mesma bilinear que pinta o mapa"
+                              + ("; o imóvel leva a média delas." if len(dele) > 1 else "."))
+    lons, lats = coordenadas_das_celulas(dele, previsao.UF)
+    grafico_semanal(mapa, previsao.semana_no_ponto(semanal, pontos_grade, lons, lats, mapa, rodada), semana,
+                    f"{imovel.onde.capitalize()}" + (f", a média das {len(dele)} células" if len(dele) > 1 else "")
+                    + ", pela interpolação bilinear da grade do EC46, a mesma conta que pinta o mapa.")
+
+
+# =====================================================
+# PÁGINAS DA PREVISÃO: MAPAS, CHUVA, RISCO DE FOGO E SEMANAS
+# =====================================================
+# Como no observado (veja PÁGINAS DO OBSERVADO), a pedido da equipe, que aprovou o observado em
+# 24/11/2026: uma página por assunto, com o seletor "Mapa: Navegável | Boletim" e um mapa por vez.
+# Até a v0.4.4 eram quatro páginas: Estações (os gráficos de uma estação), Mapas (os PNG do boletim,
+# só por dia), Mapas interativos e Semanas. O modelo dos mapas fica na barra lateral e vale para as
+# três páginas dos modelos de 14 dias; a Semanas é do EC46. Os gráficos de uma estação vêm embaixo
+# do mapa, rolando a página: os das grandezas em Mapas, o da chuva em Chuva, o calendário do risco em
+# Risco de Fogo e a semana contra o normal em Semanas. A estação e os modelos deles são os mesmos nas
+# quatro páginas
+MODOS_PREVISTOS = {POR_DIA: variaveis.DIA, HORA_A_HORA: variaveis.HORA}
+# O mapa de cada agregação da página Chuva, nos nomes dos catálogos da previsão
+CHUVA_PREVISTA = {"Acumulado": "Chuva acumulada", "Hora a hora": "Chuva na hora", "Por dia": "Chuva do dia"}
+RISCO_DO_DIA = {MAPAS_DO_PERIODO_NO_RISCO[0]: "Risco de fogo", MAPAS_DO_PERIODO_NO_RISCO[1]: "Horas em risco alto"}
+VER_AS_SEMANAS = ("Uma semana", "Todas as semanas")
+
+
+def barra_da_previsao(aviso, com_modelo: bool = True) -> tuple[str, pd.DataFrame, car.Imovel | None]:
+    # A barra lateral das quatro páginas: o modelo dos mapas (a Semanas é sempre do EC46), o mapa de
+    # fundo e o imóvel do CAR, que valem para a vista navegável
+    with st.sidebar:
+        st.header("Filtros")
+        modelo = config.MODELO_SEMANAS
+        if com_modelo:
+            st.session_state.setdefault("mapas_previstos_modelo", config.MODELOS_PREVISAO[0])
+            modelo = st.radio("Modelo", list(config.MODELOS_PREVISAO), format_func=openmeteo.NOMES.get,
+                              key="mapas_previstos_modelo",
+                              help="O do mapa, um por vez. No clique num ponto ou numa estação do mapa navegável, os "
+                                   "três aparecem lado a lado; os gráficos embaixo do mapa têm a escolha deles. O "
+                                   "ECMWF e o GFS vão até o dia 14; o ICON, até o dia 7.")
+        st.checkbox("Mapa de fundo", value=True, key="fundo_interativo",
+                    help="No mapa navegável: países, cidades, estradas e rios, para ver além do estado. Vem da "
+                         "internet: sem rede, o fundo some e o resto do mapa continua. Desligado, ficam só os "
+                         "limites do estado e dos municípios.")
+        imovel = imovel_da_barra()
+    # A superfície é do Open-Meteo, mas os números sobre as estações precisam da lista do INMET
+    try:
+        estacoes = carregar_estacoes(previsao.UF).sort_values("Estação")
+    except fonte.ErroFonte:
+        sem_lista_de_estacoes(aviso, previsao.UF)
+    return modelo, estacoes, imovel
+
+
+def dia_previsto(prevista: Prevista, chave: str) -> tuple[date, date] | None:
+    # O dia do mapa e o de hoje. Trocando de modelo, o dia escolhido pode não existir no outro (o ICON
+    # para no dia 7): fica o último que o modelo tem até ele, e não o primeiro, para quem olhava o fim
+    # da semana
+    diaria_grade = diario_previsto("grade", prevista.modelo, prevista.rodada, prevista.horaria)
+    hoje = pd.Timestamp.now(tz=config.FUSO_MS).date()
+    dias = previsao.dias_inteiros(diaria_grade, hoje)
+    if not dias:
+        st.warning(f"O {openmeteo.NOMES[prevista.modelo]} não trouxe nenhum dia inteiro de hoje em diante.")
+        return None
+    escolhido = st.session_state.get(chave)
+    if escolhido not in dias:
+        st.session_state[chave] = max((dia for dia in dias if escolhido and dia <= escolhido), default=dias[0])
+    return st.select_slider("Dia", options=dias, format_func=previsao.nome_do_dia, key=chave), hoje
+
+
+def hora_prevista(prevista: Prevista, chave: str) -> tuple[pd.Timestamp, pd.Timestamp, list] | None:
+    # A hora do mapa, a de agora (de onde partem os gráficos do clique) e as horas que o modelo traz,
+    # que são as do GIF. Como no dia, trocando de modelo fica a última hora que ele tem até a escolhida
+    desde = pd.Timestamp.now(tz="UTC").floor("h")
+    horas = previsao.horas_previstas(prevista.horaria, desde)
+    if not horas:
+        st.warning(f"O {openmeteo.NOMES[prevista.modelo]} não trouxe nenhuma hora de agora em diante.")
+        return None
+    escolhida = st.session_state.get(chave)
+    if escolhida not in horas:
+        st.session_state[chave] = max((uma for uma in horas if escolhida is not None and uma <= escolhida),
+                                      default=horas[0])
+    marcas = variaveis.marcas_dos_dias(horas, lambda marca: marca.tz_convert(config.FUSO_MS).date())
+    st.html(_estilo_da_linha_do_tempo(chave, marcas))   # a linha do tempo, um risco em cada dia
+    hora = st.select_slider("Hora", options=horas, format_func=previsao.nome_da_hora, key=chave)
+    return hora, desde, horas
+
+
+def mapa_previsto_escolhido(pagina: str, prevista: Prevista, mapa: previsao.MapaPrevisto, modo: str, vista: str,
+                            estacoes: pd.DataFrame, imovel: car.Imovel | None) -> None:
+    # O instante, as caixas e o mapa de um mapa já escolhido, nas duas vistas: o mesmo caminho nas três
+    # páginas dos modelos de 14 dias. `pagina` separa o instante de cada página
+    escolha = (dia_previsto(prevista, f"dia_previsto_{pagina}") if modo == variaveis.DIA
+               else hora_prevista(prevista, f"hora_prevista_{pagina}"))
+    if escolha is None:
+        return
+    navegavel = vista == VISTAS_DO_MAPA[0]
+    com_nivel = mapa.risco in ("nivel", "hora")
+    escritos, ajustar, em_3d = caixas_do_mapa(
+        not mapa.risco, navegavel and mapa.grandeza in GRANDEZAS_EM_RELEVO,
+        "O nível previsto no ponto de cada estação, pelo mesmo modelo." if com_nivel else AJUDA_DOS_VALORES,
+        "Mostrar o nível de cada estação" if com_nivel else "Mostrar o valor de cada estação")
+    legenda_da_rodada(prevista.modelo, prevista.rodada)
+    if navegavel:
+        aviso_da_grade(pontos_da_origem(prevista.origem, prevista.pontos_grade))
+        if modo == variaveis.DIA:
+            dia, hoje = escolha
+            dias_interativos(prevista, mapa, dia, hoje, escritos, ajustar, em_3d, estacoes, imovel)
+        else:
+            hora, desde, _ = escolha
+            horas_interativas(prevista, mapa, hora, desde, escritos, ajustar, em_3d, estacoes, imovel)
+        return
+
+    _, meio, _ = st.columns([1, 3, 1])
+    with meio:
+        if modo == variaveis.DIA:
+            dia, hoje = escolha
+            with st.spinner("Desenhando o mapa..."):
+                painel_do_mapa_previsto(mapa, prevista.modelo, prevista.rodada, dia, hoje, escritos, ajustar,
+                                        diario_previsto("grade", prevista.modelo, prevista.rodada, prevista.horaria),
+                                        prevista.pontos_grade, dias_das_estacoes(prevista), estacoes,
+                                        prevista.horaria)
+        else:
+            hora, _, horas = escolha
+            with st.spinner("Desenhando o mapa..."):
+                menu = boletim_horario_previsto(prevista, mapa, hora, escritos, ajustar, estacoes)
+            if menu is not None:
+                painel_do_gif_previsto(menu, prevista, mapa, horas, escritos, estacoes)
+    espacamento = f"{previsao.espacamento(prevista.pontos_grade):g}".replace(".", ",")
+    st.caption(f"A superfície é a do próprio modelo, nos {len(prevista.pontos_grade)} pontos da grade de "
+               f"{espacamento}° que cobrem o estado, levada à resolução do mapa por interpolação bilinear: não é "
+               "IDW de estação. Os números sobre as estações são a previsão do mesmo modelo no ponto de cada uma, "
+               "e são eles que entram no ranking do PNG do boletim.")
+
+
+def boletim_horario_previsto(prevista: Prevista, mapa: previsao.MapaPrevisto, hora: pd.Timestamp, rotulos: bool,
+                             ajustar: bool, estacoes: pd.DataFrame) -> DeltaGenerator | None:
+    # O PNG da hora no padrão do boletim do dia (criado na v0.4.5, pedido da equipe): a mesma superfície
+    # bilinear do modelo e, nas estações, a previsão dele no ponto de cada uma. No risco, o nível da
+    # hora; as condições de cada estação, que o boletim do observado desenha, não entram, como no do dia
+    st.markdown(f"**{mapa.nome}**")
+    modelo, rodada = prevista.modelo, prevista.rodada
+    base = base_cartografica(previsao.UF)
+    hora_local = hora.tz_convert(config.FUSO_MS)
+    quando = f"Previsão para {hora_local:%d/%m/%Y %H:%M}"
+    carimbo = f"{openmeteo.NOMES[modelo]}_{hora_local:%Y%m%d_%H}h_rodada_{rodada:%Y%m%d_%H}UTC"
+    arquivo = mapa.titulo.replace(" — ", " ")   # sem o travessão no nome do arquivo
+    pontos = previsao.nas_estacoes_na_hora(prevista.horaria_estacoes, estacoes, mapa, hora)
+    gdf = _pontos_previstos(pontos, mapa.nome)
+    if mapa.risco:
+        # A grade das células do navegável é a mesma do boletim: o nível sai uma vez para os dois
+        calculado = risco_da_hora_previsto(modelo, rodada, hora, prevista.origem, _horaria=prevista.horaria,
+                                           _pontos=prevista.pontos_grade)
+        if calculado is None:
+            st.info(f"O {openmeteo.NOMES[modelo]} não traz as três variáveis da regra para "
+                    f"{previsao.nome_da_hora(hora)}.")
+            return None
+        nivel = calculado[0]
+        png = mapa_de_risco_previsto(("hora", modelo, rodada, hora), mapa.nome, rotulos, _grade=nivel,
+                                     _estacoes=pontos)
+        st.image(png, width="stretch")
+        st.caption(f"{resumo_do_risco(nivel[base.dentro_uf])} · {mapa.regra}.")
+        espec = mapas.EspecClasses(boletim.titulo(mapa.titulo, previsao.UF), quando, "", config.CORES_RISCO,
+                                   config.ROTULOS_RISCO, credito=previsao.CREDITO)
+        desenhar = lambda: mapas.mapa_classes_interpolado(nivel, gdf, mapa.nome, espec, base)  # noqa: E731
+        gravar = geotiff_da_grade(nivel, previsao.UF, mapa.titulo, quando, previsao.CREDITO,
+                                  metodo_do_risco_previsto(modelo, rodada), classes=True)
+        ajuda = AJUDA_DO_GEOTIFF_DO_RISCO
+    else:
+        valores = previsao.valores_da_hora(prevista.horaria, mapa.coluna, hora)
+        grade = previsao.superficie(valores, prevista.pontos_grade, base.lon_grade, base.lat_grade)
+        if grade is None:
+            st.info(f"O {openmeteo.NOMES[modelo]} não traz {mapa.nome.lower()} para {previsao.nome_da_hora(hora)}.")
+            return None
+        niveis = previsao.niveis(mapa, ajustar=ajustar, horas=1.0)
+        escala = None if niveis is None else tuple(float(nivel) for nivel in niveis)
+        png = mapa_previsto(("hora", modelo, rodada, hora), mapa.nome, mapa.paleta, mapa.unidade, mapa.decimais,
+                            mapa.setas, rotulos, escala, _grade=grade, _estacoes=pontos)
+        st.image(png, width="stretch")
+        if escala is not None:
+            st.image(barra_de_escala(mapa.paleta, escala, mapa.unidade), width="stretch")
+        no_estado = grade[base.dentro_uf]
+        st.caption(f"{np.nanmin(no_estado):.{mapa.decimais}f} a {np.nanmax(no_estado):.{mapa.decimais}f} "
+                   f"{mapa.unidade} · {mapa.regra}.")
+        espec = boletim.espec(mapa.titulo, mapa.grandeza, mapa.unidade, mapa.paleta, mapa.decimais, previsao.UF,
+                              quando, mapa.setas, credito=previsao.CREDITO, coluna=mapa.nome)
+        desenhar = lambda: mapas.mapa_de_grade(grade, gdf, espec, base,  # noqa: E731
+                                               niveis=list(escala) if escala else 20)
+        gravar = geotiff_previsto(valores, prevista.pontos_grade, mapa.nome, mapa.unidade, quando,
+                                  metodo_previsto(modelo, rodada, prevista.pontos_grade))
+        ajuda = AJUDA_DO_GEOTIFF
+    menu = menu_de_baixar(f"previsto_hora_{mapa.nome}")
+    with menu:
+        botao_do_png(png, f"baixar_previsto_hora_{mapa.nome}", f"Mapa_{arquivo.replace(' ', '_')}_{carimbo}.png")
+        botao_do_boletim(f"previsto_hora_{mapa.nome}",
+                         boletim.nome_do_arquivo(arquivo, previsao.UF, carimbo), desenhar)
+        botao_do_geotiff(f"previsto_hora_{mapa.nome}",
+                         nome_do_geotiff(boletim.nome_do_arquivo(arquivo, previsao.UF, carimbo)), gravar, ajuda)
+    return menu
+
+
+@st.cache_data(show_spinner=False, max_entries=3)
+def gif_previsto(modelo: str, rodada: datetime, nome_do_mapa: str, horas: tuple, rotulos: bool,
+                 _horaria: pd.DataFrame, _horaria_estacoes: pd.DataFrame, _pontos: pd.DataFrame,
+                 _estacoes: pd.DataFrame) -> bytes | None:
+    # A sequência das horas, com a escala de cores travada para todas, como o GIF do observado. Os
+    # quadros não passam pelos caches dos mapas da tela: 72 quadros tirariam de lá os que estão na tela
+    mapa = previsao.MAPAS_DA_HORA[nome_do_mapa]
+    base, grade_risco = base_cartografica(previsao.UF), grade_do_ponto(previsao.UF)
+    escala = None
+    if not mapa.risco:
+        niveis = previsao.niveis(mapa, horas=1.0)
+        if niveis is None:
+            todas = _horaria.loc[_horaria["hora_prevista_utc"].isin(horas), mapa.coluna].dropna()
+            niveis = np.linspace(todas.min(), todas.max(), 21) if len(todas) and todas.max() > todas.min() else None
+        escala = None if niveis is None else tuple(float(nivel) for nivel in niveis)
+    barra = st.progress(0.0, text=f"Desenhando o GIF de {mapa.nome.lower()}")
+    quadros = []
+    for indice, hora in enumerate(horas, start=1):
+        carimbo = animacao.carimbo(hora.tz_convert(config.FUSO_MS), por_dia=False)
+        pontos = previsao.nas_estacoes_na_hora(_horaria_estacoes, _estacoes, mapa, hora)
+        png = None
+        if mapa.risco:
+            campos = previsao.risco_da_hora(_horaria, _pontos, hora, grade_risco.lon, grade_risco.lat)
+            if campos is not None:
+                png = png_do_risco_previsto(mapa.nome, rotulos, risco_fogo.contar_condicoes(*campos), pontos, DPI_GIF)
+        else:
+            grade = previsao.superficie(previsao.valores_da_hora(_horaria, mapa.coluna, hora), _pontos,
+                                        base.lon_grade, base.lat_grade)
+            if grade is not None:
+                png = png_previsto(mapa.nome, mapa.paleta, mapa.unidade, mapa.decimais, mapa.setas, rotulos, escala,
+                                   grade, pontos, dpi=DPI_GIF)
+        if png is not None:
+            quadros.append((png, carimbo))
+        barra.progress(indice / len(horas),
+                       text=f"Desenhando o GIF de {mapa.nome.lower()} — quadro {indice} de {len(horas)}")
+    barra.empty()
+    return animacao.montar(quadros) if quadros else None
+
+
+def painel_do_gif_previsto(menu: DeltaGenerator, prevista: Prevista, mapa: previsao.MapaPrevisto, horas: list,
+                           rotulos: bool, estacoes: pd.DataFrame) -> None:
+    # Como no observado: o "Gerar GIF" do menu desenha os quadros ali mesmo, com a barra de progresso, e
+    # vira "Baixar GIF"; a animação aparece embaixo do mapa
+    momentos = animacao.passos(horas)
+    salto = animacao.intervalo(horas, momentos)
+    passo = f"{salto} hora{'s' if salto > 1 else ''}"
+    chave = f"gif_previsto_{mapa.nome}"
+    with menu:
+        if not st.session_state.get(chave):
+            st.button("Gerar GIF", key=f"botao_{chave}", help=f"{len(momentos)} quadros, um a cada {passo}.",
+                      on_click=lambda: st.session_state.update({chave: True}), **estilo_do_menu(ICONE_GIF))
+            return
+        gif = gif_previsto(prevista.modelo, prevista.rodada, mapa.nome, tuple(momentos), rotulos,
+                           _horaria=prevista.horaria, _horaria_estacoes=prevista.horaria_estacoes,
+                           _pontos=prevista.pontos_grade, _estacoes=estacoes)
+        if gif is None:
+            st.warning("Não houve dado suficiente para desenhar a sequência.")
+            return
+        primeira, ultima = (momento.tz_convert(config.FUSO_MS) for momento in (momentos[0], momentos[-1]))
+        nome = mapa.titulo.replace(" — ", " ").replace(" ", "_").replace("/", "")
+        st.download_button("Baixar GIF", gif, mime="image/gif", key=f"baixar_{chave}", on_click="ignore",
+                           file_name=f"Animacao_{nome}_{openmeteo.NOMES[prevista.modelo]}_"
+                                     f"{primeira:%Y%m%d_%H}h_a_{ultima:%Y%m%d_%H}h.gif",
+                           **estilo_do_menu(ICONE_GIF))
+    st.image(gif, width="stretch")
+    st.caption(f"{len(momentos)} quadros, um a cada {passo}"
+               + ("" if mapa.risco else ", com a escala de cores travada para a sequência inteira")
+               + f". {len(gif) / 1e6:.1f} MB.")
+
+
+# ----- os gráficos de uma estação, embaixo dos mapas -------------------------------------------
+def escolha_da_estacao(estacoes: pd.DataFrame, estacao_tela, modelos_tela=None) -> tuple[str, list[str]]:
+    # A estação (e os modelos) dos gráficos, iguais nas quatro páginas. A estação já vem escolhida: a
+    # busca é das estações todas de uma vez, e escolher uma ou outra não muda o custo
+    nomes = estacoes["Estação"].tolist()
+    codigos = estacoes["CD_ESTACAO"].astype(str).tolist()
+    if st.session_state.get("previsao_estacao") not in nomes:
+        st.session_state["previsao_estacao"] = (nomes[codigos.index(previsao.ESTACAO_INICIAL)]
+                                                if previsao.ESTACAO_INICIAL in codigos else nomes[0])
+    nome = estacao_tela.selectbox("Estação", nomes, key="previsao_estacao",
+                                  help="A previsão é a do ponto da estação: é o que permite comparar, depois, o "
+                                       "previsto com o que ela mediu.")
+    if modelos_tela is None:
+        return nome, []
+    st.session_state.setdefault("previsao_modelos", list(config.MODELOS_PREVISAO))
+    modelos = modelos_tela.multiselect("Modelos", list(config.MODELOS_PREVISAO), format_func=openmeteo.NOMES.get,
+                                       key="previsao_modelos",
+                                       help="Cada modelo ganha a sua linha (ou barra), lado a lado. O ECMWF e o GFS vão "
+                                            "até o dia 14; o ICON, até o dia 7.")
+    return nome, modelos
+
+
+def previsao_da_estacao(estacoes: pd.DataFrame, nome: str, modelos: list[str]) -> tuple[str, pd.DataFrame] | None:
+    if not modelos:
+        st.info("Escolha ao menos um modelo acima.")
+        return None
+    tabelas, avisos = previsao_dos_pontos("estações", openmeteo.pontos_das_estacoes(estacoes), tuple(modelos))
+    for texto in avisos:
+        st.warning(texto)
+    if not tabelas:
+        return None
+    codigo = str(estacoes.set_index("Estação").loc[nome, "CD_ESTACAO"])
+    horaria = pd.concat([tabela[tabela["ponto"] == codigo] for tabela in tabelas], ignore_index=True)
+    rodadas = " · ".join(f"{openmeteo.NOMES[modelo]} {rodada:%d/%m %H} UTC" for modelo, rodada
+                         in horaria.groupby("modelo")["rodada_utc"].first().items())
+    st.caption(f"**Rodadas:** {rodadas}. Cada modelo é buscado de novo quando sai uma rodada dele, de 6 em 6 "
+               "horas. O dia vai da 01:00 à 00:00 do dia seguinte, como no observado; no modo por dia entram só "
+               f"os dias inteiros. {CREDITO_DA_PREVISAO}")
+    return codigo, horaria
+
+
+def modo_dos_graficos() -> str:
+    # Por dia de saída: catorze dias hora a hora são 336 pontos por linha
+    st.session_state.setdefault("previsao_modo", "Por dia")
+    return MODOS_GRAFICO[st.radio("Agregação", list(MODOS_GRAFICO), horizontal=True, key="previsao_modo")]
+
+
+def grafico_da_grandeza_prevista(horaria: pd.DataFrame, grandeza: str, modo: str, desde: pd.Timestamp, nome: str,
+                                 com_titulo: bool = True) -> None:
+    dados_grandeza = previsao.GRANDEZAS[grandeza]
+    longo = previsao.series(horaria, grandeza, modo, desde)
+    if longo.empty:
+        st.warning(f"{grandeza}: nenhum modelo trouxe essa variável para {nome}.")
+        return
+    if com_titulo:
+        st.subheader(grandeza)
+    if grandeza == "Chuva" and modo == variaveis.DIA:
+        grafico = barras_da_chuva_prevista(longo)
+    else:
+        grafico = desenhar(longo.rename(columns={"Modelo": "Estação"}), f"{grandeza} ({dados_grandeza.unidade})",
+                           dados_grandeza.zero_na_base, modo, dados_grandeza.decimais, cores=previsao.CORES)
+    st.altair_chart(grafico, width="stretch")
+    regras = " · ".join(f"**{serie.nome}**: {serie.regra}" for serie in dados_grandeza.series[modo])
+    if dados_grandeza.circular:
+        regras += (". A direção ligada por linha engana: entre 350° e 10° o vento mal mudou, mas o traço desce o "
+                   "gráfico inteiro.")
+    if grandeza == "Chuva":
+        totais = previsao.chuva_total(horaria, desde)
+        regras += ". **Total previsto:** " + " · ".join(
+            f"{linha.Modelo} {linha.chuva:.1f} mm até {linha.ate:%d/%m}" for linha in totais.itertuples())
+    st.caption(regras)
+
+
+def series_previstas(estacoes: pd.DataFrame) -> None:
+    # Os gráficos da antiga página Estações, menos a chuva e o risco, que estão nas páginas deles
+    st.header("Séries das estações")
+    estacao_tela, modelos_tela, grandezas_tela = st.columns([2, 1.5, 1.5])
+    nome, modelos = escolha_da_estacao(estacoes, estacao_tela, modelos_tela)
+    opcoes = [grandeza for grandeza in previsao.GRANDEZAS if grandeza != "Chuva"]
+    # Uma grandeza que deixou de ser opção (a chuva, que até a v0.4.4 estava aqui) seria recusada pelo widget
+    st.session_state["previsao_grandezas"] = [grandeza for grandeza in st.session_state.get("previsao_grandezas",
+                                                                                             ["Temperatura"])
+                                              if grandeza in opcoes]
+    escolhidas = grandezas_tela.multiselect("Grandezas", opcoes, key="previsao_grandezas",
+                                            help="Cada grandeza ganha o seu gráfico, com os modelos lado a lado. A "
+                                                 "chuva e o risco de fogo estão nas páginas deles.")
+    modo = modo_dos_graficos()
+    st.markdown(ESTILO_BALAO, unsafe_allow_html=True)
+    dados = previsao_da_estacao(estacoes, nome, modelos)
+    if dados is None:
+        return
+    codigo, horaria = dados
+    if not escolhidas:
+        st.info("Escolha ao menos uma grandeza acima.")
+    desde = pd.Timestamp.now(tz=config.FUSO_MS).floor("h")
+    # Na ordem do catálogo, e não na da escolha: a direção fica logo depois do vento
+    for grandeza in [grandeza for grandeza in previsao.GRANDEZAS if grandeza in escolhidas]:
+        grafico_da_grandeza_prevista(horaria, grandeza, modo, desde, nome)
+    with st.expander("Ver e baixar a previsão diária desta estação"):
+        visivel = previsao.planilha(horaria)
+        st.caption("Um dia por linha e modelo, pela regra do observado. `horas` diz quantas horas o dia tem na "
+                   "previsão: menos de 24 no primeiro, no último e no fim do ICON.")
+        st.dataframe(visivel, width="stretch", height=300, hide_index=True)
+        st.download_button("Baixar CSV", visivel.to_csv(index=False).encode("utf-8-sig"),
+                           file_name=f"previsao_{codigo}_{desde:%Y%m%d_%H}h.csv", mime="text/csv")
+
+
+def chuva_prevista_na_estacao(estacoes: pd.DataFrame) -> None:
+    st.header("Chuva prevista na estação")
+    estacao_tela, modelos_tela = st.columns([3, 2])
+    nome, modelos = escolha_da_estacao(estacoes, estacao_tela, modelos_tela)
+    modo = modo_dos_graficos()
+    st.markdown(ESTILO_BALAO, unsafe_allow_html=True)
+    dados = previsao_da_estacao(estacoes, nome, modelos)
+    if dados is None:
+        return
+    grafico_da_grandeza_prevista(dados[1], "Chuva", modo, pd.Timestamp.now(tz=config.FUSO_MS).floor("h"), nome,
+                                 com_titulo=False)
+
+
+def risco_previsto_na_estacao(estacoes: pd.DataFrame) -> None:
+    st.header("Risco previsto na estação")
+    estacao_tela, modelos_tela = st.columns([3, 2])
+    nome, modelos = escolha_da_estacao(estacoes, estacao_tela, modelos_tela)
+    dados = previsao_da_estacao(estacoes, nome, modelos)
+    if dados is None:
+        return
+    hoje = pd.Timestamp.now(tz=config.FUSO_MS).date()
+    dias = previsao.diario_com_risco(dados[1])
+    dias = dias[(dias["horas"] == 24) & (dias["dia_previsto"] >= hoje)].dropna(subset=["risco_max"])
+    if dias.empty:
+        st.warning(f"Nenhum modelo trouxe as três variáveis da regra para {nome}.")
+        return
+    st.altair_chart(calendario_do_risco_previsto(dias), width="stretch")
+    st.caption("O pior nível de cada dia pela regra 30-30-30 (temperatura ≥ 30 °C, umidade ≤ 30 %, rajada ≥ 30 "
+               "km/h), aplicada a cada hora prevista, como no produto. O modelo dá o valor da hora cheia, e a estação "
+               "mede a máxima e a mínima dentro da hora: o risco previsto tende a sair um pouco abaixo do medido. No "
+               "balão, as horas em risco alto.")
+
+
+# ----- MAPAS -----------------------------------------------------------------------------------
+def pagina_mapas_previstos() -> None:
+    st.title("Mapas da previsão")
+    aviso = st.container()
+    sem_token()
+    modelo, estacoes, imovel = barra_da_previsao(aviso)
+    st.markdown(ESTILO_BALAO, unsafe_allow_html=True)
+    agregacao, variavel, vista_tela = st.columns([1.4, 1.6, 1])
+    rotulo_modo = agregacao.segmented_control("Agregação", list(MODOS_PREVISTOS), default=POR_DIA,
+                                              key="modo_previsto") or POR_DIA
+    modo = MODOS_PREVISTOS[rotulo_modo]
+    catalogo = previsao.MAPAS if modo == variaveis.DIA else previsao.MAPAS_DA_HORA
+    # A chuva e o risco de fogo têm página própria
+    nomes = [nome for nome, mapa in catalogo.items() if mapa.grandeza not in ("Chuva", "Risco")]
+    nome = variavel.selectbox("Variável", nomes, index=nomes.index(PADRAO_PREVISTO[rotulo_modo]),
+                              key=f"variavel_prevista_{modo}",
+                              help="Uma por vez. A chuva e o risco de fogo estão nas páginas deles.")
+    vista = vista_tela.segmented_control("Mapa", VISTAS_DO_MAPA, default=VISTAS_DO_MAPA[0],
+                                         key="vista_prevista") or VISTAS_DO_MAPA[0]
+    prevista = previsao_do_modelo(modelo, estacoes, aviso)
+    mapa_previsto_escolhido(f"mapas_{modo}", prevista, catalogo[nome], modo, vista, estacoes, imovel)
+    st.divider()
+    series_previstas(estacoes)
+
+
+# ----- CHUVA -----------------------------------------------------------------------------------
+def pagina_chuva_prevista() -> None:
+    st.title("Chuva prevista")
+    aviso = st.container()
+    sem_token()
+    modelo, estacoes, imovel = barra_da_previsao(aviso)
+    st.markdown(ESTILO_BALAO, unsafe_allow_html=True)
+    agregacao, vista_tela = st.columns([2, 1])
+    rotulo_modo = agregacao.segmented_control(
+        "Agregação", MODOS_DA_CHUVA, default=MODOS_DA_CHUVA[0], key="modo_chuva_prevista",
+        help="Acumulado soma a chuva de hoje até o dia escolhido; por dia, a de cada dia; hora a hora, a de cada "
+             "hora.") or MODOS_DA_CHUVA[0]
+    vista = vista_tela.segmented_control("Mapa", VISTAS_DO_MAPA, default=VISTAS_DO_MAPA[0],
+                                         key="vista_chuva_prevista") or VISTAS_DO_MAPA[0]
+    modo = variaveis.HORA if rotulo_modo == "Hora a hora" else variaveis.DIA
+    catalogo = previsao.MAPAS_DA_HORA if modo == variaveis.HORA else previsao.MAPAS
+    prevista = previsao_do_modelo(modelo, estacoes, aviso)
+    # O acumulado e o por dia andam no mesmo dia: trocar de um para o outro não muda o dia escolhido
+    mapa_previsto_escolhido(f"chuva_{modo}", prevista, catalogo[CHUVA_PREVISTA[rotulo_modo]], modo, vista, estacoes,
+                            imovel)
+    st.divider()
+    chuva_prevista_na_estacao(estacoes)
+
+
+# ----- RISCO DE FOGO ---------------------------------------------------------------------------
+def pagina_risco_previsto() -> None:
+    st.title("Risco de fogo previsto")
+    aviso = st.container()
+    sem_token()
+    modelo, estacoes, imovel = barra_da_previsao(aviso)
+    st.markdown(ESTILO_BALAO, unsafe_allow_html=True)
+    st.caption(f"Conta quantas das três condições valem **em cada hora prevista**: temperatura ≥ "
+               f"{config.LIMIAR_TEMP_MAX:g} °C, umidade ≤ {config.LIMIAR_UMIDADE_MIN:g} % e rajada ≥ "
+               f"{config.LIMIAR_RAJADA:g} km/h, como no observado. O modelo dá o valor da hora cheia, e a estação "
+               "mede a máxima e a mínima dentro da hora: o risco previsto tende a sair um pouco abaixo do medido.")
+    agregacao, opcao_tela, vista_tela = st.columns([1.4, 1.6, 1])
+    rotulo_modo = agregacao.segmented_control("Agregação", list(MODOS_PREVISTOS), default=POR_DIA,
+                                              key="modo_risco_previsto") or POR_DIA
+    modo = MODOS_PREVISTOS[rotulo_modo]
+    if modo == variaveis.DIA:
+        do_dia = opcao_tela.segmented_control(
+            "Mapa do dia", MAPAS_DO_PERIODO_NO_RISCO, default=MAPAS_DO_PERIODO_NO_RISCO[0],
+            key="mapa_do_dia_risco_previsto",
+            help="O pior nível que cada lugar alcança no dia, ou em quantas horas dele as três condições valem "
+                 "juntas.") or MAPAS_DO_PERIODO_NO_RISCO[0]
+        mapa = previsao.MAPAS[RISCO_DO_DIA[do_dia]]
+    else:
+        mapa = previsao.MAPAS_DA_HORA["Risco de fogo"]
+    vista = vista_tela.segmented_control("Mapa", VISTAS_DO_MAPA, default=VISTAS_DO_MAPA[0],
+                                         key="vista_risco_previsto") or VISTAS_DO_MAPA[0]
+    prevista = previsao_do_modelo(modelo, estacoes, aviso)
+    mapa_previsto_escolhido(f"risco_{modo}", prevista, mapa, modo, vista, estacoes, imovel)
+    st.divider()
+    risco_previsto_na_estacao(estacoes)
+
+
+# ----- SEMANAS ---------------------------------------------------------------------------------
+def semana_prevista(semanas: list, onde) -> date:
+    if st.session_state.get("semanas_semana") not in semanas:
+        st.session_state["semanas_semana"] = semanas[0]
+    return onde.select_slider("Semana", options=semanas, format_func=previsao.nome_da_semana, key="semanas_semana")
+
+
+def pagina_semanas() -> None:
+    st.title("Previsão por semana (EC46)")
+    aviso = st.container()
+    sem_token()
+    _, estacoes, imovel = barra_da_previsao(aviso, com_modelo=False)
+    st.markdown(ESTILO_BALAO, unsafe_allow_html=True)
+    variavel, vista_tela = st.columns([2, 1])
+    nomes = list(previsao.MAPAS_SEMANAIS)
+    mapa = previsao.MAPAS_SEMANAIS[variavel.selectbox(
+        "Anomalia", nomes, index=nomes.index(PADRAO_PREVISTO[SEMANAS]), key="variavel_semanal",
+        help="Uma por vez: quanto a semana deve ficar acima ou abaixo do normal.")]
+    vista = vista_tela.segmented_control("Mapa", VISTAS_DO_MAPA, default=VISTAS_DO_MAPA[0],
+                                         key="vista_semanal") or VISTAS_DO_MAPA[0]
+    semanal = previsao_semanal(estacoes, aviso)
+    semanas = previsao.semanas_inteiras(semanal.grade, semanal.rodada)
+    if not semanas:
+        st.warning("O EC46 não trouxe nenhuma semana inteira nesta rodada.")
+        return
+    navegavel = vista == VISTAS_DO_MAPA[0]
+    # Todas as semanas lado a lado, só no boletim: comparar as semanas é o sentido do EC46
+    todas = False
+    if navegavel:
+        semana = semana_prevista(semanas, st)
+    else:
+        ver_tela, semana_tela = st.columns([1.5, 2.5])
+        todas = (ver_tela.segmented_control("Ver", VER_AS_SEMANAS, default=VER_AS_SEMANAS[0], key="semanas_ver",
+                                            help="Todas as semanas mostra a anomalia escolhida, uma semana em cada "
+                                                 "mapa: é como se vê a tendência mudar.")
+                 == VER_AS_SEMANAS[1])
+        semana = None if todas else semana_prevista(semanas, semana_tela)
+    escritos, _, _ = caixas_do_mapa(False, False, "A anomalia do EC46 no ponto de cada estação.")
+    st.info("**Os números destes mapas são desvios do normal, e não temperaturas ou chuvas.** −2,0 °C quer dizer uma "
+            "semana 2 °C mais fria que o normal daquela época; +30 mm, 30 mm a mais de chuva que o normal da semana.")
+    st.caption(f"**EC46**, a previsão estendida do ECMWF, na média dos membros; rodada de {semanal.rodada:%d/%m %H} "
+               "UTC (sai uma por dia). **Anomalia** é a previsão da semana menos a normal do próprio modelo para a "
+               "mesma época, tirada das reprevisões do ECMWF dos últimos anos: branco é o normal; azul, mais frio, e "
+               "vermelho, mais quente; marrom, menos chuva, e verde, mais. Dá a tendência da semana, e não o tempo de "
+               "um dia. A semana vai de segunda a domingo. Previsão: [Open-Meteo.com](https://open-meteo.com/), com "
+               "dados do ECMWF ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)).")
+    if navegavel:
+        aviso_da_grade(pontos_da_origem(semanal.origem, semanal.pontos_grade))
+        semanas_interativas(semanal, mapa, semana, escritos, estacoes, imovel)
+    else:
+        paineis = ([(mapa, uma, f"{mapa.nome}, {previsao.nome_da_semana(uma)}") for uma in semanas] if todas
+                   else [(mapa, semana, mapa.nome)])
+        # Um mapa só vai no meio da tela, como nas outras páginas; todas as semanas, em linhas
+        por_linha = min(len(paineis), MAPAS_POR_LINHA)
+        with st.spinner("Desenhando os mapas..."):
+            for primeiro in range(0, len(paineis), por_linha):
+                colunas = st.columns(por_linha) if todas else [st.columns([1, 3, 1])[1]]
+                for coluna_tela, (um_mapa, uma_semana, titulo) in zip(colunas, paineis[primeiro:primeiro + por_linha]):
+                    with coluna_tela:
+                        painel_do_mapa_semanal(um_mapa, semanal.rodada, uma_semana, escritos, semanal.grade,
+                                               semanal.pontos_grade, semanal.estacoes, estacoes, titulo)
+        espacamento = f"{previsao.espacamento(semanal.pontos_grade):g}".replace(".", ",")
+        st.caption(f"A superfície é a do EC46 nos {len(semanal.pontos_grade)} pontos da grade de {espacamento}°, "
+                   "levada à resolução do mapa por interpolação bilinear, como nos mapas dos dias. Os números sobre as "
+                   "estações são a anomalia no ponto de cada uma, e são eles que entram no ranking do PNG do boletim.")
+    st.divider()
+    semana_na_estacao(estacoes, semanal)
+
+
+def semana_na_estacao(estacoes: pd.DataFrame, semanal: Semanal) -> None:
+    st.header("A semana contra o normal, na estação")
+    estacao_tela, _ = st.columns([3, 2])
+    nome, _ = escolha_da_estacao(estacoes, estacao_tela)
+    codigo = str(estacoes.set_index("Estação").loc[nome, "CD_ESTACAO"])
+    for coluna_tela, grandeza in zip(st.columns(2), previsao.SERIES_SEMANAIS):
+        with coluna_tela:
+            tabela = previsao.semana_contra_o_normal(semanal.estacoes, codigo, grandeza, semanal.rodada)
+            if tabela.empty:
+                st.info(f"O EC46 não trouxe {grandeza.lower()} para {nome}.")
+            else:
+                st.altair_chart(semana_contra_o_normal(tabela, grandeza), width="stretch")
+    st.caption("A linha cinza tracejada é a **normal da época**: a do próprio modelo, tirada das reprevisões do ECMWF "
+               "dos últimos anos para as mesmas semanas. A azul é a **previsão do EC46** para cada semana (na chuva, o "
+               "total da semana). A barra entre as duas é a **anomalia**, o número dos mapas acima: o quanto a semana "
+               "deve ficar acima ou abaixo do normal.")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def tabela_das_estacoes(uf: str) -> pd.DataFrame:
+    # As estações do estado, numeradas, com o município, a altitude e desde quando operam. Lendo do
+    # banco, os pluviômetros do CEMADEN em operação vêm depois, como nos mapas de chuva: o parado não
+    # aparece em mapa nenhum
+    municipios = base_cartografica(uf).municipios
+    inmet = referencia.tabela_de_referencia(carregar_estacoes(uf), municipios)
+    cadastro = estacoes_do_cemaden(uf)
+    operantes = cadastro[cadastro["CD_SITUACAO"] == "Operante"]
+    return referencia.com_o_cemaden(inmet, referencia.tabela_de_referencia(operantes, municipios, rede="CEMADEN"))
+
+
+def mapa_das_estacoes(tabela: pd.DataFrame, destacadas: pd.Series, uf: str) -> pdk.Deck:
+    # O mapa navegável com cada estação e o nome dela ao lado; as que a busca achou, em vermelho, e
+    # os pluviômetros do CEMADEN em laranja, como nos Mapas interativos
+    base = base_cartografica(uf)
+    cores = {"INMET": [31, 78, 121, 225], "CEMADEN": [*interativo.COR_DO_CEMADEN, 235]}
+    pontos = pd.DataFrame({
+        "nome": tabela["Estação"], "rede": tabela["Rede"], "municipio": tabela["Município"].fillna("—"),
+        "codigo": tabela["Código"],
+        "altitude": tabela["Altitude (m)"].map(lambda metros: "—" if pd.isna(metros) else f"{metros} m"),
+        "desde": tabela["Em operação desde"].fillna("—"),
+        "Longitude": tabela["Longitude"], "Latitude": tabela["Latitude"],
+        "cor": [[200, 30, 30, 235] if destacada else cores.get(rede, cores["INMET"])
+                for destacada, rede in zip(destacadas, tabela["Rede"])],
+    })
+    nomes = camada_de_rotulos(pontos, "nome", ["Longitude", "Latitude"], [11, 0])
+    # Como a imagem dos mapas: passados no construtor, o pydeck trataria os textos como expressões
+    nomes.get_text_anchor = "start"
+    nomes.get_alignment_baseline = "center"
+    camadas = [
+        pdk.Layer("GeoJsonLayer", data=base.municipios[[referencia.COLUNA_DO_MUNICIPIO, "geometry"]].__geo_interface__,
+                  stroked=True, filled=False, get_line_color=[110, 110, 110, 140], line_width_min_pixels=0.5),
+        pdk.Layer("GeoJsonLayer", data=base.uf.__geo_interface__, stroked=True, filled=False,
+                  get_line_color=[40, 40, 40], line_width_min_pixels=1.5),
+        # O ponto fica do mesmo tamanho na tela em qualquer zoom (pedido da equipe, 24/11/2026): em metros,
+        # sem teto, ele crescia ao aproximar e cobria os vizinhos, como os pluviômetros de Bonito. O nome
+        # começa logo depois dele
+        pdk.Layer("ScatterplotLayer", data=pontos, get_position=["Longitude", "Latitude"], get_fill_color="cor",
+                  get_line_color=[255, 255, 255], stroked=True, line_width_min_pixels=1, get_radius=2500,
+                  radius_min_pixels=5, radius_max_pixels=6, pickable=True),
+        nomes,
+    ]
+    # O mapa ocupa três quintos da largura: com o zoom do mapa largo, o leste do estado ficaria de fora
+    visao = visao_inicial(config.recorte_de(uf))
+    visao["zoom"] = round(visao["zoom"] - 0.7, 1)
+    # O fundo claro da Carto, como era o do Mapa Navegação: os nomes escuros se leem nele em qualquer tema
+    return pdk.Deck(layers=camadas, map_style=pdk.map_styles.LIGHT, initial_view_state=pdk.ViewState(**visao),
+                    tooltip={"html": "<b>{nome}</b><br/>Rede: {rede}<br/>Município: {municipio}<br/>Código: {codigo}<br/>"
+                                     "Altitude: {altitude}<br/>Em operação desde: {desde}"})
+
+
+def localizacao_das_estacoes(uf: str) -> None:
+    # Onde fica cada estação do INMET, e cada pluviômetro do CEMADEN (lendo do banco): o mapa, a lista
+    # com busca e o PNG de referência. Os mapas das variáveis mostram números em pontos; para o
+    # meteorologista é óbvio de quem é cada ponto, para o público não (pedido de uma colega da equipe,
+    # 22/10/2026). Era uma página própria até a v0.4.4; desde a v0.4.5 é uma das variáveis da página
+    # Mapas, só navegável. Só as em operação, que são as dos mapas
+    aviso = st.container()
+    try:
+        tabela = tabela_das_estacoes(uf)
+    except fonte.ErroFonte:
+        sem_lista_de_estacoes(aviso, uf)
+    do_cemaden = int((tabela["Rede"] == "CEMADEN").sum())
+    do_inmet = len(tabela) - do_cemaden
+    st.caption(f"As {do_inmet} estações automáticas do INMET em operação em {uf}"
+               + (f", em azul, e os {do_cemaden} pluviômetros do CEMADEN em operação, em laranja" if do_cemaden else "")
+               + ". São os pontos dos mapas do painel: o número que cada mapa mostra num ponto é o que aquela "
+                 "estação mediu."
+               + (" Os pluviômetros só medem chuva, e só entram nos mapas de chuva. "
+                  f"Dados: {mapas.CREDITO_COM_CEMADEN}." if do_cemaden else ""))
+
+    busca = st.text_input("Procurar", key="busca_estacoes",
+                          placeholder="nome da estação, município, código ou rede (ex.: Dourados, A702, CEMADEN)")
+    achadas = referencia.procurar(tabela, busca)
+    procurando = bool(busca.strip())
+    if procurando and not achadas.any():
+        st.info(f"Nenhuma estação com \"{busca.strip()}\" no nome, no município ou no código.")
+
+    mapa, lista = st.columns([3, 2])
+    with mapa:
+        st.pydeck_chart(mapa_das_estacoes(tabela, achadas & procurando, uf), height=ALTURA_MAPA)
+        st.caption("Passe o mouse numa estação para ver o município, o código e a altitude; aproxime o mapa "
+                   "para os nomes deixarem de se cobrir. As que a busca achou ficam em vermelho. O mapa base "
+                   "vem do Carto, fora da SEMADESC.")
+    with lista:
+        colunas = ["Nº", "Estação", "Rede", "Município", "Código", "Altitude (m)", "Em operação desde"]
+        st.dataframe(tabela[achadas][colunas], hide_index=True, height=ALTURA_MAPA)
+
+    # O PNG só é desenhado no clique, numa thread à parte: chega com a tabela e a base prontas
+    hoje = date.today()
+    base = base_cartografica(uf)
+    if do_cemaden:
+        titulo = f"Estações meteorológicas do INMET e pluviômetros do CEMADEN em {uf}"
+        subtitulo = f"{do_inmet} estações automáticas e {do_cemaden} pluviômetros em operação em {hoje:%d/%m/%Y}"
+        arquivo, credito = f"Mapa_Estacoes_INMET_CEMADEN_{uf}_{hoje:%Y%m%d}.png", mapas.CREDITO_COM_CEMADEN
+    else:
+        titulo = f"Estações meteorológicas do INMET em {uf}"
+        subtitulo = f"{len(tabela)} estações automáticas em operação em {hoje:%d/%m/%Y}"
+        arquivo, credito = f"Mapa_Estacoes_INMET_{uf}_{hoje:%Y%m%d}.png", mapas.CREDITO
+    with menu_de_baixar("referencia"):
+        st.download_button("Mapa de referência (PNG)",
+                           lambda: boletim.png(mapas.mapa_de_referencia(tabela, titulo, subtitulo, base,
+                                                                        credito=credito)),
+                           mime="image/png", key="baixar_referencia", on_click="ignore",
+                           file_name=arquivo,
+                           help="As estações numeradas no mapa, com a lista dos nomes ao lado, no padrão do boletim "
+                                "(título e logos), em 300 dpi: para boletins, relatórios e apresentações.",
+                           **estilo_do_menu(ICONE_BOLETIM))
+
+
+# =====================================================
+# RAIOS (GOES-19 GLM)
+# =====================================================
+# Os flashes do GLM que um colega da unidade grava no banco. O Agora lê direto as tabelas dele (o
+# tempo real chega com ~40 s de atraso) e se atualiza sozinho a cada minuto; a Densidade lê a
+# contagem por hora do coletor (`python coletar.py raios`), porque um mês nas tabelas dele levaria
+# minutos. Prioridades da equipe (23/11/2026): o monitoramento, depois a densidade de um período,
+# com todos os flashes, de qualquer qualidade, espalhados pelo estado (sem a conta por estação)
+ATUALIZACAO_DOS_RAIOS = 60     # segundos
+ATRASO_ACEITO_DOS_RAIOS = timedelta(minutes=10)
+# O tempo real do GLM perde uns 8 dos 4.320 arquivos de 20 s por dia (0,2%, visto em 24/11/2026):
+# abaixo de 1% faltando o mapa não muda, e o aviso só apareceria sempre
+FALTA_QUE_AVISA = 0.01
+VISTAS_DOS_RAIOS = ("Agora", "Densidade")
+JANELAS_DA_DENSIDADE = {"24 h": 24, "48 h": 48, "72 h": 72, "Período": None}
+VISTAS_DA_DENSIDADE = ("Navegável", "Boletim")
+VISTAS_DO_AGORA = VISTAS_DA_DENSIDADE
+# O Agora mostra o círculo de config.RAIO_DOS_RAIOS_KM em volta de Campo Grande (pedido da equipe,
+# 24/11/2026) ou só MS e ~1° em volta, como era: lá, todos os flashes vão um a um
+ALCANCES_DO_AGORA = (f"Até {raios.em_km(config.RAIO_DOS_RAIOS_KM)}", config.UF)
+# Os estados do Brasil e os países em volta vão ao navegador a cada minuto, com o resto do mapa, e só
+# sem o mapa de fundo (que já tem as fronteiras): simplificados a ~5 km e com 3 casas, ficam leves
+SIMPLIFICACAO_DA_REGIAO = 0.05
+PRECISAO_DA_REGIAO = 0.001
+SOBRE_O_GLM = ("O GLM é o sensor de raios do satélite GOES-19: vê os raios dentro da nuvem e os que chegam ao solo, "
+               "sem separar uns dos outros, com ~8 a 10 km de resolução, e não pega todos. Cada flash marca onde "
+               "houve atividade elétrica, e não o lugar exato de uma descarga.")
+METODO_DOS_RAIOS = ("Flashes do GLM (GOES-19) contados por célula de 0,1° e divididos pela área da célula; cada pixel "
+                    "de 0,01° tem o valor da célula em que cai. Todos os flashes, de qualquer qualidade")
+
+
+def inteiro_br(valor: int) -> str:
+    return f"{valor:,}".replace(",", ".")
+
+
+# cache_data, e não cache_resource: cada chamada recebe a sua cópia. O contains_xy prepara a
+# geometria nela mesma, e duas sessões fazendo isso no mesmo objeto ao mesmo tempo derrubavam o
+# Python dentro do GEOS (o painel caiu assim ao reiniciar, em 24/11/2026)
+@st.cache_data(show_spinner=False, max_entries=ESTADOS_NA_MEMORIA)
+def contorno_do_estado(uf: str):
+    return base_cartografica(uf).uf.geometry.union_all()
+
+
+@st.cache_data(ttl=ATUALIZACAO_DOS_RAIOS, show_spinner=False, max_entries=3)
+def carregar_raios_recentes(minuto: str) -> tuple[pd.DataFrame, pd.Timestamp | None, datetime]:
+    # Um cache por minuto: quem abre a página no mesmo minuto não consulta o banco de novo
+    agora = datetime.now(config.FUSO_UTC)
+    flashes, ultimo = fonte.raios_recentes(agora - timedelta(hours=raios.HORAS_DO_GRAFICO), agora)
+    return flashes, ultimo, agora
+
+
+@st.cache_data(ttl=300, show_spinner=False, max_entries=20)
+def carregar_raios_do_periodo(inicio: datetime, fim: datetime) -> tuple[pd.DataFrame, pd.DataFrame]:
+    return fonte.raios_do_periodo(inicio, fim)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def carregar_alcance_dos_raios() -> tuple:
+    return fonte.alcance_dos_raios()
+
+
+def legenda_de_cores(itens: list[tuple[str, str]], titulo: str) -> str:
+    # Uma linha por cor, na ordem dos itens, para ir por cima do mapa navegável (escala_no_mapa)
+    linhas = "".join(f'<span style="display:flex;align-items:center;margin-top:0.25rem">'
+                     f'<span style="width:0.9rem;height:0.9rem;border-radius:2px;margin-right:0.35rem;'
+                     f'background:{cor}"></span>{rotulo}</span>' for cor, rotulo in itens)
+    return f'<div style="font-size:0.8rem;color:#e0e0e0"><b>{titulo}</b>{linhas}</div>'
+
+
+def mapa_dos_raios(uf: str, camada: pdk.Layer, por_cima: bool) -> pdk.Deck:
+    # O fundo, os municípios e o estado dos outros mapas navegáveis. Os flashes do Agora vão por cima
+    # dos limites; as células da densidade, por baixo, como as superfícies
+    estado, municipios = contornos_interativos(uf)
+    limites = [
+        pdk.Layer("GeoJsonLayer", data=municipios, id="municipios", stroked=True, filled=False,
+                  get_line_color=[70, 70, 70, 150], line_width_min_pixels=0.6),
+        pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[235, 235, 235, 220],
+                  line_width_min_pixels=3.5),
+        pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[25, 25, 25],
+                  line_width_min_pixels=1.6),
+    ]
+    camadas = [*limites, camada] if por_cima else [camada, *limites]
+    visao = pdk.ViewState(**visao_inicial(config.recorte_de(uf)))
+    if st.session_state.get("fundo_interativo", True):
+        return pdk.Deck(layers=camadas, map_style=None, initial_view_state=visao, tooltip=interativo.BALAO)
+    return pdk.Deck(layers=camadas, map_provider=None, map_style=interativo.ESTILO_SEM_FUNDO,
+                    initial_view_state=visao, tooltip=interativo.BALAO)
+
+
+@st.cache_resource(show_spinner=False, max_entries=1)
+def regiao_interativa() -> tuple[dict, dict]:
+    estados, paises = mapas.carregar_brasil_e_vizinhos()
+    return tuple(camada.assign(geometry=camada.geometry.simplify(SIMPLIFICACAO_DA_REGIAO).set_precision(
+        PRECISAO_DA_REGIAO)).__geo_interface__ for camada in (estados, paises))
+
+
+@st.cache_resource(show_spinner=False, max_entries=1)
+def regiao_do_boletim() -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    return mapas.carregar_brasil_e_vizinhos()
+
+
+def mapa_do_circulo(uf: str, celulas: pdk.Layer, pontos: pdk.Layer, com_aneis: bool = True,
+                    com_municipios: bool = True) -> pdk.Deck:
+    # O círculo de Campo Grande: os quadradinhos por baixo dos limites, dos municípios do estado e dos
+    # anéis (esses dois se podem tirar), e os flashes do estado por cima de tudo. Sem o mapa de fundo,
+    # os estados do Brasil e os países vêm daqui
+    com_fundo = st.session_state.get("fundo_interativo", True)
+    estado, municipios_do_estado = contornos_interativos(uf)
+    lon, lat = config.CENTRO_DOS_RAIOS
+    linhas_dos_aneis = []
+    if com_aneis:
+        aneis = raios.aneis()
+        # Os anéis como o contorno do estado, claro por baixo e escuro por cima: aparecem com e sem o fundo
+        linhas_dos_aneis = [
+            pdk.Layer("PathLayer", data=aneis[["caminho"]], id="aneis_fundo", get_path="caminho",
+                      get_color=[235, 235, 235, 150], width_min_pixels=3),
+            pdk.Layer("PathLayer", data=aneis[["caminho"]], id="aneis", get_path="caminho",
+                      get_color=[40, 40, 40, 220], width_min_pixels=1.2),
+            camada_de_rotulos(aneis[["lon_rotulo", "lat_rotulo", "rotulo"]], "rotulo", ["lon_rotulo", "lat_rotulo"],
+                              [0, -10], id="rotulos_dos_aneis"),
+        ]
+    regiao = []
+    if not com_fundo:
+        estados, paises = regiao_interativa()
+        regiao = [pdk.Layer("GeoJsonLayer", data=paises, id="paises", stroked=True, filled=False,
+                            get_line_color=[90, 90, 90, 200], line_width_min_pixels=1),
+                  pdk.Layer("GeoJsonLayer", data=estados, id="estados_do_brasil", stroked=True, filled=False,
+                            get_line_color=[110, 110, 110, 150], line_width_min_pixels=0.6)]
+    # Os municípios do estado, como no mapa do alcance do estado (só eles: pedido da equipe, 24/11/2026)
+    municipios = ([pdk.Layer("GeoJsonLayer", data=municipios_do_estado, id="municipios", stroked=True,
+                             filled=False, get_line_color=[70, 70, 70, 150], line_width_min_pixels=0.6)]
+                  if com_municipios else [])
+    camadas = [
+        celulas,
+        *municipios,
+        *regiao,
+        pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[235, 235, 235, 220],
+                  line_width_min_pixels=3.5),
+        pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[25, 25, 25],
+                  line_width_min_pixels=1.6),
+        *linhas_dos_aneis,
+        pontos,
+        pdk.Layer("ScatterplotLayer", data=pd.DataFrame({"lon": [lon], "lat": [lat]}), id="centro",
+                  get_position=["lon", "lat"], get_fill_color=[0, 0, 0], get_line_color=[255, 255, 255],
+                  stroked=True, line_width_min_pixels=2, get_radius=6000, radius_min_pixels=5),
+    ]
+    _, sul, _, norte = calculos.caixa_do_circulo(config.CENTRO_DOS_RAIOS, config.RAIO_DOS_RAIOS_KM)
+    visao = pdk.ViewState(latitude=raios.latitude_do_meio(sul, norte), longitude=lon,
+                          zoom=round(raios.zoom_para_caber(sul, norte, ALTURA_MAPA), 2))
+    if com_fundo:
+        return pdk.Deck(layers=camadas, map_style=None, initial_view_state=visao, tooltip=interativo.BALAO)
+    return pdk.Deck(layers=camadas, map_provider=None, map_style=interativo.ESTILO_SEM_FUNDO,
+                    initial_view_state=visao, tooltip=interativo.BALAO)
+
+
+@st.cache_data(ttl=ATUALIZACAO_DOS_RAIOS, show_spinner=False, max_entries=3)
+def carregar_celulas_do_circulo(agora: datetime) -> pd.DataFrame:
+    # Pelo mesmo "agora" dos flashes da caixa (carregar_raios_recentes), um por minuto
+    return fonte.celulas_do_circulo(agora - timedelta(minutes=raios.IDADES[-1][0]), agora,
+                                    [limite for limite, _ in raios.IDADES])
+
+
+@st.cache_data(ttl=ATUALIZACAO_DOS_RAIOS, show_spinner=False, max_entries=2)
+def carregar_raios_do_circulo(agora: datetime) -> pd.DataFrame:
+    return fonte.raios_do_circulo(agora - timedelta(minutes=raios.IDADES[-1][0]), agora)
+
+
+def espec_do_circulo(agora: datetime, minutos: int, fuso) -> mapas.EspecMapa:
+    inicio, fim = (agora - timedelta(minutes=minutos)).astimezone(fuso), agora.astimezone(fuso)
+    return mapas.EspecMapa(tabela="", coluna="", arquivo="", cmap="", unidade="", ranking="", credito=raios.CREDITO,
+                           titulo=f"Raios até {raios.em_km(config.RAIO_DOS_RAIOS_KM)} de "
+                                  f"{config.NOME_DO_CENTRO_DOS_RAIOS}",
+                           subtitulo=f"Flashes do GLM de {inicio:%d/%m/%Y %H:%M} a {fim:%H:%M}")
+
+
+def figura_do_circulo(flashes: pd.DataFrame, agora: datetime, minutos: int, base: mapas.BaseCartografica, regiao,
+                      fuso, com_aneis: bool, com_municipios: bool, tela: mapas.Tela | None = None) -> Figure:
+    aneis = raios.aneis()
+    return mapas.mapa_do_circulo(raios.flashes_da_janela(flashes, agora, minutos), raios.IDADES,
+                                 [rotulo for _, rotulo in raios.rotulos_das_idades()],
+                                 espec_do_circulo(agora, minutos, fuso), base, regiao,
+                                 aneis if com_aneis else aneis.iloc[:0], config.CENTRO_DOS_RAIOS,
+                                 config.NOME_DO_CENTRO_DOS_RAIOS, raios.quadro_do_circulo(),
+                                 legenda=raios.LEGENDA_DO_TEMPO, com_municipios=com_municipios, tela=tela)
+
+
+@st.cache_data(show_spinner=False, max_entries=6)
+def png_do_circulo(agora: datetime, minutos: int, uf: str, com_aneis: bool, com_municipios: bool, _fuso) -> bytes:
+    figura = figura_do_circulo(carregar_raios_do_circulo(agora), agora, minutos, base_cartografica(uf),
+                               regiao_do_boletim(), _fuso, com_aneis, com_municipios, tela=mapas.Tela())
+    arquivo = io.BytesIO()
+    figura.savefig(arquivo, format="png", dpi=DPI_MAPA, bbox_inches="tight", facecolor="white")
+    return arquivo.getvalue()
+
+
+def desenho_do_circulo(agora: datetime, minutos: int, uf: str, fuso, com_aneis: bool, com_municipios: bool):
+    # Como o da densidade: a base pronta antes, e os flashes lidos só no clique
+    base, regiao = base_cartografica(uf), regiao_do_boletim()
+    inicio = agora - timedelta(minutes=raios.IDADES[-1][0])
+    return lambda: figura_do_circulo(fonte.raios_do_circulo(inicio, agora), agora, minutos, base, regiao, fuso,
+                                     com_aneis, com_municipios)
+
+
+def figura_do_estado(flashes: pd.DataFrame, agora: datetime, minutos: int, uf: str, base: mapas.BaseCartografica,
+                     fuso, tela: mapas.Tela | None = None) -> Figure:
+    # O PNG do boletim do Agora com o alcance do estado: os flashes da caixa, um a um, no quadro do estado
+    inicio, fim = (agora - timedelta(minutes=minutos)).astimezone(fuso), agora.astimezone(fuso)
+    espec = mapas.EspecMapa(tabela="", coluna="", arquivo="", cmap="", unidade="", ranking="", credito=raios.CREDITO,
+                            titulo=f"Raios em {uf}", subtitulo=f"Flashes do GLM de {inicio:%d/%m/%Y %H:%M} a {fim:%H:%M}")
+    return mapas.mapa_de_flashes(raios.flashes_da_janela(flashes, agora, minutos), raios.IDADES,
+                                 [rotulo for _, rotulo in raios.rotulos_das_idades()], espec, base,
+                                 legenda=raios.LEGENDA_DO_TEMPO, tela=tela)
+
+
+@st.cache_data(show_spinner=False, max_entries=6)
+def png_do_estado(agora: datetime, minutos: int, uf: str, _flashes: pd.DataFrame, _fuso) -> bytes:
+    # Os flashes são os de carregar_raios_recentes do mesmo minuto: o "agora" já diz quais são
+    figura = figura_do_estado(_flashes, agora, minutos, uf, base_cartografica(uf), _fuso, tela=mapas.Tela())
+    arquivo = io.BytesIO()
+    figura.savefig(arquivo, format="png", dpi=DPI_MAPA, bbox_inches="tight", facecolor="white")
+    return arquivo.getvalue()
+
+
+def desenho_do_estado(flashes: pd.DataFrame, agora: datetime, minutos: int, uf: str, fuso):
+    base = base_cartografica(uf)
+    return lambda: figura_do_estado(flashes, agora, minutos, uf, base, fuso)
+
+
+def raios_no_circulo(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, dentro: np.ndarray, agora: datetime,
+                     janela: int, vista: str, com_aneis: bool, com_municipios: bool) -> None:
+    nome = f"{raios.em_km(config.RAIO_DOS_RAIOS_KM)} de {config.NOME_DO_CENTRO_DOS_RAIOS}"
+    try:
+        if vista == VISTAS_DO_AGORA[0]:
+            pontos, celulas, muitos = raios.agora_no_circulo(flashes, dentro, carregar_celulas_do_circulo(agora),
+                                                             agora, janela, recorte.fuso)
+        else:
+            png = png_do_circulo(agora, janela, uf, com_aneis, com_municipios, recorte.fuso)
+    except fonte.ErroFonte as erro:
+        st.error(f"Não foi possível ler os raios do círculo no banco ({erro}). A página tenta de novo a cada minuto.")
+        return
+    if vista == VISTAS_DO_AGORA[0]:
+        st.pydeck_chart(mapa_do_circulo(uf, camada_de_quadradinhos(celulas, "celulas_do_circulo"),
+                                        camada_de_flashes(pontos), com_aneis, com_municipios),
+                        key="mapa_raios_circulo", height=ALTURA_MAPA)
+        escala_no_mapa("escala_raios_circulo", legenda_de_cores(raios.rotulos_das_idades(), raios.LEGENDA_DO_TEMPO))
+        total = len(pontos) + int(celulas["flashes"].sum())
+        st.caption(f"{inteiro_br(total)} flashes nos últimos {janela} min até {nome}. "
+                   + (f"Com mais de {inteiro_br(raios.LIMITE_DE_PONTOS)} flashes em {uf} na janela, o estado também "
+                      "vai em quadradinhos, para o mapa não pesar no navegador. " if muitos else
+                      f"Os de {uf} vão um a um ({inteiro_br(len(pontos))}); ")
+                   + "os de fora, em quadradinhos de 0,1° (~10 km) na cor do flash mais novo. **Passe o mouse** "
+                     "num flash ou num quadradinho para ver a hora e quantos são. Atualiza sozinho a cada minuto.")
+    else:
+        _, meio_da_tela, _ = st.columns([1, 3, 1])
+        with meio_da_tela:
+            st.image(png, width="stretch")
+        st.caption(f"Os flashes dos últimos {janela} min até {nome}, um a um, na cor do tempo, como no PNG do "
+                   "boletim. Atualiza sozinho a cada minuto.")
+    fim_local = agora.astimezone(recorte.fuso)
+    arquivo = f"Mapa_raios_{config.RAIO_DOS_RAIOS_KM}km_{fim_local:%Y%m%d_%H%M}.png"
+    with menu_de_baixar("raios_circulo"):
+        botao_do_boletim("raios_circulo", arquivo,
+                         desenho_do_circulo(agora, janela, uf, recorte.fuso, com_aneis, com_municipios))
+
+
+def camada_de_flashes(pontos: pd.DataFrame) -> pdk.Layer:
+    return pdk.Layer("ScatterplotLayer", data=pontos[["longitude", "latitude", "cor", "titulo", "detalhe"]],
+                     id="flashes", get_position=["longitude", "latitude"], get_fill_color="cor",
+                     get_line_color=[40, 40, 40, 200], stroked=True, line_width_min_pixels=0.5, get_radius=1500,
+                     radius_min_pixels=2.5, radius_max_pixels=8, pickable=True)
+
+
+def camada_de_quadradinhos(celulas: pd.DataFrame, nome: str) -> pdk.Layer:
+    # As células de 0,1° com flash (raios.celulas_da_janela), cada uma um quadrado na cor do mais novo
+    meio = 0.5 / config.CELULAS_POR_GRAU_RAIOS
+    quadrado = (f"[[Longitude - {meio}, Latitude - {meio}], [Longitude + {meio}, Latitude - {meio}], "
+                f"[Longitude + {meio}, Latitude + {meio}], [Longitude - {meio}, Latitude + {meio}]]")
+    return pdk.Layer("PolygonLayer", data=celulas[["Longitude", "Latitude", "cor", "titulo", "detalhe"]], id=nome,
+                     get_polygon=quadrado, filled=True, stroked=False, get_fill_color="cor", pickable=True)
+
+
+def grafico_dos_raios(barras: pd.DataFrame, uf: str) -> alt.Chart:
+    return alt.Chart(barras).mark_bar(color="#ff9900").encode(
+        x=alt.X("inicio:T", title=None, axis=alt.Axis(format="%H:%M", labelFontSize=FONTE_DOS_EIXOS, grid=True,
+                                                      gridOpacity=0.25)),
+        y=alt.Y("flashes:Q", title=f"Flashes em {uf} a cada {raios.MINUTOS_POR_BARRA} min",
+                axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS, grid=True, gridOpacity=0.25)),
+        tooltip=[alt.Tooltip("inicio:T", title="A partir de", format="%d/%m %H:%M"),
+                 alt.Tooltip("flashes:Q", title="Flashes", format=",d")],
+    ).properties(height=220)
+
+
+@st.fragment(run_every=ATUALIZACAO_DOS_RAIOS)
+def raios_agora(uf: str, recorte: config.Recorte) -> None:
+    try:
+        flashes, ultimo, agora = carregar_raios_recentes(datetime.now(config.FUSO_UTC).strftime("%Y%m%d%H%M"))
+    except fonte.ErroFonte as erro:
+        st.error(f"Não foi possível ler os raios no banco ({erro}). A página tenta de novo a cada minuto.")
+        return
+    dentro = raios.no_estado(flashes, contorno_do_estado(uf))
+    idade = raios.idade_em_minutos(flashes["hora_utc"], agora)
+    if ultimo is None or agora - ultimo > ATRASO_ACEITO_DOS_RAIOS:
+        desde = (f"desde {ultimo.tz_convert(recorte.fuso):%d/%m %H:%M}" if ultimo is not None
+                 else f"há mais de {raios.HORAS_DO_GRAFICO} h")
+        st.warning(f"O GLM não chega ao banco {desde}: o script que grava os raios pode estar parado. O mapa mostra "
+                   "o que chegou até lá.")
+    colunas = st.columns(4)
+    for coluna, minutos in zip(colunas, (5, 15, 60)):
+        coluna.metric(f"Flashes em {uf}, últimos {minutos} min", inteiro_br(int((dentro & (idade < minutos)).sum())))
+    colunas[3].metric("Dados até", f"{ultimo.tz_convert(recorte.fuso):%H:%M:%S}" if ultimo is not None else "—",
+                      help="O começo do arquivo de 20 s mais novo do GLM no banco. Ele chega uns 40 s depois; a "
+                           "página se atualiza sozinha a cada minuto.")
+    um, dois, tres = st.columns([1.1, 1.4, 1])
+    alcance = um.segmented_control("Alcance", ALCANCES_DO_AGORA, default=ALCANCES_DO_AGORA[0], key="alcance_raios_agora",
+                                   help=f"Até {raios.em_km(config.RAIO_DOS_RAIOS_KM)} de "
+                                        f"{config.NOME_DO_CENTRO_DOS_RAIOS}, para ver o que vem do sul, ou só {uf} e "
+                                        "~1° em volta, com os flashes um a um.") or ALCANCES_DO_AGORA[0]
+    janela = dois.segmented_control("Últimos", raios.JANELAS_DO_AGORA, default=raios.JANELAS_DO_AGORA[-1],
+                                    format_func=lambda minutos: f"{minutos} min",
+                                    key="janela_raios_agora") or raios.JANELAS_DO_AGORA[-1]
+    vista = tres.segmented_control("Mapa", VISTAS_DO_AGORA, default=VISTAS_DO_AGORA[0],
+                                   key="vista_raios_agora") or VISTAS_DO_AGORA[0]
+    if alcance == ALCANCES_DO_AGORA[0]:
+        distancias = ", ".join(raios.em_km(km) for km in config.ANEIS_DOS_RAIOS_KM)
+        com_aneis = um.checkbox("Anéis de distância", value=True, key="aneis_raios_agora",
+                                help=f"Os círculos de {distancias} em volta de {config.NOME_DO_CENTRO_DOS_RAIOS}, no "
+                                     "mapa navegável e no PNG do boletim.")
+        com_municipios = um.checkbox(f"Municípios de {uf}", value=True, key="municipios_raios_agora",
+                                     help=f"As divisas dos municípios de {uf}, no mapa navegável e no PNG do "
+                                          "boletim.")
+        raios_no_circulo(uf, recorte, flashes, dentro, agora, janela, vista, com_aneis, com_municipios)
+    else:
+        raios_no_estado(uf, recorte, flashes, agora, janela, vista)
+    st.altair_chart(grafico_dos_raios(raios.por_barra(flashes[dentro], agora, recorte.fuso), uf), width="stretch")
+    st.caption(f"Os flashes dentro de {uf} a cada {raios.MINUTOS_POR_BARRA} min, nas últimas "
+               f"{raios.HORAS_DO_GRAFICO} h: mostra se a atividade cresce ou enfraquece. A última barra está em "
+               "andamento.")
+
+
+def raios_no_estado(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, agora: datetime, janela: int,
+                    vista: str) -> None:
+    fim_local = agora.astimezone(recorte.fuso)
+    arquivo = f"Mapa_raios_{uf}_{fim_local:%Y%m%d_%H%M}.png"
+    if vista == VISTAS_DO_AGORA[0]:
+        mapa_navegavel_do_estado(uf, recorte, flashes, agora, janela)
+    else:
+        _, meio_da_tela, _ = st.columns([1, 3, 1])
+        with meio_da_tela:
+            st.image(png_do_estado(agora, janela, uf, flashes, recorte.fuso), width="stretch")
+        st.caption(f"Os flashes dos últimos {janela} min em {uf} e em volta, um a um, na cor do tempo, como no PNG do "
+                   "boletim. Atualiza sozinho a cada minuto.")
+    with menu_de_baixar("raios_estado"):
+        botao_do_boletim("raios_estado", arquivo,
+                         desenho_do_estado(flashes, agora, janela, uf, recorte.fuso))
+
+
+def mapa_navegavel_do_estado(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, agora: datetime,
+                             janela: int) -> None:
+    # Todos os flashes um a um, até raios.LIMITE_DE_PONTOS; acima disso, em quadradinhos, como fora do
+    # estado no círculo (na hora mais ativa desde 05/10/2026, seriam ~12 MB por minuto no navegador)
+    pontos = raios.pontos_por_idade(flashes, agora, janela, recorte.fuso)
+    muitos = len(pontos) > raios.LIMITE_DE_PONTOS
+    if muitos:
+        celulas = raios.celulas_da_janela(raios.em_celulas(flashes, agora), agora, janela, recorte.fuso)
+        camada = camada_de_quadradinhos(celulas, "celulas_do_estado")
+    else:
+        camada = camada_de_flashes(pontos)
+    st.pydeck_chart(mapa_dos_raios(uf, camada, por_cima=True), key="mapa_raios_agora", height=ALTURA_MAPA)
+    escala_no_mapa("escala_raios_agora", legenda_de_cores(raios.rotulos_das_idades(), raios.LEGENDA_DO_TEMPO))
+    if muitos:
+        st.caption(f"{inteiro_br(len(pontos))} flashes nos últimos {janela} min no mapa, de {uf} e de até ~1° em volta. "
+                   f"Com mais de {inteiro_br(raios.LIMITE_DE_PONTOS)}, eles vão em quadradinhos de 0,1° (~10 km) na cor "
+                   "do flash mais novo, para o mapa não pesar no navegador. **Passe o mouse** num quadradinho para ver "
+                   f"quantos são. As contagens acima são só de dentro de {uf}. Atualiza sozinho a cada minuto.")
+    else:
+        st.caption(f"{inteiro_br(len(pontos))} flashes nos últimos {janela} min no mapa, de {uf} e de até ~1° em volta, "
+                   "com a cor do tempo: o mais novo por cima. **Passe o mouse** num flash para ver a hora. As contagens "
+                   f"acima são só de dentro de {uf}. Atualiza sozinho a cada minuto.")
+
+
+def espec_da_densidade(quando: str, uf: str, rodape: str) -> mapas.EspecMapa:
+    return mapas.EspecMapa(tabela="", coluna="densidade", titulo=f"Densidade de raios em {uf}", subtitulo=quando,
+                           arquivo="", cmap="", unidade=raios.UNIDADE_DENSIDADE, ranking="", credito=raios.CREDITO,
+                           rodape=rodape)
+
+
+@st.cache_data(show_spinner=False, max_entries=10)
+def mapa_de_densidade(por_celula: pd.DataFrame, quando: str, uf: str) -> bytes:
+    lon, lat, valores = raios.matriz(raios.densidade(por_celula))
+    figura = mapas.mapa_de_celulas(lon, lat, valores, espec_da_densidade(quando, uf, ""), base_cartografica(uf),
+                                   raios.NIVEIS_DENSIDADE, raios.CORES_DENSIDADE,
+                                   tela=mapas.Tela(barra_de_cores=True))
+    arquivo = io.BytesIO()
+    figura.savefig(arquivo, format="png", dpi=DPI_MAPA, bbox_inches="tight", facecolor="white")
+    return arquivo.getvalue()
+
+
+def desenho_da_densidade(por_celula: pd.DataFrame, quando: str, uf: str, rodape: str):
+    lon, lat, valores = raios.matriz(raios.densidade(por_celula))
+    base = base_cartografica(uf)
+    return lambda: mapas.mapa_de_celulas(lon, lat, valores, espec_da_densidade(quando, uf, rodape), base,
+                                         raios.NIVEIS_DENSIDADE, raios.CORES_DENSIDADE)
+
+
+def geotiff_dos_raios(por_celula: pd.DataFrame, uf: str, quando: str):
+    def gravar() -> bytes:
+        grade = grade_do_geotiff(uf)
+        campo = raios.nos_pixels(por_celula, grade.lon, grade.lat)
+        return geotiff.gravar(campo, grade, f"Densidade de raios ({raios.UNIDADE_DENSIDADE})", raios.UNIDADE_DENSIDADE,
+                              {"TITULO": "Densidade de raios", "QUANDO": quando, "FONTE": raios.CREDITO,
+                               "METODO": METODO_DOS_RAIOS})
+    return gravar
+
+
+def densidade_de_raios(uf: str, recorte: config.Recorte, intervalo: tuple) -> None:
+    try:
+        primeira, ultima = carregar_alcance_dos_raios()
+    except fonte.ErroFonte as erro:
+        st.error(f"Não foi possível ler a contagem dos raios no banco ({erro}).")
+        return
+    if ultima is None:
+        st.info("A contagem dos raios ainda não começou no banco. Ela vem do coletor (`python coletar.py raios`), "
+                "que roda de 10 em 10 minutos.")
+        return
+    rotulo = st.segmented_control("Janela", list(JANELAS_DA_DENSIDADE), default="24 h", key="janela_raios_densidade",
+                                  help="As de 24 a 72 h terminam na última hora contada; a do período vai do primeiro "
+                                       "ao último dia da barra lateral, até a última hora contada.") or "24 h"
+    horas = JANELAS_DA_DENSIDADE[rotulo]
+    if horas is None:
+        inicio, fim = janela_do_periodo(intervalo, recorte)
+        fim = min(fim, ultima.to_pydatetime())     # as horas que ainda não passaram não faltam
+    else:
+        fim = ultima.to_pydatetime()
+        inicio = fim - timedelta(hours=horas)
+    try:
+        por_celula, cobertura = carregar_raios_do_periodo(inicio, fim)
+    except fonte.ErroFonte as erro:
+        st.error(f"Não foi possível ler a contagem dos raios no banco ({erro}).")
+        return
+    inicio_local, fim_local = inicio.astimezone(recorte.fuso), fim.astimezone(recorte.fuso)
+    quando = f"{inicio_local:%d/%m/%Y %H:%M} a {fim_local:%d/%m/%Y %H:%M}"
+    faltam = raios.horas_que_faltam(cobertura, inicio, fim, chegando=fim >= ultima.to_pydatetime())
+    if faltam["ausentes"]:
+        de, ate = (primeira - pd.Timedelta(hours=1)).tz_convert(recorte.fuso), ultima.tz_convert(recorte.fuso)
+        st.warning(f"{faltam['ausentes']} das {faltam['esperadas']} horas de {quando} não estão na contagem: o GLM no "
+                   f"banco vai de {de:%d/%m/%Y %H:%M} a {ate:%d/%m/%Y %H:%M}. O histórico chega aos poucos, de trás "
+                   "para frente, até 2018. O mapa soma só as horas contadas.")
+    elif faltam["previstos"] and faltam["faltando"] / faltam["previstos"] >= FALTA_QUE_AVISA:
+        parte = f"{100 * faltam['faltando'] / faltam['previstos']:.1f}%".replace(".", ",")
+        st.info(f"Faltam {inteiro_br(faltam['faltando'])} dos {inteiro_br(faltam['previstos'])} arquivos de 20 s do "
+                f"GLM nas horas de {quando} ({parte}): o mapa soma só os flashes que estão no banco.")
+    if faltam["ultima"] is not None:
+        st.caption(f"A última hora ({fim_local - timedelta(hours=1):%H:%M} às {fim_local:%H:%M}) ainda está "
+                   f"chegando: {faltam['ultima']} dos {config.ARQUIVOS_GLM_POR_HORA} arquivos de 20 s.")
+    total = raios.total_no_estado(por_celula, contorno_do_estado(uf))
+    rodape = f"{inteiro_br(total)} flashes no estado, contados em células de 0,1°"
+    um, dois = st.columns(2)
+    um.metric(f"Flashes em {uf}", inteiro_br(total))
+    tabela = raios.densidade(por_celula)
+    maior = float(tabela["densidade"].max()) if not tabela.empty else 0.0
+    dois.metric("Maior densidade", f"{maior:.2f} {raios.UNIDADE_DENSIDADE}".replace(".", ","),
+                help="A da célula de 0,1° com mais flashes por km², no mapa inteiro (o estado e ~1° em volta).")
+    vista = st.segmented_control("Mapa", VISTAS_DA_DENSIDADE, default=VISTAS_DA_DENSIDADE[0],
+                                 key="vista_raios_densidade") or VISTAS_DA_DENSIDADE[0]
+    if vista == VISTAS_DA_DENSIDADE[0]:
+        celulas = raios.celulas_do_mapa(por_celula)
+        meio = 0.5 / config.CELULAS_POR_GRAU_RAIOS
+        quadrado = (f"[[Longitude - {meio}, Latitude - {meio}], [Longitude + {meio}, Latitude - {meio}], "
+                    f"[Longitude + {meio}, Latitude + {meio}], [Longitude - {meio}, Latitude + {meio}]]")
+        camada = pdk.Layer("PolygonLayer", data=celulas[["Longitude", "Latitude", "cor", "titulo", "detalhe"]],
+                           id="celulas", get_polygon=quadrado, filled=True, stroked=False, get_fill_color="cor",
+                           pickable=True)
+        st.pydeck_chart(mapa_dos_raios(uf, camada, por_cima=False), key="mapa_raios_densidade", height=ALTURA_MAPA)
+        classes = list(zip(raios.CORES_DENSIDADE, raios.rotulos_das_classes()))[::-1]
+        escala_no_mapa("escala_raios_densidade", legenda_de_cores(classes, raios.UNIDADE_DENSIDADE))
+        st.caption(f"{quando}: os flashes por km² em cada célula de 0,1° (~10 km), de {uf} e de até ~1° em volta; a "
+                   "célula sem flash fica sem cor. **Passe o mouse** numa célula para ver quantos flashes ela teve.")
+    else:
+        _, meio_da_tela, _ = st.columns([1, 3, 1])
+        with meio_da_tela:
+            st.image(mapa_de_densidade(por_celula, quando, uf), width="stretch")
+        st.caption(f"{quando}: os flashes por km² em cada célula de 0,1° (~10 km), recortados pelo contorno do "
+                   "estado, como no PNG do boletim.")
+    arquivo = f"Mapa_densidade_raios_{uf}_{inicio_local:%Y%m%d_%H}h_a_{fim_local:%Y%m%d_%H}h.png"
+    with menu_de_baixar("raios_densidade"):
+        botao_do_boletim("raios", arquivo, desenho_da_densidade(por_celula, quando, uf, rodape))
+        botao_do_geotiff("raios", nome_do_geotiff(arquivo),
+                         geotiff_dos_raios(por_celula, uf, quando))
+
+
+def pagina_raios() -> None:
+    st.title("Raios (GOES-19)")
+    with st.sidebar:
+        st.header("Filtros")
+        uf, recorte, intervalo = filtros_de_estado_e_periodo()
+        st.checkbox("Mapa de fundo", value=True, key="fundo_interativo",
+                    help="Países, cidades, estradas e rios, da internet. Desligado, ficam só os limites do estado e "
+                         "dos municípios (no círculo do Agora, os estados do Brasil e os países em volta).")
+    if uf != config.UF:
+        st.info(f"Os raios são contados só em {config.NOME_UF} e em volta: escolha {config.UF} na barra lateral.")
+        st.stop()
+    st.caption(SOBRE_O_GLM + f" O **Agora** mostra os flashes da última hora até "
+               f"{raios.em_km(config.RAIO_DOS_RAIOS_KM)} de {config.NOME_DO_CENTRO_DOS_RAIOS} e se atualiza sozinho; a "
+               "**Densidade**, os de um período, por km².")
+    vista = st.segmented_control("Ver", VISTAS_DOS_RAIOS, default=VISTAS_DOS_RAIOS[0], key="vista_raios",
+                                 label_visibility="collapsed") or VISTAS_DOS_RAIOS[0]
+    if vista == VISTAS_DOS_RAIOS[0]:
+        raios_agora(uf, recorte)
+    else:
+        densidade_de_raios(uf, recorte, intervalo)
+
+
+# A previsão não usa nenhum filtro do observado (estado, período, estações), e numa aba ela ficaria
+# atrás deles; como página, ela só consulta o Open-Meteo quando alguém a abre. Desde a v0.4.5, uma
+# página por assunto nos dois (veja PÁGINAS DO OBSERVADO e PÁGINAS DA PREVISÃO): no observado, o
+# Painel, os Mapas interativos e a Localização das estações viraram Mapas, Chuva e Risco de Fogo; na
+# previsão, as Estações, os Mapas e os Mapas interativos viraram Mapas, Chuva e Risco de Fogo
+lembrar_filtros()
+pagina = st.navigation({
+    "Observado": [
+        st.Page(pagina_mapas, title="Mapas", icon=":material/map:", default=True),
+        st.Page(pagina_chuva, title="Chuva", icon=":material/rainy:", url_path="chuva"),
+        st.Page(pagina_risco, title="Risco de Fogo", icon=":material/local_fire_department:", url_path="risco-de-fogo"),
+        # Os raios só vêm do banco: no Streamlit Cloud, que lê as APIs, a página não aparece
+        *([st.Page(pagina_raios, title="Raios", icon=":material/bolt:", url_path="raios")] if fonte.tem_raios() else []),
+    ],
+    "Previsão (MS)": [
+        st.Page(pagina_mapas_previstos, title="Mapas", icon=":material/map:", url_path="previsao-mapas"),
+        st.Page(pagina_chuva_prevista, title="Chuva", icon=":material/rainy:", url_path="previsao-chuva"),
+        st.Page(pagina_risco_previsto, title="Risco de Fogo", icon=":material/local_fire_department:",
+                url_path="previsao-risco-de-fogo"),
+        st.Page(pagina_semanas, title="Semanas", icon=":material/date_range:", url_path="previsao-semanas"),
+    ],
+})
+pagina.run()

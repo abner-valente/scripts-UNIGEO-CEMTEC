@@ -23,13 +23,13 @@ APELIDOS = {"risco": "Risco de Fogo", "rajada": "Vento"}
 
 
 def sem_acento(texto: str) -> str:
-    """Minúsculas e sem acento, para comparar nomes escritos à mão: "Ponta Pora" acha "Ponta Porã"."""
+    # Minúsculas e sem acento, para comparar nomes escritos à mão: "Ponta Pora" acha "Ponta Porã".
     decomposto = unicodedata.normalize("NFKD", str(texto))
     return " ".join("".join(letra for letra in decomposto if not unicodedata.combining(letra)).casefold().split())
 
 
 def variavel(texto: str) -> str:
-    """O nome da variável como está em VARIAVEIS, escrito em qualquer caixa e com ou sem acento."""
+    # O nome da variável como está em VARIAVEIS, escrito em qualquer caixa e com ou sem acento.
     chave = sem_acento(texto)
     nomes = {sem_acento(nome): nome for nome in VARIAVEIS} | APELIDOS
     if chave not in nomes:
@@ -38,11 +38,9 @@ def variavel(texto: str) -> str:
 
 
 def ler_pedidos(textos: list[str]) -> dict[str, list[str]]:
-    """As retiradas pedidas na linha de comando, como "Chuva: Campo Grande; A702".
-
-    Uma variável por texto, com as estações por nome ou pelo código do INMET, separadas por vírgula
-    ou ponto e vírgula. A mesma variável em dois textos junta as duas listas.
-    """
+    # As retiradas pedidas na linha de comando, como "Chuva: Campo Grande; A702".
+    # Uma variável por texto, com as estações por nome ou pelo código do INMET, separadas por vírgula
+    # ou ponto e vírgula. A mesma variável em dois textos junta as duas listas.
     pedidos: dict[str, list[str]] = {}
     for texto in textos:
         nome, separador, estacoes = texto.partition(":")
@@ -56,11 +54,9 @@ def ler_pedidos(textos: list[str]) -> dict[str, list[str]]:
 
 
 def resolver(pedidas: list[str], estacoes: pd.DataFrame) -> tuple[set[str], list[str]]:
-    """Os nomes das estações pedidas, como estão em `estacoes`, e as que não se acharam.
-
-    `estacoes` tem a coluna "Estação" e, quando houver, a "CD_ESTACAO": a estação pedida vale pelo
-    nome (sem acento, em qualquer caixa) ou pelo código do INMET.
-    """
+    # Os nomes das estações pedidas, como estão em `estacoes`, e as que não se acharam.
+    # `estacoes` tem a coluna "Estação" e, quando houver, a "CD_ESTACAO": a estação pedida vale pelo
+    # nome (sem acento, em qualquer caixa) ou pelo código do INMET.
     por_nome = {sem_acento(nome): nome for nome in estacoes["Estação"]}
     por_codigo = ({sem_acento(codigo): nome for codigo, nome in zip(estacoes["CD_ESTACAO"], estacoes["Estação"])
                    if pd.notna(codigo)} if "CD_ESTACAO" in estacoes else {})
@@ -76,7 +72,7 @@ def resolver(pedidas: list[str], estacoes: pd.DataFrame) -> tuple[set[str], list
 
 
 def resolver_pedidos(pedidos: dict[str, list[str]], estacoes: pd.DataFrame) -> tuple[dict[str, set[str]], list[str]]:
-    """`resolver` para todas as variáveis: {variável: nomes} e os avisos do que não se achou."""
+    # `resolver` para todas as variáveis: {variável: nomes} e os avisos do que não se achou.
     retiradas, avisos = {}, []
     for nome_variavel, pedidas in pedidos.items():
         achadas, faltaram = resolver(pedidas, estacoes)
@@ -88,7 +84,7 @@ def resolver_pedidos(pedidos: dict[str, list[str]], estacoes: pd.DataFrame) -> t
 
 
 def retirar(dados, nomes: set[str]):
-    """Os dados sem as estações de `nomes`: uma tabela com a coluna "Estação", ou uma série por estação."""
+    # Os dados sem as estações de `nomes`: uma tabela com a coluna "Estação", ou uma série por estação.
     if not nomes or dados is None:
         return dados
     if isinstance(dados, pd.Series):
@@ -97,17 +93,15 @@ def retirar(dados, nomes: set[str]):
 
 
 def descrever(retiradas: dict[str, set[str]]) -> list[str]:
-    """Uma linha por variável, para o terminal: "Chuva: Campo Grande, Dourados"."""
+    # Uma linha por variável, para o terminal: "Chuva: Campo Grande, Dourados".
     return [f"{nome}: {', '.join(sorted(nomes))}" for nome, nomes in retiradas.items() if nomes]
 
 
 def para_o_produto(pedidos: dict[str, list[str]], estacoes: pd.DataFrame, do_produto: set[str],
                    produto: str) -> dict[str, set[str]]:
-    """As retiradas que valem para um produto do main.py, já com o aviso no terminal.
-
-    `estacoes` são as que o produto baixou (do estado e as vizinhas) e `do_produto`, as variáveis
-    que ele mapeia: um pedido de outra variável não muda nada ali, e o terminal diz isso.
-    """
+    # As retiradas que valem para um produto do main.py, já com o aviso no terminal.
+    # `estacoes` são as que o produto baixou (do estado e as vizinhas) e `do_produto`, as variáveis
+    # que ele mapeia: um pedido de outra variável não muda nada ali, e o terminal diz isso.
     if not pedidos:
         return {}
     avisos = [f"o {produto} não faz mapa de {nome}: essa retirada não muda nada aqui"

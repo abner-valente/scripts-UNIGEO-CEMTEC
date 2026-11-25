@@ -32,7 +32,6 @@ def test_colunas_de_chuva_de_cada_modo():
 # ---------- Cálculos por estação ----------
 
 def test_dia_no_horario_de_ms(serie):
-    """Dia 30/07 em MS = leituras das 05 UTC de 30/07 às 04 UTC de 31/07 (cada leitura fecha a hora anterior)."""
     dados = serie("2026-07-29", "2026-08-01", CHUVA=0.0)
     dados.loc[dados["dt_utc"] == utc("2026-07-30 04:00"), "CHUVA"] = 50.0  # 23 h–24 h de 29/07 em MS: fica de fora
     dados.loc[dados["dt_utc"] == utc("2026-07-30 05:00"), "CHUVA"] = 3.0   # 0 h–1 h de 30/07 em MS
@@ -41,7 +40,6 @@ def test_dia_no_horario_de_ms(serie):
 
 
 def test_consulta_com_horarios(serie):
-    """Das 08 h de 14/09 às 08 h de 15/09 em MS = leituras das 13 UTC de 14/09 às 12 UTC de 15/09."""
     periodo = Periodo.de_datas(date(2026, 9, 14), date(2026, 9, 15), 8, 8)
     dados = serie("2026-09-14", "2026-09-16", CHUVA=0.0)
     dados.loc[dados["dt_utc"] == utc("2026-09-14 12:00"), "CHUVA"] = 50.0  # 07 h–08 h de 14/09: fica de fora
@@ -176,7 +174,9 @@ def test_tabelas_ordenadas_pelo_valor(serie):
     (Periodo.de_datas(date(2026, 9, 14), date(2026, 9, 15), 8, 8), ["Acumulado Período"], 11),
     (TEMPO_REAL, COLUNAS_TEMPO_REAL, 15),
 ], ids=["dia", "periodo", "periodo_com_horas", "tempo_real"])
-def test_execucao_completa(api_simulada, periodo, colunas_chuva, mapas_esperados):
+def test_execucao_completa(api_simulada, periodo, colunas_chuva, mapas_esperados, request):
+    if periodo is not DIA:   # o desenho de verdade fica com o modo "dia"
+        request.getfixturevalue("mapas_sem_desenho")
     assert relatorio_inmet.executar(periodo) == 0
 
     pasta = periodo.pasta_saida(relatorio_inmet.NOME)
@@ -187,7 +187,8 @@ def test_execucao_completa(api_simulada, periodo, colunas_chuva, mapas_esperados
     assert len(list((pasta / "mapas").glob("*.png"))) == mapas_esperados
 
 
-def test_estacao_que_so_mandou_bateria_fica_fora_da_planilha_e_do_mapa_de_chuva(api_simulada, monkeypatch):
+def test_estacao_que_so_mandou_bateria_fica_fora_da_planilha_e_do_mapa_de_chuva(api_simulada, monkeypatch,
+                                                                                mapas_sem_desenho):
     # Pela API, a estação que só manda bateria e processador vem com as linhas de chuva vazias
     baixar = inmet.baixar_dados_estacao
 
@@ -218,14 +219,12 @@ def test_falha_ao_listar_as_estacoes(api_simulada, monkeypatch):
 
 
 def test_nenhuma_estacao_com_dados_interrompe_o_relatorio(api_simulada, monkeypatch):
-    """Sem nenhuma estação (token errado, INMET instável) não faz sentido gerar planilha e mapas vazios."""
     monkeypatch.setattr(inmet, "baixar_estacoes", lambda inicio, fim, uf=config.UF, fuso=None: [])
     assert relatorio_inmet.executar(DIA) == 1
 
 
 
-def test_as_vizinhas_sao_baixadas_mas_nao_entram_na_planilha(api_simulada, capsys):
-    """Elas seguram a borda do mapa e não aparecem em aba nenhuma, nem no ranking."""
+def test_as_vizinhas_sao_baixadas_mas_nao_entram_na_planilha(api_simulada, capsys, mapas_sem_desenho):
     assert relatorio_inmet.executar(DIA) == 0
 
     saida = capsys.readouterr().out

@@ -74,7 +74,6 @@ def test_tempo_real():
 
 
 def test_hoje_do_tempo_real_segue_o_horario_de_ms():
-    """Às 02 UTC ainda são 22 h do dia anterior em MS."""
     assert Periodo.tempo_real(utc(2026, 9, 14, 2, 0)).inicio_do_dia == utc(2026, 9, 13, 4)
 
 
@@ -85,7 +84,6 @@ def test_hoje_do_tempo_real_segue_o_horario_de_ms():
     (Periodo.tempo_real(utc(2026, 9, 14, 13, 25)), "13/09/2026 09:25 a 14/09/2026 09:25 GMT-04"),
 ], ids=["dia", "periodo", "com_horas", "tempo_real"])
 def test_subtitulo_dos_mapas_traz_o_fuso_so_quando_ha_horario(periodo, texto):
-    """Subtítulo igual em todos os produtos: datas sozinhas sem fuso, horários com GMT-04."""
     assert periodo.descrever_janela(*periodo.janela) == texto
 
 
@@ -99,7 +97,6 @@ def test_pasta_de_saida_separada_por_produto_e_modo(monkeypatch, tmp_path):
 # O RECORTE
 # =====================================================
 def test_o_recorte_padrao_e_ms_e_os_nomes_antigos_apontam_para_ele():
-    """Uma verdade só sobre onde MS fica: os apelidos saem do recorte, não de outra constante."""
     assert config.RECORTE is config.RECORTES["MS"]
     assert (config.UF, config.NOME_UF) == (config.RECORTE.uf, config.RECORTE.nome)
     assert config.RECORTE.shape_uf.name.startswith("MS_")
@@ -107,12 +104,10 @@ def test_o_recorte_padrao_e_ms_e_os_nomes_antigos_apontam_para_ele():
 
 
 def test_o_enquadramento_de_ms_e_o_que_sempre_foi():
-    """Derivá-lo da geometria mudaria por arredondamento, e com ele todo mapa já publicado."""
     assert config.RECORTES["MS"].limites == (-58.5, -50.5, -24.5, -17.0)
 
 
 def test_o_fuso_do_recorte_decide_onde_o_dia_comeca():
-    """MT e PR partem o mesmo dia em horas diferentes: o fuso não pode ser do módulo."""
     em_ms = Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30))
     em_sp = Periodo.de_datas(date(2026, 7, 30), date(2026, 7, 30), fuso=ZoneInfo("America/Sao_Paulo"))
 
@@ -128,7 +123,6 @@ def test_o_subtitulo_traz_o_fuso_do_recorte():
 
 
 def test_so_aparecem_as_ufs_que_tem_shapefile():
-    """O seletor não pode oferecer um estado que o mapa não consegue desenhar."""
     for uf in config.ufs_disponiveis():
         contorno, municipios = config.shapes_de(uf)
         assert contorno.exists() and municipios.exists()
@@ -136,11 +130,6 @@ def test_so_aparecem_as_ufs_que_tem_shapefile():
 
 
 def test_uf_sem_shapefile_avisa_em_vez_de_quebrar_no_meio(monkeypatch, tmp_path):
-    """Sem os arquivos, o recorte diz qual falta em vez de estourar no meio do desenho.
-
-    A pasta vazia entra por monkeypatch de propósito: apontar para uma UF que hoje não tem
-    shapefile faria o teste parar de testar no dia em que ela ganhasse um.
-    """
     monkeypatch.setattr(config, "PASTA_SHP", tmp_path)
     config.recorte_de.cache_clear()
 
@@ -153,7 +142,6 @@ def test_uf_sem_shapefile_avisa_em_vez_de_quebrar_no_meio(monkeypatch, tmp_path)
 
 
 def test_o_recorte_derivado_enquadra_o_estado_com_folga(monkeypatch, tmp_path):
-    """Para as UFs sem entrada escrita à mão, o enquadramento sai do contorno mais uma margem."""
     import geopandas as gpd
     import shapely
 
@@ -176,12 +164,6 @@ def test_o_recorte_derivado_enquadra_o_estado_com_folga(monkeypatch, tmp_path):
 
 
 def test_todo_estado_disponivel_cabe_no_proprio_enquadramento():
-    """Vale para cada UF acrescentada: o que a ferramenta gerou abre, e o estado aparece inteiro.
-
-    Um contorno que passa da borda sai cortado no mapa sem ninguém avisar — o desenho continua,
-    só que faltando pedaço de estado. O que se exige é o **corpo principal**: ilha oceânica
-    distante fica fora do enquadramento de propósito, senão o mapa do ES viraria oceano.
-    """
     import geopandas as gpd
     import shapely
 
@@ -205,7 +187,6 @@ def test_todo_estado_disponivel_cabe_no_proprio_enquadramento():
 
 
 def test_a_ilha_oceanica_nao_estica_o_enquadramento():
-    """Trindade fica a 1.100 km do ES: enquadrar por ela daria um mapa de oceano."""
     recorte = config.recorte_de("ES")
     largura = recorte.limites[1] - recorte.limites[0]
     altura = recorte.limites[3] - recorte.limites[2]

@@ -1,5 +1,5 @@
 """Mapas pontuais e interpolados (IDW) das variáveis meteorológicas."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import geopandas as gpd
@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import shapely
 from matplotlib import colormaps
-from matplotlib.colors import BoundaryNorm
+from matplotlib.colors import BoundaryNorm, ListedColormap
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patheffects import withStroke
@@ -22,18 +22,27 @@ from matplotlib.ticker import MaxNLocator
 
 from . import calculos, config
 
+# As cores das redes no mapa de referência das estações: o azul do INMET e o laranja do CEMADEN, o
+# mesmo dos Mapas interativos
+CORES_DAS_REDES = {"INMET": "#1f4e79", "CEMADEN": "#f57c00"}
+NOMES_DAS_REDES = {"INMET": "Estação automática do INMET", "CEMADEN": "Pluviômetro do CEMADEN"}
+# Embaixo do mapa do relatório, quando o agrupamento (EspecMapa.agrupar_km) tirou estações do desenho
+AVISO_DO_GRUPO = "Estações a até {km:g} km umas das outras mostram só o maior valor."
 # Acima disso a lista de níveis é uma faixa contínua, e não classes (como as da chuva)
 MAX_CLASSES = 12
 # De quem é o dado, numa linha miúda embaixo do mapa ("Dados: INMET/SEMADESC"). O título e o
 # subtítulo dizem só o quê e quando: as instituições ficam no rodapé (pedido da equipe, 16/11/2026).
 # A previsão troca pelo do Open-Meteo, cuja licença (CC BY 4.0) obriga o crédito.
 CREDITO = "INMET/SEMADESC"
+# O do mapa que tem estação do CEMADEN (decisão da equipe, 16/11/2026, no lugar da citação em inglês da PED)
+CREDITO_COM_CEMADEN = "INMET/SEMADESC/CEMADEN"
+# No mapa do círculo dos raios os logos vão para o canto de baixo à direita, sobre o oceano, e não em
+# cima do Brasil (pedido da equipe, 24/11/2026): a esta distância da borda de baixo
+MARGEM_DOS_LOGOS_EMBAIXO = 0.015
 
 
 @dataclass(frozen=True)
 class EspecMapa:
-    """O que plotar (aba e coluna) e como apresentar (títulos, cores, ranking)."""
-
     tabela: str
     coluna: str
     titulo: str
@@ -48,31 +57,23 @@ class EspecMapa:
     credito: str = CREDITO
     ranking_absoluto: bool = False  # ranqueia pelo tamanho do valor, para cima ou para baixo (anomalias)
     com_sinal: bool = False         # escreve o + dos positivos: nas anomalias, o número é um desvio
+    rodape: str = ""                # uma linha miúda embaixo do mapa (a citação que o CEMADEN pede)
+    agrupar_km: float = 0.0         # nos mapas de chuva: estações a até isso mostram só o maior valor
 
 
 @dataclass(frozen=True)
 class EspecClasses:
-    """Mapa de classes discretas (ex.: níveis de risco): uma cor e um rótulo para cada classe.
-
-    Diferente do EspecMapa, o valor não vem de uma coluna contínua com barra de cores: as classes
-    são desenhadas com cores fixas e uma legenda nomeada.
-    """
-
     titulo: str
     subtitulo: str
     arquivo: str
     cores: list[str]
     rotulos: list[str]
     credito: str = CREDITO
+    rodape: str = ""                # uma linha miúda embaixo do mapa (a citação que o CEMADEN pede)
 
 
 @dataclass(frozen=True)
 class Indicadores:
-    """Pontos coloridos abaixo de cada estação, um para cada coluna verdadeira (ex.: condições atendidas).
-
-    Cada indicador ocupa sempre a mesma posição, da esquerda para a direita na ordem de `colunas`.
-    """
-
     colunas: list[str]  # colunas booleanas da tabela de estações
     rotulos: list[str]
     cores: list[str]
@@ -87,13 +88,6 @@ TAMANHO_INDICADORES = 30
 
 @dataclass(frozen=True)
 class Tela:
-    """Ajustes de quem vai ver o mapa pequeno, do tamanho de uma coluna, e ampliar se quiser.
-
-    Nesse tamanho o mapa mostra o padrão, não os números: título, logos e ranking viram borrão,
-    e os valores de 62 estações se cobrem. O que sobra vai com o texto maior, proporcional à
-    figura, para continuar legível depois de encolhido. Sem `Tela`, sai o mapa do relatório.
-    """
-
     rotulos: bool = False         # o valor escrito em cada estação
     barra_de_cores: bool = False
     escala_texto: float = 2.2     # sobre o corpo padrão (10 pt), para a barra de cores
@@ -102,8 +96,6 @@ class Tela:
 
 @dataclass
 class BaseCartografica:
-    """Camadas, grade e logos carregados uma única vez e reaproveitados em todos os mapas."""
-
     uf: gpd.GeoDataFrame
     municipios: gpd.GeoDataFrame
     lon_grade: np.ndarray
@@ -115,7 +107,6 @@ class BaseCartografica:
 
 
 def carregar_base(recorte: config.Recorte = config.RECORTE) -> BaseCartografica:
-    """Camadas, grade e logos de um recorte. Sem recorte, o padrão — que é MS."""
     oeste, leste, sul, norte = recorte.limites
     uf = gpd.read_file(recorte.shape_uf).to_crs("EPSG:4326")
     municipios = gpd.read_file(recorte.shape_mun).to_crs("EPSG:4326")
@@ -140,11 +131,6 @@ def gerar_mapas(tabelas: dict[str, pd.DataFrame], especificacoes: list[EspecMapa
                 identificador: str, recorte: config.Recorte = config.RECORTE,
                 base: BaseCartografica | None = None,
                 apoio: dict[str, pd.DataFrame] | None = None) -> None:
-    """Gera, na pasta indicada, os mapas descritos pelas especificações (identificador vai no nome dos arquivos).
-
-    `apoio` tem as mesmas tabelas, para as estações vizinhas. Elas entram **só** na superfície
-    interpolada: o mapa pontual, o ranking e a escala de cores continuam sendo do estado.
-    """
     if not tabelas:
         print("⚠️ Nenhum dado foi coletado. Os mapas não serão gerados.")
         return
@@ -172,7 +158,6 @@ def gerar_mapas(tabelas: dict[str, pd.DataFrame], especificacoes: list[EspecMapa
 
 def mapa_pontual(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartografica,
                  caminho: Path | None = None, tela: Tela | None = None) -> Figure:
-    """Estações coloridas e rotuladas com o valor; tamanho do marcador proporcional ao valor."""
     fig, ax = _nova_figura((12, 12))
     _desenhar_limites(ax, base)
 
@@ -196,17 +181,6 @@ def mapa_pontual(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartografica
 def mapa_interpolado(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartografica,
                      caminho: Path | None = None, tela: Tela | None = None,
                      niveis=None, apoio=None) -> Figure | None:
-    """Superfície IDW recortada ao estado, com as estações e (opcionalmente) a direção do vento.
-
-    `apoio` são pontos que **só alimentam a interpolação** — estações de fora do recorte, que
-    seguram a superfície na borda. Elas não viram ponto desenhado, rótulo nem ranking, e não
-    mexem na escala de cores: o produto é do estado, e o que está fora dele é insumo da conta.
-    Sem elas, os 8 vizinhos que o IDW enxerga numa célula da divisa estão todos para dentro, e a
-    superfície extrapola tendo dado do outro lado.
-
-    Devolve None quando há estações de menos para interpolar: com poucos pontos a superfície
-    inventa mais do que mostra.
-    """
     if len(gdf) < config.MIN_ESTACOES_INTERPOLACAO:
         print(f"⚠️ Poucas estações para interpolar '{espec.titulo}' "
               f"({len(gdf)}; mínimo {config.MIN_ESTACOES_INTERPOLACAO})")
@@ -234,11 +208,6 @@ def mapa_interpolado(gdf: gpd.GeoDataFrame, espec: EspecMapa, base: BaseCartogra
 
 def mapa_de_grade(grade, gdf, espec: EspecMapa, base: BaseCartografica, caminho: Path | None = None,
                   niveis=20, tela: Tela | None = None) -> Figure:
-    """Desenha uma superfície já calculada, recortada ao estado, com as estações por cima.
-
-    Separado do mapa_interpolado porque nem toda superfície vem do IDW de uma única coluna: o
-    risco de fogo, por exemplo, combina três variáveis interpoladas em cada hora.
-    """
     fig, ax = _nova_figura((14, 12))
     # `extend` pinta o que passa das pontas com a cor do extremo. Sem isso, numa escala fixa, um
     # valor acima do teto sairia branco no mapa — como se não houvesse medição ali.
@@ -271,6 +240,13 @@ def mapa_de_grade(grade, gdf, espec: EspecMapa, base: BaseCartografica, caminho:
         barra.set_label(espec.unidade, size=_corpo(tela))
         barra.ax.tick_params(labelsize=_corpo(tela))
     _desenhar_limites(ax, base)
+    # Nos mapas de chuva, das estações muito perto umas das outras só a de mais chuva vai ao desenho:
+    # o ponto, o número e o ranking. A superfície, acima, já saiu de todas
+    agrupado = o_maior_de_cada_grupo(gdf, espec.coluna, espec.agrupar_km) if len(gdf) else gdf
+    if len(agrupado) < len(gdf):
+        aviso = AVISO_DO_GRUPO.format(km=espec.agrupar_km)
+        espec = replace(espec, rodape=f"{espec.rodape}\n{aviso}" if espec.rodape else aviso)
+    gdf = agrupado
     # A superfície da previsão vem do modelo, e não das estações: se a previsão delas falhar, o
     # mapa sai sem os pontos. O geopandas recusa desenhar uma tabela vazia.
     if len(gdf):
@@ -294,7 +270,6 @@ def mapa_de_grade(grade, gdf, espec: EspecMapa, base: BaseCartografica, caminho:
 
 def mapa_classes_pontual(gdf, coluna: str, espec: EspecClasses, base: BaseCartografica,
                          caminho: Path | None = None, tela: Tela | None = None) -> Figure:
-    """Estações coloridas pela classe, com legenda nomeada no lugar da barra de cores."""
     fig, ax = _nova_figura((12, 12))
     _desenhar_limites(ax, base)
 
@@ -309,21 +284,27 @@ def mapa_classes_pontual(gdf, coluna: str, espec: EspecClasses, base: BaseCartog
 
 
 def mapa_de_referencia(tabela: pd.DataFrame, titulo: str, subtitulo: str, base: BaseCartografica,
-                       caminho: Path | None = None) -> Figure:
-    """As estações numeradas no mapa, e a lista dos números com os nomes ao lado.
-
-    É a referência para quem não lida com as estações todo dia. Numa imagem parada, os nomes
-    escritos no mapa se atropelariam onde as estações ficam juntas (o sul de MS); o número é curto e
-    cabe. `tabela` traz o "Nº", a "Estação" e as coordenadas, na ordem da lista.
-    """
+                       caminho: Path | None = None, rodape: str = "", credito: str = CREDITO) -> Figure:
+    # As estações numeradas no mapa, e a lista dos números com os nomes ao lado.
+    # É a referência para quem não lida com as estações todo dia. Numa imagem parada, os nomes
+    # escritos no mapa se atropelariam onde as estações ficam juntas (o sul de MS); o número é curto e
+    # cabe. `tabela` traz o "Nº", a "Estação" e as coordenadas, na ordem da lista, e pode trazer a
+    # "Rede" (INMET ou CEMADEN), que dá a cor do ponto e, com as duas redes, a legenda
     fig = Figure(figsize=(19, 12))
     fig.patch.set_facecolor("white")
     partes = fig.add_gridspec(1, 2, width_ratios=[2.1, 1.2])
     ax, lista = fig.add_subplot(partes[0]), fig.add_subplot(partes[1])
     ax.set_facecolor("white")
     _desenhar_limites(ax, base)
-    ax.scatter(tabela["Longitude"], tabela["Latitude"], s=190, color="#1f4e79", edgecolor="white",
-               linewidth=1.0, zorder=5)
+    redes = tabela["Rede"] if "Rede" in tabela else pd.Series("INMET", index=tabela.index)
+    cores = redes.map(CORES_DAS_REDES).fillna(CORES_DAS_REDES["INMET"])
+    for rede in dict.fromkeys(redes):
+        dela = redes == rede
+        ax.scatter(tabela.loc[dela, "Longitude"], tabela.loc[dela, "Latitude"], s=190 if rede == "INMET" else 150,
+                   color=CORES_DAS_REDES.get(rede, CORES_DAS_REDES["INMET"]), edgecolor="white", linewidth=1.0,
+                   zorder=5, label=NOMES_DAS_REDES.get(rede, rede))
+    if redes.nunique() > 1:
+        ax.legend(loc="lower left", fontsize=10, framealpha=0.9)
     for numero, longitude, latitude in zip(tabela["Nº"], tabela["Longitude"], tabela["Latitude"]):
         ax.text(longitude, latitude, str(numero), ha="center", va="center", fontsize=6.5, color="white",
                 weight="bold", zorder=6)
@@ -333,24 +314,20 @@ def mapa_de_referencia(tabela: pd.DataFrame, titulo: str, subtitulo: str, base: 
     por_coluna = -(-len(tabela) // 2)
     passo = 0.96 / max(por_coluna, 1)
     lista.text(0.0, 1.0, "ESTAÇÕES", fontsize=11, weight="bold", va="bottom", transform=lista.transAxes)
-    for indice, (numero, nome) in enumerate(zip(tabela["Nº"], tabela["Estação"])):
+    for indice, (numero, nome, cor) in enumerate(zip(tabela["Nº"], tabela["Estação"], cores)):
         coluna, linha = divmod(indice, por_coluna)
         x, y = coluna * 0.5, 0.975 - linha * passo
         lista.text(x + 0.05, y, str(numero), ha="right", va="top", fontsize=9, weight="bold",
-                   color="#1f4e79", transform=lista.transAxes)
+                   color=cor, transform=lista.transAxes)
         lista.text(x + 0.07, y, nome, ha="left", va="top", fontsize=9, transform=lista.transAxes)
 
-    espec = EspecClasses(titulo, subtitulo, "", [], [])
+    espec = EspecClasses(titulo, subtitulo, "", [], [], credito=credito, rodape=rodape)
     return _finalizar(fig, ax, espec, base, caminho)
 
 
 def mapa_classes_interpolado(grade, gdf, coluna: str, espec: EspecClasses, base: BaseCartografica,
                              caminho: Path | None = None, indicadores: Indicadores | None = None,
                              tela: Tela | None = None) -> Figure:
-    """Superfície já classificada (0 a n-1) recortada ao estado, com as estações por cima.
-
-    Com `indicadores`, desenha também os pontos abaixo de cada estação e a legenda deles.
-    """
     fig, ax = _nova_figura((14, 12))
     # Uma faixa por classe: as fronteiras ficam no meio do caminho entre dois níveis inteiros
     limites = np.arange(len(espec.cores) + 1) - 0.5
@@ -373,11 +350,126 @@ def mapa_classes_interpolado(grade, gdf, coluna: str, espec: EspecClasses, base:
     return _finalizar(fig, ax, espec, base, caminho, tela)
 
 
+def mapa_de_celulas(lon_bordas: np.ndarray, lat_bordas: np.ndarray, valores: np.ndarray, espec: EspecMapa,
+                    base: BaseCartografica, niveis: list[float], cores: list[str], caminho: Path | None = None,
+                    tela: Tela | None = None) -> Figure:
+    # Uma grade já contada célula a célula (a densidade de raios), sem interpolar: cada célula com a
+    # cor da sua classe, e a que tem zero sem cor. Recortada pelo contorno do estado, como as outras
+    fig, ax = _nova_figura((14, 12))
+    # O que passa do último nível sai com a cor da última classe (o "over" da paleta)
+    norma = BoundaryNorm(niveis, ncolors=len(cores))
+    paleta = ListedColormap(cores).with_extremes(over=cores[-1])
+    celulas = ax.pcolormesh(lon_bordas, lat_bordas, np.ma.masked_less_equal(valores, 0), cmap=paleta, norm=norma,
+                            alpha=0.9, shading="flat")
+    celulas.set_clip_path(base.contorno_uf, transform=ax.transData)
+    if tela is None or tela.barra_de_cores:
+        barra = fig.colorbar(celulas, ax=ax, shrink=0.75, extend="max")
+        barra.set_ticks(niveis)
+        barra.set_ticklabels([f"{nivel:g}".replace(".", ",") for nivel in niveis])
+        barra.set_label(espec.unidade, size=_corpo(tela))
+        barra.ax.tick_params(labelsize=_corpo(tela))
+    _desenhar_limites(ax, base)
+    return _finalizar(fig, ax, espec, base, caminho, tela)
+
+
+def carregar_brasil_e_vizinhos() -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    # Os estados do Brasil e os países em volta (ferramentas/brasil_e_vizinhos.py), para os mapas largos
+    return (gpd.read_file(config.SHAPE_BRASIL_E_VIZINHOS, layer="estados"),
+            gpd.read_file(config.SHAPE_BRASIL_E_VIZINHOS, layer="paises"))
+
+
+def mapa_do_circulo(flashes: pd.DataFrame, idades: list[tuple[int, str]], rotulos: list[str], espec: EspecMapa,
+                    base: BaseCartografica, regiao: tuple[gpd.GeoDataFrame, gpd.GeoDataFrame], aneis: pd.DataFrame,
+                    centro: tuple[float, float], nome_do_centro: str, limites: tuple[float, float, float, float],
+                    legenda: str = "Tempo", com_municipios: bool = True, caminho: Path | None = None,
+                    tela: Tela | None = None) -> Figure:
+    # Os flashes recentes num círculo em volta de um centro (os raios até 1.500 km de Campo Grande),
+    # um ponto por flash na cor do tempo, o mais novo por cima, com os anéis de distância e os
+    # municípios do estado da base (os dois opcionais), os estados do Brasil e os países em volta.
+    # `flashes` tem longitude, latitude e idade (minutos); `limites` é oeste, leste, sul, norte do quadro
+    fig, ax = _nova_figura((14, 14))
+    estados, paises = regiao
+    paises.boundary.plot(ax=ax, linewidth=0.8, color="#7a7a7a")
+    estados.boundary.plot(ax=ax, linewidth=0.5, color="#a0a0a0")
+    if com_municipios:
+        base.municipios.boundary.plot(ax=ax, linewidth=0.3, color="gray")
+    base.uf.boundary.plot(ax=ax, linewidth=1.8, color="black")
+    contorno = [withStroke(linewidth=3, foreground="white")]
+    for anel in aneis.itertuples():
+        caminho_do_anel = np.asarray(anel.caminho)
+        ultimo = anel.Index == len(aneis) - 1
+        ax.plot(caminho_do_anel[:, 0], caminho_do_anel[:, 1], color="#4d4d4d", linewidth=1.3 if ultimo else 0.8,
+                linestyle="-" if ultimo else "--", zorder=3)
+        ax.text(anel.lon_rotulo, anel.lat_rotulo + 0.35, anel.rotulo, ha="center", va="bottom",
+                fontsize=_corpo(tela) * 0.9, color="#333333", zorder=6, path_effects=contorno)
+    # Com os logos embaixo à direita (só no do relatório: na tela eles não saem), a legenda fica acima deles
+    _, topo_dos_logos = _logos_embaixo(base) if tela is None else (0.0, 0.0)
+    _flashes_por_tempo(ax, flashes, idades, rotulos, legenda, 3 if tela is None else 7, tela,
+                       acima_de=topo_dos_logos + MARGEM_DOS_LOGOS_EMBAIXO if topo_dos_logos else 0.0)
+    ax.plot(*centro, marker="*", color="black", markeredgecolor="white", markersize=14, zorder=7)
+    ax.text(centro[0] + 0.4, centro[1] + 0.3, nome_do_centro, fontsize=_corpo(tela), weight="bold", zorder=7,
+            path_effects=contorno)
+    ax.set_aspect(1 / np.cos(np.radians(centro[1])))
+    return _finalizar(fig, ax, espec, base, caminho, tela, limites=limites, logos_embaixo=True)
+
+
+def mapa_de_flashes(flashes: pd.DataFrame, idades: list[tuple[int, str]], rotulos: list[str], espec: EspecMapa,
+                    base: BaseCartografica, legenda: str = "Tempo", caminho: Path | None = None,
+                    tela: Tela | None = None) -> Figure:
+    # Os flashes recentes no quadro do estado (o Agora com o alcance do estado), um ponto por flash na
+    # cor do tempo, sobre os municípios, como os outros mapas do boletim. Só os de dentro do quadro: a
+    # contagem da legenda é a do que aparece
+    oeste, leste, sul, norte = base.recorte.limites
+    no_quadro = flashes["longitude"].between(oeste, leste) & flashes["latitude"].between(sul, norte)
+    fig, ax = _nova_figura((14, 12))
+    _desenhar_limites(ax, base)
+    _flashes_por_tempo(ax, flashes[no_quadro], idades, rotulos, legenda, 9 if tela is None else 20, tela)
+    return _finalizar(fig, ax, espec, base, caminho, tela)
+
+
+def _flashes_por_tempo(ax, flashes: pd.DataFrame, idades: list[tuple[int, str]], rotulos: list[str], legenda: str,
+                       tamanho: float, tela: Tela | None, acima_de: float = 0.0) -> None:
+    # Um ponto por flash na cor da sua faixa de tempo, do mais velho ao mais novo (o mais novo fica por
+    # cima), e a legenda com quantos flashes há em cada faixa: no canto de baixo à direita, ou, com
+    # `acima_de` (fração da altura do mapa), logo acima disso
+    marcas, anterior = [], 0
+    for (limite, cor), rotulo in zip(idades, rotulos):
+        da_faixa = flashes[(flashes["idade"] >= anterior) & (flashes["idade"] < limite)]
+        marcas.append((da_faixa, cor, f"{rotulo} ({len(da_faixa):,})".replace(",", ".")))
+        anterior = limite
+    for da_faixa, cor, _ in reversed(marcas):
+        ax.scatter(da_faixa["longitude"], da_faixa["latitude"], s=tamanho, color=cor, linewidths=0, zorder=4,
+                   rasterized=True)
+    marcas_da_legenda = [Line2D([0], [0], marker="o", linestyle="", color=cor, markersize=9, label=texto)
+                         for _, cor, texto in marcas]
+    ax.legend(handles=marcas_da_legenda, loc="lower right", title=legenda, fontsize=_corpo(tela),
+              title_fontsize=_corpo(tela), framealpha=0.9,
+              **({"bbox_to_anchor": (1.0, acima_de)} if acima_de else {}))
+
+
+def _logos_embaixo(base: BaseCartografica) -> tuple[float, float]:
+    # Quanto descer os logos para o canto de baixo (mantendo o arranjo deles) e onde fica o topo deles
+    # depois disso, em fração da altura do mapa
+    if not base.logos:
+        return 0.0, 0.0
+    descida = min(retangulo[1] for _, retangulo in base.logos) - MARGEM_DOS_LOGOS_EMBAIXO
+    return descida, max(retangulo[1] + retangulo[3] for _, retangulo in base.logos) - descida
+
+
 # =====================================================
 # ELEMENTOS COMUNS DOS MAPAS
 # =====================================================
+def o_maior_de_cada_grupo(pontos: pd.DataFrame, coluna: str, km: float) -> pd.DataFrame:
+    # Das estações a até `km` umas das outras (calculos.grupos_de_vizinhas), só a de maior valor, no
+    # lugar dela. As linhas ficam na ordem em que vieram
+    if km <= 0 or len(pontos) < 2:
+        return pontos
+    grupo = calculos.grupos_de_vizinhas(pontos["Longitude"], pontos["Latitude"], km)
+    maiores = pd.Series(pontos[coluna].to_numpy(dtype=float)).groupby(grupo).idxmax()
+    return pontos.iloc[sorted(maiores)]
+
+
 def preparar_pontos(tabela: pd.DataFrame | None, coluna: str, descricao: str = "") -> gpd.GeoDataFrame | None:
-    """Tabela de estações como GeoDataFrame, sem as linhas a que falta o valor ou as coordenadas."""
     if tabela is None or tabela.empty:
         print(f"⚠️ Sem dados para o mapa: {descricao}")
         return None
@@ -394,17 +486,14 @@ def _preparar_dados(tabela: pd.DataFrame | None, espec: EspecMapa) -> gpd.GeoDat
 
 
 def _recortar(grade, base: BaseCartografica):
-    """Esconde as células da grade que ficam fora do estado."""
     return np.ma.masked_where(~base.dentro_uf, grade)
 
 
 def _classes(valores: pd.Series, espec: EspecClasses) -> pd.Series:
-    """Valores convertidos em índice de classe, sem sair da faixa de cores disponível."""
     return valores.astype(int).clip(0, len(espec.cores) - 1)
 
 
 def _legenda_classes(ax, espec: EspecClasses, classes: pd.Series) -> None:
-    """Legenda com uma entrada por classe e quantas estações caíram em cada uma."""
     entradas = [
         Patch(facecolor=cor, edgecolor="black", label=f"{rotulo} — {int((classes == indice).sum())} estações")
         for indice, (cor, rotulo) in enumerate(zip(espec.cores, espec.rotulos))
@@ -413,10 +502,6 @@ def _legenda_classes(ax, espec: EspecClasses, classes: pd.Series) -> None:
 
 
 def _desenhar_indicadores(ax, gdf, indicadores: Indicadores) -> None:
-    """Um ponto por indicador verdadeiro, abaixo da estação, e a legenda dos indicadores no canto inferior direito.
-
-    A posição de cada indicador é fixa: mesmo quem não distingue as cores identifica qual ponto é qual.
-    """
     quantidade = len(indicadores.colunas)
     for posicao, (coluna, cor) in enumerate(zip(indicadores.colunas, indicadores.cores)):
         marcadas = gdf[gdf[coluna].astype(bool)]
@@ -434,13 +519,11 @@ def _desenhar_indicadores(ax, gdf, indicadores: Indicadores) -> None:
 
 
 def _formato(espec: EspecMapa):
-    """Formatação dos números do mapa (rótulos e ranking), com as casas decimais da especificação."""
     sinal = "+" if getattr(espec, "com_sinal", False) else ""
     return f"{{:{sinal}.{espec.decimais}f}}".format
 
 
 def _classes_desiguais(niveis) -> bool:
-    """Se os níveis são classes (poucos, dados um a um) de larguras diferentes, como os da chuva."""
     if not np.ndim(niveis) or len(niveis) > MAX_CLASSES:
         return False
     larguras = np.diff(np.asarray(niveis, dtype=float))
@@ -448,19 +531,15 @@ def _classes_desiguais(niveis) -> bool:
 
 
 def _so_acima(niveis) -> bool:
-    """Se a escala só estende para cima — é o caso da chuva, onde abaixo da primeira classe não
-    choveu, e pintar isso de azul claro inventaria chuva que não houve."""
     return bool(np.ndim(niveis)) and float(np.min(niveis)) > 0
 
 
 def _faixa_de_cores(valores: pd.Series) -> tuple[float, float]:
-    """Mínimo e máximo da escala de cores. Se todos os valores forem iguais (ex.: dia sem chuva), abre a escala em 1."""
     vmin, vmax = float(valores.min()), float(valores.max())
     return (vmin, vmax) if vmax > vmin else (vmin, vmin + 1.0)
 
 
 def _caminho_matplotlib(geometria) -> mpath.Path:
-    """Converte um Polygon ou MultiPolygon em caminho do matplotlib, usado para recortar desenhos."""
     aneis = []
     for poligono in getattr(geometria, "geoms", [geometria]):
         aneis += [poligono.exterior, *poligono.interiors]
@@ -484,13 +563,6 @@ def _desenhar_limites(ax, base: BaseCartografica) -> None:
 
 
 def _rotular(ax, gdf, textos, tamanho_fonte, cor, fundo, borda, opacidade, halo=False) -> None:
-    """Escreve o valor sobre cada estação.
-
-    Com `halo`, o texto vai sem caixa, contornado pela cor que seria o fundo. É o que a tela
-    pede: num mapa do tamanho de uma coluna, com 62 estações, o que cobre a estação vizinha é a
-    **caixa**, não a letra — o contorno segura a leitura e devolve o mapa por baixo. No
-    relatório, onde o mapa ocupa a folha inteira, a caixa continua.
-    """
     contorno = [withStroke(linewidth=max(2.0, tamanho_fonte / 3), foreground=fundo)] if halo else None
     caixa = (None if halo else
              dict(boxstyle="round,pad=0.15", facecolor=fundo, edgecolor=borda, alpha=opacidade))
@@ -501,7 +573,6 @@ def _rotular(ax, gdf, textos, tamanho_fonte, cor, fundo, borda, opacidade, halo=
 
 
 def _ranking(ax, gdf, espec: EspecMapa, tamanho_fonte, sufixos=None) -> None:
-    """Caixa com as 5 estações de maiores (ou menores) valores, ou de maiores desvios, nas anomalias."""
     if getattr(espec, "ranking_absoluto", False):
         extremos = gdf.loc[gdf[espec.coluna].abs().nlargest(5).index]
     else:
@@ -509,18 +580,15 @@ def _ranking(ax, gdf, espec: EspecMapa, tamanho_fonte, sufixos=None) -> None:
     texto = f"{espec.ranking}:\n"
     for indice, linha in extremos.iterrows():
         sufixo = sufixos[indice] if sufixos is not None else ""
-        texto += f"{linha['Estação']}: {_formato(espec)(linha[espec.coluna])}{sufixo}\n"
+        # Sem o "CEMADEN · ": o nome longo alargava o quadro por cima do mapa, e o crédito já diz a rede
+        nome = str(linha["Estação"]).removeprefix(config.PREFIXO_CEMADEN)
+        texto += f"{nome}: {_formato(espec)(linha[espec.coluna])}{sufixo}\n"
     ax.text(0.97, 0.04, texto, transform=ax.transAxes, ha="right", va="bottom",
             fontsize=tamanho_fonte, weight="bold",
             bbox=dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor="black", alpha=0.9))
 
 
 def _desenhar_setas_vento(ax, gdf, coluna: str, tela: "Tela | None" = None) -> None:
-    """Setas apontando para onde o vento sopra; comprimento proporcional ao valor do mapa.
-
-    A medida é a coluna que o próprio mapa mostra — a rajada no mapa de rajadas, a velocidade no
-    de velocidade —, para a seta não crescer por um número que não está ali.
-    """
     for _, linha in gdf[gdf["Direção (°)"].notna()].iterrows():
         angulo = np.radians(linha["Direção (°)"])
         comprimento = 0.4 * min(linha[coluna] / 50.0, 1.5)
@@ -532,30 +600,27 @@ def _desenhar_setas_vento(ax, gdf, coluna: str, tela: "Tela | None" = None) -> N
 
 
 def _corpo(tela: "Tela | None") -> float:
-    """Corpo do texto que sobra no mapa: maior na tela, porque a figura vai ser encolhida."""
     return 10 * (tela.escala_texto if tela else 1)
 
 
 def _corpo_rotulo(tamanho: float, tela: "Tela | None") -> float:
-    """Corpo do valor escrito em cada estação, ampliado quando o mapa vai ser visto pequeno."""
     return tamanho * (tela.escala_rotulos if tela else 1)
 
 
 def _finalizar(fig, ax, espec, base: BaseCartografica, caminho: Path | None,
-               tela: "Tela | None" = None) -> Figure:
-    """Limites, moldura (título e logos) e, se vier caminho, gravação do PNG.
-
-    Com `tela`, sai só o mapa: título e logos institucionais tomariam o lugar do desenho numa
-    miniatura. O relatório, que não passa `tela`, continua saindo com tudo.
-    """
+               tela: "Tela | None" = None, limites: tuple[float, float, float, float] | None = None,
+               logos_embaixo: bool = False) -> Figure:
     if tela is None:
         # O título e o subtítulo dizem o quê e quando; de quem é o dado vai numa linha miúda embaixo
-        # do mapa, à direita (até a 0.3.7, o crédito do INMET ia no fim do subtítulo)
+        # do mapa, à direita (até a 0.3.7, o crédito do INMET ia no fim do subtítulo). O rodapé da
+        # espec (a citação do CEMADEN, o aviso do agrupamento) vem nas linhas de baixo
         ax.set_title(f"{espec.titulo}\n{espec.subtitulo}", fontsize=16, weight="bold", pad=20)
-        ax.annotate(f"Dados: {espec.credito}", xy=(1, 0), xycoords="axes fraction", xytext=(0, -30),
+        linhas = [f"Dados: {espec.credito}"] + ([espec.rodape] if getattr(espec, "rodape", "") else [])
+        ax.annotate("\n".join(linhas), xy=(1, 0), xycoords="axes fraction", xytext=(0, -30),
                     textcoords="offset points", ha="right", va="top", fontsize=9, color="#555555")
-    # O enquadramento vem da base, e não do módulo: é a base que sabe de que recorte ela é
-    oeste, leste, sul, norte = base.recorte.limites
+    # O enquadramento vem da base, e não do módulo: é a base que sabe de que recorte ela é. Os mapas
+    # largos (o círculo dos raios) trazem o seu
+    oeste, leste, sul, norte = limites if limites is not None else base.recorte.limites
     ax.set_xlim(oeste, leste)
     ax.set_ylim(sul, norte)
     if tela is None:
@@ -566,9 +631,12 @@ def _finalizar(fig, ax, espec, base: BaseCartografica, caminho: Path | None,
         # e não se lê. Quem precisa de coordenada está olhando o mapa do relatório.
         ax.set_axis_off()
 
-    # Logos posicionados pela moldura do mapa: mesmo lugar e proporção em qualquer tamanho de figura
+    # Logos posicionados pela moldura do mapa: mesmo lugar e proporção em qualquer tamanho de figura. Em
+    # cima à direita, ou (logos_embaixo) no canto de baixo à direita, no mesmo arranjo
+    descida = _logos_embaixo(base)[0] if logos_embaixo else 0.0
     for imagem, retangulo in (base.logos if tela is None else []):
-        eixo_logo = ax.inset_axes(retangulo, zorder=10)
+        x, y, largura, altura = retangulo
+        eixo_logo = ax.inset_axes([x, y - descida, largura, altura], zorder=10)
         eixo_logo.imshow(imagem)
         eixo_logo.set_anchor("NE")
         eixo_logo.axis("off")

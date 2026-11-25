@@ -5,8 +5,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from app import chuva
 from app import dados as coleta
-from modulos import inmet
+from app import variaveis
+from modulos import config, inmet
 from modulos.config import Periodo
 
 DIA = Periodo.de_datas(date(2026, 9, 15), date(2026, 9, 15))
@@ -20,7 +22,6 @@ def cache_temporario(monkeypatch, tmp_path):
 
 @pytest.fixture
 def api_contada(monkeypatch, serie):
-    """Troca a API por dados sintéticos e conta quantas vezes ela foi chamada."""
     chamadas = []
 
     def baixar(codigo, inicio, fim, fuso=None):
@@ -58,7 +59,6 @@ def test_janela_fora_do_cache_baixa_de_novo(cache_temporario, api_contada):
 
 
 def test_alargar_a_janela_baixa_so_o_que_falta(cache_temporario, api_contada):
-    """Antes, pedir a semana tendo o dia guardado baixava a semana inteira de novo."""
     coleta.leituras("A702", *DIA.janela)
     semana = Periodo.de_datas(date(2026, 9, 9), date(2026, 9, 15))
 
@@ -71,7 +71,6 @@ def test_alargar_a_janela_baixa_so_o_que_falta(cache_temporario, api_contada):
 
 
 def test_varias_sai_na_ordem_pedida_e_separa_quem_falhou(cache_temporario, monkeypatch, serie):
-    """Em paralelo a ordem de chegada muda a cada consulta; a do gráfico não pode mudar junto."""
     def baixar(codigo, inicio, fim, fuso=None):
         if codigo == "A999":
             raise inmet.ErroINMET("estação fora do ar")
@@ -87,13 +86,6 @@ def test_varias_sai_na_ordem_pedida_e_separa_quem_falhou(cache_temporario, monke
 
 
 def test_hora_guardada_vazia_e_reconsultada(cache_temporario, monkeypatch, serie):
-    """O INMET publica a linha da hora antes das medidas, e as preenche depois.
-
-    Aconteceu de verdade: o painel mostrou "nenhuma estação mediu" numa tarde inteira e continuou
-    mostrando no dia seguinte, com a API já tendo os valores. Julgar a cobertura pela última
-    *linha* guardava o vazio para sempre — e consultar de novo não adiantava, porque a linha
-    estava lá.
-    """
     chamadas = []
     resposta = serie("2026-09-15", "2026-09-16 05:00")
     medidas = [coluna for coluna in resposta.columns if coluna not in coleta.IDENTIFICACAO]
@@ -113,7 +105,6 @@ def test_hora_guardada_vazia_e_reconsultada(cache_temporario, monkeypatch, serie
 
 
 def test_a_reconferencia_nao_volta_alem_do_teto(cache_temporario, monkeypatch, serie):
-    """Uma estação fora do ar em julho não pode ser rebaixada inteira a cada consulta."""
     vazia = serie("2026-09-15", "2026-09-16 05:00")
     medidas = [coluna for coluna in vazia.columns if coluna not in coleta.IDENTIFICACAO]
     vazia[medidas] = np.nan
@@ -212,11 +203,6 @@ def test_estacao_sem_dados_nao_deixa_arquivo(cache_temporario, monkeypatch):
 
 
 def test_a_hora_local_sai_do_utc_e_nao_do_arquivo(cache_temporario, api_contada):
-    """O cache guarda o que foi baixado uma vez; o fuso é de quem lê.
-
-    Sem isso, o mesmo pickle serviria MS (GMT-04) e o Paraná (GMT-03) com a hora de quem gravou
-    primeiro — uma hora errada em silêncio, que estragaria o fechamento do dia.
-    """
     from zoneinfo import ZoneInfo
 
     em_ms = coleta.leituras("A702", *DIA.janela)
@@ -229,7 +215,6 @@ def test_a_hora_local_sai_do_utc_e_nao_do_arquivo(cache_temporario, api_contada)
 
 
 def test_a_planilha_traz_tudo_o_que_a_api_devolveu():
-    """Quem baixa quer o dado bruto, e não só as grandezas marcadas no filtro da tela."""
     leituras = pd.DataFrame({
         "dt_utc": pd.to_datetime(["2026-09-15 12:00"], utc=True),
         "dt_local": pd.to_datetime(["2026-09-15 08:00"]),
@@ -246,7 +231,6 @@ def test_a_planilha_traz_tudo_o_que_a_api_devolveu():
 
 
 def test_o_csv_leva_a_sigla_do_estado_na_coluna_de_horario():
-    """O CSV do painel tem o mesmo problema da planilha do produto, e a mesma correção."""
     leituras = pd.DataFrame({
         "dt_utc": pd.to_datetime(["2026-09-15 12:00"], utc=True),
         "dt_local": pd.to_datetime(["2026-09-15 09:00"]),
@@ -277,11 +261,6 @@ def test_limpar_cache_remove_os_arquivos(cache_temporario, api_contada):
 @pytest.mark.parametrize("codigos, nomes", [((), ()), (("A702",), ("Campo Grande",))])
 def test_sem_nenhuma_estacao_a_tabela_vazia_ainda_tem_as_horas(cache_temporario, monkeypatch, codigos,
                                                                   nomes):
-    """Sem vizinhas (a lista não veio, ou todas falharam), a tabela sai vazia mas filtrável.
-
-    Uma tabela sem coluna nenhuma derrubava o painel com KeyError: 'dt_local' em quem filtrava
-    pelo horário, por falta de um dado que ele nem ia desenhar.
-    """
     from app import variaveis
     monkeypatch.setattr(inmet, "baixar_dados_estacao", lambda codigo, inicio, fim, fuso=None: None)
     fuso = Periodo.de_datas(date(2026, 9, 17), date(2026, 9, 17)).fuso
@@ -295,3 +274,58 @@ def test_sem_nenhuma_estacao_a_tabela_vazia_ainda_tem_as_horas(cache_temporario,
     assert tabela[tabela["dt_local"] > momento].empty
     assert variaveis.recorte(tabela, variaveis.HORA, momento).empty
     assert variaveis.recorte(tabela, variaveis.DIA, momento.normalize()).empty
+
+
+# =====================================================
+# A CHUVA DO CEMADEN JUNTO DA DO INMET
+# =====================================================
+INICIO_UTC = pd.Timestamp("2026-11-02 04:00", tz="UTC")   # a meia-noite de 02/11 em MS
+FIM_UTC = pd.Timestamp("2026-11-03 04:00", tz="UTC")
+
+
+def horas_de_chuva(chuvas: dict[str, float], desde="2026-11-02 00:00", ate="2026-11-03 23:00") -> pd.DataFrame:
+    # Uma tabela por hora cheia em UTC, como as de fonte.chuva_cemaden e as do INMET; as horas fora de
+    # `chuvas` ficam secas
+    horas = pd.date_range(desde, ate, freq="h", tz="UTC")
+    tabela = pd.DataFrame({"dt_utc": horas,
+                           "CHUVA": [chuvas.get(f"{hora:%Y-%m-%d %H:%M}", 0.0) for hora in horas]})
+    return tabela.assign(dt_local=tabela["dt_utc"].dt.tz_convert(config.FUSO_MS))
+
+
+def test_a_chuva_do_cemaden_vira_uma_tabela_so_com_as_horas_do_periodo_e_o_nome_da_estacao():
+    coletados = [(pd.Series({"Estação": "CEMADEN · Bonito (Centro)"}), horas_de_chuva({})),
+                 (pd.Series({"Estação": "CEMADEN · Campo Grande (Jardim Panamá)"}), horas_de_chuva({}))]
+
+    tabela = coleta.juntar_cemaden(coletados, INICIO_UTC, FIM_UTC)
+
+    assert tabela.groupby("Estação").size().to_dict() == {"CEMADEN · Bonito (Centro)": 24,
+                                                          "CEMADEN · Campo Grande (Jardim Panamá)": 24}
+    assert tabela["dt_utc"].min() == INICIO_UTC + pd.Timedelta(hours=1)   # (início, fim], como o INMET
+    assert tabela["dt_utc"].max() == FIM_UTC
+
+
+def test_sem_estacao_do_cemaden_a_tabela_sai_vazia_mas_com_as_colunas_do_inmet():
+    tabela = coleta.juntar_cemaden([], INICIO_UTC, FIM_UTC)
+
+    assert tabela.empty and {"Estação", "dt_utc", "dt_local"} <= set(tabela.columns)
+
+
+def test_o_pluviometro_do_cemaden_entra_nos_acumulados_e_no_mapa_do_dia_com_o_mesmo_peso_do_inmet():
+    # Campo Grande (INMET) choveu 6 mm no dia de MS; o Jardim Panamá (CEMADEN), 18,4 mm, um deles na
+    # hora das 04:00 UTC, que ainda é o dia 02/11 em MS
+    inmet_cg = horas_de_chuva({"2026-11-02 18:00": 6.0}).assign(Estação="Campo Grande")
+    panama = horas_de_chuva({"2026-11-02 04:00": 0.4, "2026-11-02 05:00": 3.0, "2026-11-02 20:00": 15.0,
+                             "2026-11-03 04:00": 0.4})
+    juntas = pd.concat([inmet_cg[(inmet_cg["dt_utc"] > INICIO_UTC) & (inmet_cg["dt_utc"] <= FIM_UTC)],
+                        coleta.juntar_cemaden([(pd.Series({"Estação": "CEMADEN · Jardim Panamá"}), panama)],
+                                              INICIO_UTC, FIM_UTC)], ignore_index=True)
+    fim_ms = FIM_UTC.tz_convert(config.FUSO_MS).to_pydatetime()
+
+    acumulado = chuva.acumulado(juntas, fim_ms, "24 h")
+    produto = variaveis.por_nome("Chuva acumulada")
+    no_dia = variaveis.por_estacao(produto, variaveis.recorte(juntas, variaveis.DIA,
+                                                              pd.Timestamp("2026-11-02", tz=config.FUSO_MS)))
+
+    assert acumulado.sort_values(ascending=False).round(1).to_dict() == {"CEMADEN · Jardim Panamá": 18.4,
+                                                                        "Campo Grande": 6.0}
+    assert no_dia.round(1).to_dict() == {"Campo Grande": 6.0, "CEMADEN · Jardim Panamá": 18.4}

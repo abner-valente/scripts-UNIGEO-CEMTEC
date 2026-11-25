@@ -5,6 +5,17 @@
 > Open-Meteo em 05 e 06/10, e não tirados da documentação, salvo onde dito. Este documento
 > registra o que foi decidido e por quê. O que já está feito vem marcado na
 > [ordem de trabalho](#ordem-de-trabalho).
+>
+> **Situação em 25/11/2026 (versão 0.4.1):** as decisões continuam valendo, mas a forma mudou:
+> - **o coletor e a tabela** (passo 2) ficaram prontos: `modulos/coletor_previsao.py`, pelo
+>   `python coletar.py previsao`, guarda as rodadas das 00Z e das 12Z na grade de 0,25° e o EC46.
+>   O painel do servidor lê do banco (`FONTE_DADOS=banco`); a nuvem continua sob demanda, a 0,5°;
+> - **as páginas** "Estações", "Mapas" e "Semanas" viraram quatro, uma por assunto: **Mapas**,
+>   **Chuva**, **Risco de Fogo** e **Semanas**, cada uma com o mapa navegável ou o do boletim, e
+>   com os gráficos da estação embaixo do mapa. Vieram também os mapas **hora a hora**, com o
+>   boletim da hora e o GIF.
+>
+> O que o painel faz hoje está no [README](../README.md#previsão-ms).
 
 ## O que muda, em uma frase
 
@@ -124,28 +135,46 @@ Por isso os mapas **não** são feitos interpolando a previsão nos pontos das e
 mostra um núcleo de chuva onde há estação. Os pontos das estações servem aos gráficos de linha e,
 mais tarde, ao previsto contra observado.
 
-**6. Guardar as horas, por rodada, só inserindo, e o diário tirado delas** (decidido em 07/10).
-Duas tabelas, as duas com uma coluna por variável:
+**6. Guardar só as horas, por rodada, só inserindo; o dia, a semana e o mês saem delas**
+(decidido em 07/10; em 09/10, a tabela diária saiu). A previsão horária tem uma coluna por
+variável, e os três modelos ficam juntos, com a coluna `modelo` na chave. A grade e as estações
+ficam em **duas tabelas** com as mesmas colunas (decidido em 09/10), porque têm prazos
+diferentes e a limpeza apaga partições inteiras: numa tabela só, a da grade levaria junto as
+horas das estações. Uma *view* junta as duas para consultar. O EC46 é a exceção e tem tabela
+própria, porque já chega por semana. Tudo no schema `climageo`:
 
 ```
-previsao_horaria
+previsao_horaria_grade     (partições por dia de coleta; apagadas depois de 21 dias)
+previsao_horaria_estacao   (partições por mês; para sempre)
   modelo, rodada_utc, ponto, latitude, longitude, hora_prevista_utc,
   temperatura, umidade, orvalho, chuva, vento, rajada, direcao
   chave: (modelo, rodada_utc, ponto, hora_prevista_utc)
 
-previsao_diaria
-  modelo, rodada_utc, ponto, latitude, longitude, dia_previsto,
-  temp_max, temp_min, temp_media, umid_min, orvalho_medio, chuva, vento_max, rajada_max,
-  direcao_dominante, risco_max
-  chave: (modelo, rodada_utc, ponto, dia_previsto)
+previsao_horaria (view: as duas juntas)
+
+previsao_semanal (o EC46, como chega do Open-Meteo)
+  modelo, rodada_utc, ponto, latitude, longitude, semana,
+  temperatura, anom_temperatura, temp_max, anom_temp_max, temp_min, anom_temp_min,
+  chuva, anom_chuva
+  chave: (modelo, rodada_utc, ponto, semana)
 ```
 
 - **Cada rodada nova é um insert; nada é atualizado.** A "previsão atual" é uma consulta, ou uma
   view, que pega a rodada mais recente de cada modelo. A virada do dia não pede tratamento
   nenhum, e uma busca que falhe no meio não mistura rodadas.
-- **O diário é calculado das horas pelo coletor**, uma vez por rodada, pela regra da decisão 4, e
-  gravado na tabela diária. A mesma função faz isso para todos os pontos: não há duas versões de
-  "máxima do dia". Ele sobrevive à limpeza das horas antigas da grade.
+- **Só as horas, também no INMET** (decidido em 09/10). O dia, a semana e o mês são tirados das
+  horas na hora de ler, e não guardados: uma fonte só, e nenhuma chance de uma tabela diária
+  discordar da horária. Em 07/10 ficou decidido guardar também uma tabela diária da previsão; ela
+  saiu.
+- **A regra do dia continua sendo uma só, a do Python** (`openmeteo.diario`,
+  `previsao.diario_com_risco` e o catálogo `app/variaveis.py`), que o painel e os produtos já
+  usam. Para olhar dias e meses direto no DBeaver, o banco ganha *views*, com um teste que confere
+  que elas dão o mesmo que o Python. Sem o teste, seriam duas versões da "máxima do dia".
+- **Apagada a hora, vai junto o dia.** A grade guarda 21 dias de horas, e depois disso o dia
+  dela não existe mais. A previsão nas estações fica para sempre, e é dela o previsto contra o
+  observado. Guardar a grade horária por um ano daria uns 50 GB.
+- **O EC46 é guardado por semana, como chega.** A anomalia vem calculada contra a normal do
+  modelo, tirada das reprevisões do ECMWF, e isso não se reconstrói a partir de horas.
 - **O histórico das rodadas fica**: o que cada rodada previa para um dia que já passou. É a base
   do previsto contra observado.
 - **Uma coluna por variável, e não uma linha por variável**, senão as linhas se multiplicam
@@ -157,9 +186,9 @@ Quanto guardar:
 
 | O quê | Prazo | Por quê | Tamanho |
 |---|---|---|---|
-| Grade, horária e diária (0,25°) | **21 dias** | 14 de horizonte + uma semana de folga para conferir a semana que passou com todas as antecedências | ~21 milhões de linhas horárias, ~3 GB |
-| Estações, horária | **para sempre** | permite conferir horários: "a chuva chegou na hora prevista?" | ~37 milhões de linhas e ~4 GB por ano |
-| Estações, diária | **para sempre** | é o que a verificação do dia a dia mais usa | ~1,5 milhão de linhas por ano |
+| Grade, horária (0,25°) | **21 dias** | 14 de horizonte + uma semana de folga para conferir a semana que passou com todas as antecedências | ~21 milhões de linhas, ~3 GB |
+| Estações, horária | **para sempre** | dela saem o dia, a semana e o mês, e permite conferir horários: "a chuva chegou na hora prevista?" | ~37 milhões de linhas e ~4 GB por ano |
+| EC46, semanal (grade e estações) | **para sempre** | é pequena: uma rodada por dia, cinco ou seis semanas por ponto | ~500 mil linhas por ano |
 
 A previsão incha por um motivo próprio: **cada hora futura é guardada uma vez por rodada**. Com 14
 dias de horizonte e duas rodadas por dia, cada hora real fica guardada umas 28 vezes, e esse é o
@@ -178,7 +207,8 @@ cada modelo.
 
 **8. Risco de fogo previsto, hora a hora, das mesmas horas.** A temperatura, a umidade e a
 rajada da regra 30-30-30 estão entre as sete variáveis horárias: não há pedido separado. A regra é
-aplicada **a cada hora**, como no produto, e o pior nível do dia vai para a tabela diária. Ela já
+aplicada **a cada hora**, como no produto, e o pior nível do dia sai das horas, como os outros
+valores do dia. Ela já
 existe em `modulos/produtos/risco_fogo.py` e é usada como está, sem reescrever. Do dia 8 ao 14,
 sem o ICON, sai de dois modelos.
 
@@ -252,7 +282,7 @@ decide de quais rodadas precisa.
    pouco mais da metade das linhas dos outros dois, porque para no dia 7,5.
 2. **A tabela e o coletor**, se o servidor e o banco já existirem. Se não, o cache por rodada no
    painel. **O cache ficou pronto em 08/10**, um por modelo (decisão 11); a tabela e o coletor
-   ficam para a v0.4.x, com o banco.
+   ficam para a v0.4.x, com o banco. **O coletor ficou pronto em 14/10** (entrou na 0.4.1).
 3. **Gráficos de linha por estação**, com as contas em `app/previsao.py` e a página no
    `explorador.py`. Os três modelos lado a lado. É o passo mais barato, e o que
    mostra se a fonte serve. **Feito em 08/10**: temperatura, umidade, ponto de orvalho, vento,
@@ -294,8 +324,8 @@ decide de quais rodadas precisa.
      80 mm. O ranking do boletim é o dos **maiores desvios do normal**, para cima ou para baixo.
 6. **Risco de fogo previsto.** **Feito em 08/10**:
    - a regra é a do produto (`risco_fogo.condicoes_atendidas`), sem reescrever, aplicada a cada
-     hora prevista; o dia segue a regra do produto (`dia_da_leitura`). A tabela diária ganha o
-     `risco_max` da decisão 6 e as horas em risco alto (`app/previsao.diario_com_risco`);
+     hora prevista; o dia segue a regra do produto (`dia_da_leitura`). O dia ganha o pior nível
+     (`risco_max`) e as horas em risco alto, tirados das horas (`app/previsao.diario_com_risco`);
    - nos **Mapas**, o pior nível do dia e as horas em risco alto. A superfície é feita como o
      produto faz: em cada hora, as três variáveis viram superfície (bilinear) e a regra é
      aplicada em cada célula. Aplicar a regra nos 178 pontos e interpolar o nível daria degraus
@@ -312,11 +342,12 @@ sua tabela: o INMET do Brasil inteiro, de hora em hora, e o Open-Meteo de MS. O 
 ainda está aberto.
 
 Em 07/10 ficaram definidos mais dois pontos:
-- **O banco é PostgreSQL**, versão 11.14, com PostGIS. O particionamento por dia de coleta usa o
+- **O banco é PostgreSQL**, versão 16.3, com PostGIS 3.4.4 (corrigido em 09/10: a consulta de
+  07/10, que dava o 11.14, tinha sido feita noutro banco). O particionamento por dia de coleta usa o
   particionamento nativo dele, e é o coletor quem cria e apaga as partições, porque o banco não tem
   `pg_partman` nem `pg_cron` (detalhes em [`plano_arquitetura.md`](plano_arquitetura.md)).
-  As rodadas entram em lote (`COPY`), porque são ~500 mil linhas cada. A atualização das últimas
-  48 h do INMET usa `INSERT ... ON CONFLICT DO UPDATE`.
+  As rodadas entram em lote (`COPY`), porque são ~500 mil linhas cada. A atualização dos últimos
+  3 dias do INMET (eram 48 h até 09/10) usa `INSERT ... ON CONFLICT DO UPDATE`.
 - **O `Dockerfile` e o `docker-compose.yml` ficariam no repositório**, com o painel e os
   coletores. **Adiado no mesmo dia:** a VM é Windows e o Docker não está rodando nela. Por ora, o
   painel e os coletores rodam direto no Windows, pelo Agendador de Tarefas (passo 8 do plano). O
@@ -324,9 +355,10 @@ Em 07/10 ficaram definidos mais dois pontos:
 
 A ordem de execução dessa parte está em [`plano_arquitetura.md`](plano_arquitetura.md). Os
 arquivos novos dela: `modulos/banco.py` (o único que fala SQL), `modulos/fonte.py` (lê
-da API ou do banco), `coletores/coletar_inmet.py`, `coletores/coletar_previsao.py`,
-`banco/esquema.sql`, e o `Dockerfile` e o `docker-compose.yml` quando houver Docker no
-servidor.
+da API ou do banco), os coletores, `banco/esquema.sql`, e o `Dockerfile` e o
+`docker-compose.yml` quando houver Docker no servidor. Os coletores saíram como
+`modulos/coletor_inmet.py` e `modulos/coletor_previsao.py`, chamados pelo `coletar.py` da raiz,
+e não numa pasta `coletores/`.
 
 - **A busca da decisão 7 é o coletor do Open-Meteo**, e a tabela da decisão 6 é a dele.
 - **Se o servidor e o banco chegarem antes do passo 4**, os mapas já nascem lendo do banco. O

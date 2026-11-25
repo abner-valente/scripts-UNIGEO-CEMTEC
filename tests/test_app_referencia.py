@@ -35,7 +35,7 @@ def test_a_tabela_e_numerada_em_ordem_alfabetica_com_o_municipio_de_cada_estacao
 
 
 def test_vale_o_municipio_do_comeco_do_nome_e_senao_o_do_ponto():
-    """A estação de Miranda que cai do lado de Dourados é de Miranda; Nhumirim, que não é município, fica no do ponto."""
+    # A estação de Miranda que cai do lado de Dourados é de Miranda; Nhumirim, que não é município, fica no do ponto.
     limites = pd.concat([municipios(), gpd.GeoDataFrame({"Municipio": ["Miranda"]},
                                                         geometry=[shapely.box(-57.0, -21.0, -56.5, -20.5)],
                                                         crs="EPSG:4326")], ignore_index=True)
@@ -64,6 +64,39 @@ def test_a_busca_ignora_acento_e_maiuscula_e_olha_nome_municipio_e_codigo():
     assert tabela[referencia.procurar(tabela, "dourados")]["Estação"].tolist() == ["Dourados", "Rio Brilhante"]
     assert tabela[referencia.procurar(tabela, "a721")]["Estação"].tolist() == ["Dourados"]
     assert referencia.procurar(tabela, "  ").all()
+
+
+def pluviometros() -> pd.DataFrame:
+    # Como fonte.estacoes_cemaden: o nome com o município, e a instalação sem fuso
+    return pd.DataFrame({
+        "CD_ESTACAO": ["500320701A", "500370201A"],
+        "Estação": ["CEMADEN · Dourados (Centro)", "CEMADEN · Corumbá (Cravo Vermelho)"],
+        "VL_LATITUDE": [-22.22, -19.00], "VL_LONGITUDE": [-54.80, -57.65],
+        "DT_INICIO_OPERACAO": pd.to_datetime(["2015-04-01 00:00", "2015-03-30 14:14"]),
+    })
+
+
+def test_o_pluviometro_do_cemaden_leva_a_rede_e_o_municipio_do_nome():
+    tabela = referencia.tabela_de_referencia(pluviometros(), municipios(), rede="CEMADEN")
+
+    assert tabela["Estação"].tolist() == ["CEMADEN · Corumbá (Cravo Vermelho)", "CEMADEN · Dourados (Centro)"]
+    assert tabela["Rede"].tolist() == ["CEMADEN", "CEMADEN"]
+    assert tabela["Município"].tolist() == ["Corumbá", "Dourados"]
+    assert tabela["Em operação desde"].tolist() == ["30/03/2015", "01/04/2015"]   # a data sem fuso é de Brasília
+    assert tabela["Altitude (m)"].isna().all()
+
+
+def test_as_duas_redes_numa_lista_so_o_inmet_primeiro_e_os_numeros_em_sequencia():
+    inmet = referencia.tabela_de_referencia(estacoes(), municipios())
+    cemaden = referencia.tabela_de_referencia(pluviometros(), municipios(), rede="CEMADEN")
+
+    juntas = referencia.com_o_cemaden(inmet, cemaden)
+
+    assert list(juntas.columns) == referencia.COLUNAS
+    assert juntas["Nº"].tolist() == [1, 2, 3, 4, 5]
+    assert juntas["Rede"].tolist() == ["INMET"] * 3 + ["CEMADEN"] * 2
+    assert referencia.com_o_cemaden(inmet, cemaden.iloc[0:0]) is inmet
+    assert referencia.procurar(juntas, "cemaden").tolist() == [False] * 3 + [True] * 2
 
 
 def test_sem_estacoes_a_tabela_sai_vazia_com_as_colunas():

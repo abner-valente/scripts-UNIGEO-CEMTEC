@@ -9,7 +9,7 @@
 
 ```mermaid
 flowchart LR
-    APIs["APIs<br/>INMET e Open-Meteo"] --> Coletores
+    APIs["APIs<br/>INMET, Open-Meteo e PED do CEMADEN"] --> Coletores
     subgraph IMASUL["Rede do IMASUL"]
         Coletores["Coletores<br/>agendados"] --> Banco["PostgreSQL"]
         Banco --> Painel["Painel interno"]
@@ -19,8 +19,10 @@ flowchart LR
     API -->|"HTTPS com chave"| Nuvem["App no Streamlit Cloud"]
 ```
 
-- **Os coletores** buscam no INMET (o Brasil inteiro, de hora em hora) e no Open-Meteo (MS, duas
-  vezes por dia) e gravam no banco.
+- **Os coletores** buscam no INMET (o Brasil inteiro, de hora em hora), no Open-Meteo (MS, as
+  rodadas das 00Z e das 12Z, conferidas de hora em hora) e na PED do CEMADEN (os pluviômetros de
+  MS, de hora em hora), e gravam no banco. Desde a 0.4.1, um quarto coletor conta os raios do GOES
+  que o script de um colega já grava no mesmo banco.
 - **O painel interno** lê o banco direto.
 - **A API de leitura** atende o `main.py` nas máquinas da equipe e, se a gerência e a TI aprovarem,
   o app do Streamlit Cloud. O banco nunca fica exposto.
@@ -41,41 +43,39 @@ nuvem continuam indo direto às APIs.
 |---|---|
 | A VM | **Windows**, com acesso do programador. **O Docker não está rodando nela**: por ora, o painel e os coletores rodam direto no Windows (ver abaixo) |
 | A VM alcança o INMET | **sim** |
+| A VM alcança o banco | **sim** (09/10): uma aplicação que já roda nela usa o banco |
 | A VM alcança o Open-Meteo | **sim** (09/10): os quatro endereços que o painel usa (a previsão, a API sazonal e os metadados das duas) responderam HTTP 200 no PowerShell, com `Invoke-WebRequest`. Se o Python falhar lá mais tarde, é o proxy, que ele lê de outro lugar |
 | Versão do Windows da VM | **Windows Server 2022** (09/10): recente o bastante para o Python 3.14 |
-| Versão do PostgreSQL e extensões disponíveis | **PostgreSQL 11.14**, com **PostGIS 2.5.3** instalado; sem `pg_partman`, `pg_cron` nem `timescaledb` (ver abaixo) |
+| Versão do PostgreSQL e extensões disponíveis | **PostgreSQL 16.3**, com **PostGIS 3.4.4** ativo; sem `pg_partman`, `pg_cron` nem `timescaledb` (09/10, ver abaixo) |
 | Quem cria e mantém a API de leitura | **o programador**, na máquina host, que alcança o banco e a VM ao mesmo tempo |
 | A TI aceita publicar a API por HTTPS para fora? | **sim** (09/10). Fica a "opção 2 com API"; a opção 3 (cópia na nuvem) sai da mesa |
 | A gerência quer uma versão externa? | **sim** (09/10). A fase 4 vai até o passo 11, a publicação para fora |
 
 ### O que a versão do banco muda
 
-Consultado em 07/10: **PostgreSQL 11.14** (Red Hat, 64 bits), com **PostGIS 2.5.3** e nenhuma
-outra das extensões procuradas.
+Consultado em 09/10 pela conexão de teste: **PostgreSQL 16.3** (Linux, 64 bits), com o **PostGIS
+3.4.4** ativo no banco (e o `postgis_raster` e o `postgis_topology`). A consulta de 07/10, que
+dava o 11.14 com o PostGIS 2.5.3, tinha sido feita noutro banco, que não é o do projeto.
 
-**O que a 11 já tem e o plano usa:**
+**O que a 16 tem e o plano usa:**
 - tabelas particionadas, com chave primária na tabela inteira e `INSERT ... ON CONFLICT`
-  funcionando nelas. É o que permite atualizar as últimas 48 h do INMET;
+  funcionando nelas. É o que permite atualizar os últimos 3 dias do INMET;
 - `COPY` direto na tabela particionada;
-- índices BRIN, pequenos e bons para tabelas que só crescem no tempo.
+- partições que se desanexam sem travar a tabela (`DETACH PARTITION ... CONCURRENTLY`): a
+  limpeza da grade não segura quem está lendo;
+- colunas calculadas pelo banco: a geometria de cada estação sai da latitude e da longitude;
+- chaves estrangeiras apontando para tabelas particionadas.
 
-**O que muda no jeito de fazer:**
+**O que continua igual:**
 - **Sem `pg_partman` e sem `pg_cron`, quem cuida das partições é o coletor.** A cada execução ele
-  cria as partições dos próximos dias e apaga as que passaram do prazo. O agendamento fica no
-  servidor, junto dos coletores, e não no banco.
-- **Três limites da 11 que o desenho respeita:**
-  - partição se apaga de uma vez, porque desanexar sem travar só chegou na 14; a limpeza segura
-    a tabela por um instante, de madrugada;
-  - não há colunas calculadas pelo banco, que só chegaram na 12;
-  - outras tabelas não podem apontar (chave estrangeira) para uma tabela particionada; isso só
-    chegou na 12.
+  cria as partições que vêm e apaga as que passaram do prazo. O agendamento fica no servidor,
+  junto dos coletores, e não no banco.
 - **O PostGIS é um bônus, não uma dependência.** Ele permite guardar estações e pontos da grade
   com geometria e perguntar, por exemplo, quais caem dentro de MS.
+- **O fuso do servidor é `America/Cuiaba`**, o mesmo de MS. As horas são gravadas com fuso
+  (`timestamptz`), em UTC, e o fuso do servidor não muda nada nelas.
 
-**Um alerta para a TI:** o PostgreSQL 11 está fora de suporte desde novembro de 2023 e não recebe
-mais correções de segurança. O banco continua fechado para fora em todas as opções, e é a API que
-vai para a internet na fase 4. Mesmo assim, vale recomendar uma atualização (14 ou mais nova) em
-algum momento. O plano não depende dela.
+A 16 tem suporte até novembro de 2028.
 
 ## Fase 1: a fundação, sem mudar nada para a equipe
 
@@ -83,6 +83,7 @@ algum momento. O plano não depende dela.
 passam a pedir os dados a ele, e não mais direto ao INMET.
 - *Como confirmar:* rodar os dois produtos antes e depois; as saídas têm de ser idênticas, pixel a
   pixel e célula a célula.
+- *Feito na 0.3.1.* Um teste falha se um produto ou o painel pedir dados direto ao `inmet.py`.
 
 **2. `modulos/openmeteo.py` e os testes.** É o passo 1 do escopo da v0.3.1: os pontos da grade e
 das estações, os três modelos, a rodada e os pedidos de até 600 chamadas por minuto.
@@ -95,38 +96,123 @@ das estações, os três modelos, a rodada e os pedidos de até 600 chamadas por
 ## Fase 2: o banco e os coletores
 
 **3. `banco/esquema.sql` e `modulos/banco.py`.**
-- As tabelas: o cadastro de estações, as leituras do INMET, a previsão horária e a previsão
-  diária, com as partições por dia de coleta.
+- As tabelas: o cadastro de estações, as leituras horárias do INMET, a previsão horária em duas
+  tabelas (a da grade, com partições por dia de coleta, apagadas depois de 21 dias; a das
+  estações, com partições por mês, para sempre; uma *view* junta as duas) e as semanas do EC46. **Só as horas** (decidido em 09/10): o dia,
+  a semana e o mês saem delas na leitura, pela regra do Python. Para o DBeaver, *views* de dias e
+  meses, com um teste que confere que dão o mesmo que o Python. O EC46 é a exceção: chega por
+  semana, com a anomalia já calculada, e é guardado assim.
+- **Tudo num schema próprio, `climageo`** (decidido em 09/10).
 - Dois usuários no banco: um que grava, para os coletores, e um que só lê, para a API e o painel.
-- A gravação em lote (`COPY`) e a atualização das últimas 48 h do INMET.
-- *Como confirmar:* testes contra um PostgreSQL de verdade, que o GitHub Actions sobe só para os
-  testes.
+  **Eles já existem** (09/10), e quem os administra é o programador. Um cuidado: o coletor cria e
+  apaga as partições sozinho, e o PostgreSQL só deixa fazer isso o dono da tabela; as tabelas
+  devem ser criadas pelo usuário que grava, ou passadas para ele.
+- A gravação em lote (`COPY`) e a atualização dos últimos 3 dias do INMET.
+- **A bateria e a sensação térmica** (`TEN_BAT`, `TEM_SEN`, `TEM_CPU`) não vêm no endereço do
+  INMET por hora. O coletor as busca por estação **uma vez por dia** (decidido em 09/10), só nas
+  estações que têm leitura no banco: umas 520 consultas a mais por dia.
+- **Feito em 09/10, na v0.4.1:** o `banco/esquema.sql` e o `modulos/banco.py`, com 15 testes que
+  passam contra o `climageo_teste` no servidor de verdade. Uma rodada real da grade do ECMWF
+  (59.808 linhas) grava em 1,3 s, volta em 0,2 s e ocupa 12 MB, com o índice: uns 200 bytes por
+  linha. Na grade de 0,25° com duas rodadas por dia, os 21 dias ficam em ~4 GB (o escopo
+  estimava ~3 GB); com as quatro rodadas de cada modelo, em ~8 GB. O passo 5 decide quais rodadas
+  o coletor guarda. No passo 4, as coordenadas da previsão passaram a `double precision`, para as
+  das estações (8 casas) voltarem exatas: a mesma rodada ficou em 13,5 MB, 226 bytes por linha.
+- *Como confirmar:* testes contra um PostgreSQL de verdade, de dois jeitos: o GitHub Actions sobe
+  um PostgreSQL 16 com PostGIS só para os testes, e na máquina do programador, que é a mesma do
+  DBeaver, os testes usam um schema de teste no servidor de verdade (`climageo_teste`), com a
+  conexão no `.env`.
 
 **4. O coletor do INMET**, em três passos:
 1. Testar o endereço que devolve todas as estações de uma hora (`/estacao/dados/{data}/{hora}`).
-   Ele não é documentado: os dados dele têm de bater com os da consulta por estação.
-2. O coletor de hora em hora, que rebusca as últimas 48 h e atualiza o que mudou.
-3. A carga do histórico. Desde 2018 são umas 70 mil consultas de ~1 s: algumas horas de
-   execução, uma vez só.
+   Ele não é documentado: os dados dele têm de bater com os da consulta por estação. **Feito em
+   09/10:** com o token, 740 estações de uma hora em 0,8 s. Os valores batem com a consulta por
+   estação, salvo a radiação, que vem com três casas em vez de uma. Faltam três campos: a
+   sensação térmica, a bateria e a temperatura do processador (ver o passo 3).
+2. O coletor de hora em hora, que rebusca os últimos 3 dias e atualiza o que mudou. **Eram 48 h;
+   em 09/10 passaram a 72**, para pegar a leitura que chega ou é corrigida no terceiro dia.
+3. A carga do histórico. Desde 2018 são umas 77 mil consultas (uma por hora, para o
+   Brasil inteiro): umas 22 horas de execução, a uma consulta por segundo, uma vez só.
+
+**Feito em 09/10, na v0.4.1:** o `modulos/coletor_inmet.py` e o `coletar.py` (`python coletar.py
+inmet`, `--extras` e `--historico DATA`), com o `servidor\coletar.bat` para o Agendador. Medido
+contra o INMET de verdade, gravando no `climageo_teste`:
+- as 48 horas, em 49 s: ~24 mil leituras de ~520 estações. Rodando de novo, nada é reescrito.
+  Com os 3 dias, são 72 consultas a cada hora (1.728 por dia, 576 a mais), em ~75 s;
+- dois dias de histórico, em 50 s. A carga grava dia a dia e, interrompida, retoma pelas horas
+  que faltam;
+- a bateria das 523 estações com leitura, em 8,8 min, sem nenhuma falha;
+- **o banco devolve o mesmo número que a API**: nas 58 estações de MS com dado em 08/10, os 26.388
+  valores do dia (as medidas da consulta por hora e a bateria) voltaram do banco iguais, bit a bit,
+  aos da consulta por estação, que é a que o painel e o `main.py` usam. É o que o passo 7 vai exigir;
+- **196 bytes por linha**, com os índices: o histórico desde 2018 (~38 milhões de linhas) deve
+  ocupar ~7,5 GB, e cada ano a mais, ~0,9 GB;
+- a consulta por hora traz também as estações que já fecharam, e com dado: em 01/01/2018 eram 519
+  estações com leitura, 29 delas fora da lista atual do INMET. Elas entram no cadastro pelo que a
+  consulta por hora traz. Em 2008 já havia 259 estações com dado, e em 2000, 3: cada ano antes de
+  2018 custa ~8.800 consultas (~2,5 h), se a equipe quiser ir mais longe.
+
+**Se o terceiro dia compensa, o passo 6 diz.** O banco anota quando cada hora entrou ou mudou
+(`coletada_em`), e a hora que só a rebusca do terceiro dia pegou é a que entrou ou mudou com mais
+de 48 h de idade:
+
+```sql
+SELECT count(*), count(DISTINCT estacao) FROM climageo.inmet_horaria
+WHERE coletada_em - hora_utc BETWEEN interval '48 hours' AND interval '73 hours';
+```
+
+Se depois de alguns dias isso der quase nada, volta-se a 48 h; se der muito, vale olhar até onde
+os atrasos chegam, e talvez uma rebusca mais funda, uma vez por dia.
+
+Duas descobertas que moldaram o coletor:
+- **O INMET aceita 100 consultas por minuto de cada endereço de rede**, e não por token: esgotadas
+  as 100, até a lista de estações, que nem usa token, é recusada. Passado o limite, ele responde
+  HTTP 200 com um aviso no lugar do JSON, por até um minuto. Tudo o que sai do mesmo endereço
+  divide as 100: o coletor e, se a rede da unidade sair por um endereço só, o `main.py` da equipe.
+  Por isso o coletor faz no máximo uma consulta por segundo (60 das 100), e a recusa espera o
+  minuto virar, sem contar como falha. **A carga do histórico deve rodar à noite ou num fim de
+  semana**: a 60 consultas por minuto, ela deixa só 40 para a equipe. Ela pode ser interrompida e
+  retomada noite após noite.
+- **O servidor do banco derruba a conexão parada no meio de uma transação por 5 minutos, e a
+  parada à toa por 10** (`idle_in_transaction_session_timeout` e `idle_session_timeout`). Por isso
+  as leituras do `banco.py` não deixam transação aberta, a bateria é gravada de 50 em 50
+  estações, e a carga do histórico, se a conexão cair mesmo assim (o INMET lento por 10 minutos,
+  a máquina dormindo), reconecta e retoma pelas horas que faltam.
 
 **5. O coletor do Open-Meteo.** Confere a rodada mais recente de cada modelo, busca se ela ainda
-não está no banco, grava a horária e a diária, e apaga as partições que passaram de 21 dias na
-grade.
+não está no banco, grava as horas (e, uma vez por dia, as semanas do EC46), e apaga as
+partições que passaram de 21 dias na grade.
+
+**Feito em 14/10 (entrou na 0.4.1):** o `modulos/coletor_previsao.py` (`python coletar.py
+previsao`). Ele guarda só as rodadas das 00Z e das 12Z: o Open-Meteo completa as das 06Z e das
+18Z com a anterior. Em 21/10 a conferência passou a ser de hora em hora, porque cada modelo
+publica numa hora e a busca normal só alcança a rodada enquanto ela é a mais recente; a rodada
+que passa assim mesmo é recuperada pela API das rodadas avulsas, até 7 dias para trás (o EC46
+não tem essa API).
+
+**Depois do plano, na mesma versão:** o coletor do CEMADEN (`coletar.py cemaden`, os
+pluviômetros de MS, de hora em hora, com o histórico desde 2015) e o dos raios (`coletar.py
+raios`, a contagem por hora e por célula de 0,1° dos flashes do GLM que o script de um colega
+grava no mesmo banco, de 10 em 10 minutos).
 
 **6. Rodar em paralelo por alguns dias.**
 - *Como confirmar:* o banco contra as APIs, dia a dia, até baterem.
+- Desde 16/10, o painel da equipe lê do banco (passo 7), enquanto o Streamlit Cloud lê das APIs.
 
 ## Fase 3: o servidor interno no ar
 
 **7. O `fonte.py` ganha a fonte "banco".**
 - *Como confirmar:* os produtos e o painel lendo do banco dão o mesmo resultado que lendo das
   APIs.
+- **Feito em 14/10 (entrou na 0.4.1):** com `FONTE_DADOS=banco`, o painel e o `main.py` leem do
+  `climageo` as estações, as leituras do INMET e a previsão (na grade de 0,25° do coletor). O
+  CEMADEN e os raios só vêm do banco.
 
 **8. A instalação na VM, direto no Windows, sem Docker** (decidido em 07/10, porque o Docker não
 está rodando na VM).
 - O Python 3.14 e o Git instalados na VM; o repositório clonado numa pasta fixa; um ambiente
-  virtual com o `app/requirements.txt`; o `.env` com o token e, depois, a conexão do banco. É o
-  mesmo jeito de rodar das máquinas de desenvolvimento.
+  virtual com o `requirements.txt` (os coletores) e o `app/requirements.txt` (o painel); o `.env`
+  com o token e as conexões do banco. É o mesmo jeito de rodar das máquinas de desenvolvimento.
 - **O painel** roda com `streamlit run app\explorador.py --server.port 8501 --server.address 0.0.0.0`,
   e a equipe acessa por `http://<nome-da-VM>:8501`. A porta precisa estar liberada no firewall do
   Windows, só para a rede interna.
@@ -134,14 +220,22 @@ está rodando na VM).
   Tarefas do Windows**, "ao iniciar o computador", que roda mesmo sem ninguém conectado e se
   reinicia se cair. A tarefa chama o **`servidor\iniciar_painel.bat`** (pronto desde 07/10), que
   sobe o painel com o observador de arquivos desligado e grava a saída em `logs\painel.log`.
-- **Os coletores** também vão pelo Agendador de Tarefas: o do INMET de hora em hora, o do
-  Open-Meteo duas vezes por dia.
+- **Os coletores** também vão pelo Agendador de Tarefas, pelo `servidor\coletar.bat`, com
+  "Não iniciar uma nova instância". O `servidor\criar_tarefas.ps1` cria as seis tarefas: o
+  INMET de hora em hora aos 50 minutos (a leitura de cada hora chega aos poucos, ao longo de uns
+  40 minutos), os extras às 03:00, a revisão de 30 dias aos domingos à 01:05, a previsão de hora
+  em hora aos 15 minutos, o CEMADEN de hora em hora aos 5 minutos e os raios de 10 em 10 minutos.
+  Antes da primeira coleta, `python coletar.py esquema` cria as tabelas no `climageo`.
 - **Para atualizar**, o mesmo caminho de sempre (`git fetch`, mudar para a tag escolhida, instalar
   o que faltar) e reiniciar a tarefa do painel, porque o Streamlit não recarrega os módulos sozinho.
 - **O Docker fica para depois**, se a TI ativar containers Linux na VM ou oferecer uma VM Linux. O
   `Dockerfile` e o `docker-compose.yml` só entram no repositório quando houver onde usá-los.
 
 **Marco: o painel interno funcionando na rede da unidade.**
+
+**Enquanto a VM não fica pronta** (desde 16/10), o painel e os coletores rodam numa estação de
+trabalho da unidade, do mesmo jeito descrito acima: o painel na porta 8501, lendo do banco, e as
+tarefas do Agendador. A equipe abre o painel pelo nome da máquina, na rede interna.
 
 ## Fase 4: a API de leitura
 
@@ -167,17 +261,18 @@ instalação. Assim a equipe vê resultado novo enquanto a infraestrutura segue.
 estação, os mapas dos dias, os das semanas e o risco de fogo previsto estão prontos desde
 08/10**: os seis passos do escopo da v0.3.1.
 
-Quando o coletor do Open-Meteo estiver gravando (passo 5) e o `fonte.py` souber ler do banco
-(passo 7), a página **no servidor interno** passa a ler do banco, com a grade de 0,25°. **Na nuvem**
-ela continua sob demanda, a 0,5°, até a publicação da API (passo 11).
+Com o coletor do Open-Meteo gravando (passo 5) e o `fonte.py` lendo do banco (passo 7), as
+páginas de previsão **do painel interno** leem do banco, com a grade de 0,25°, desde a 0.4.1. **Na
+nuvem** elas continuam sob demanda, a 0,5°, até a publicação da API (passo 11).
 
 ## Em versões
 
 | Versão | O que entra |
 |---|---|
 | **v0.3.x** | a fase 1 e a página de previsão sob demanda |
-| **v0.4.x** | o banco, os dois coletores e o servidor interno no Windows (fases 2 e 3); a página de previsão passa a ler do banco no servidor; o produto de previsão do `main.py` (decidido em 09/10/2026), lendo do banco |
+| **v0.4.x** | o banco, os coletores e o servidor interno no Windows (fases 2 e 3); a página de previsão passa a ler do banco no servidor; o produto de previsão do `main.py` (decidido em 09/10/2026), lendo do banco. **A 0.4.1 trouxe** o banco, os coletores do INMET, da previsão, do CEMADEN e dos raios, e a fonte "banco"; **falta** a instalação na VM (passo 8) e o produto de previsão |
 | **v0.5.x** | a API de leitura e a versão externa (fase 4) |
 
-Cada versão entra na `main` por PR, como de costume. O Streamlit Cloud acompanha a `main`; o
+Cada versão entra na `main` por PR, como de costume. O Streamlit Cloud acompanha a branch
+`streamlit`, que avança até a tag de uma versão quando se decide (desde 25/11/2026); o
 servidor interno roda a tag que for escolhida.
