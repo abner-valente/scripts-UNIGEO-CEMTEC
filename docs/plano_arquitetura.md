@@ -180,14 +180,30 @@ Duas descobertas que moldaram o coletor:
 não está no banco, grava as horas (e, uma vez por dia, as semanas do EC46), e apaga as
 partições que passaram de 21 dias na grade.
 
+**Feito em 14/10 (entrou na 0.4.1):** o `modulos/coletor_previsao.py` (`python coletar.py
+previsao`). Ele guarda só as rodadas das 00Z e das 12Z: o Open-Meteo completa as das 06Z e das
+18Z com a anterior. Em 21/10 a conferência passou a ser de hora em hora, porque cada modelo
+publica numa hora e a busca normal só alcança a rodada enquanto ela é a mais recente; a rodada
+que passa assim mesmo é recuperada pela API das rodadas avulsas, até 7 dias para trás (o EC46
+não tem essa API).
+
+**Depois do plano, na mesma versão:** o coletor do CEMADEN (`coletar.py cemaden`, os
+pluviômetros de MS, de hora em hora, com o histórico desde 2015) e o dos raios (`coletar.py
+raios`, a contagem por hora e por célula de 0,1° dos flashes do GLM que o script de um colega
+grava no mesmo banco, de 10 em 10 minutos).
+
 **6. Rodar em paralelo por alguns dias.**
 - *Como confirmar:* o banco contra as APIs, dia a dia, até baterem.
+- Desde 16/10, o painel da equipe lê do banco (passo 7), enquanto o Streamlit Cloud lê das APIs.
 
 ## Fase 3: o servidor interno no ar
 
 **7. O `fonte.py` ganha a fonte "banco".**
 - *Como confirmar:* os produtos e o painel lendo do banco dão o mesmo resultado que lendo das
   APIs.
+- **Feito em 14/10 (entrou na 0.4.1):** com `FONTE_DADOS=banco`, o painel e o `main.py` leem do
+  `climageo` as estações, as leituras do INMET e a previsão (na grade de 0,25° do coletor). O
+  CEMADEN e os raios só vêm do banco.
 
 **8. A instalação na VM, direto no Windows, sem Docker** (decidido em 07/10, porque o Docker não
 está rodando na VM).
@@ -202,18 +218,21 @@ está rodando na VM).
   reinicia se cair. A tarefa chama o **`servidor\iniciar_painel.bat`** (pronto desde 07/10), que
   sobe o painel com o observador de arquivos desligado e grava a saída em `logs\painel.log`.
 - **Os coletores** também vão pelo Agendador de Tarefas, pelo `servidor\coletar.bat`, com
-  "Não iniciar uma nova instância" (o padrão): `coletar.bat inmet` de hora em hora, aos 30
-  minutos (a leitura de cada hora chega aos poucos: a das 15:00 de 09/10 tinha ~88% das estações
-  às 15:26, e o que falta a execução seguinte completa); `coletar.bat inmet --extras`
-  uma vez por dia, às 03:00 (leva ~10 min e termina antes da execução das 03:30: as duas juntas
-  passariam das 100 consultas por minuto); e o do Open-Meteo duas vezes por dia. Antes da primeira coleta,
-  `python coletar.py esquema` cria as tabelas no `climageo`.
+  "Não iniciar uma nova instância". O `servidor\criar_tarefas.ps1` cria as seis tarefas: o
+  INMET de hora em hora aos 50 minutos (a leitura de cada hora chega aos poucos, ao longo de uns
+  40 minutos), os extras às 03:00, a revisão de 30 dias aos domingos à 01:05, a previsão de hora
+  em hora aos 15 minutos, o CEMADEN de hora em hora aos 5 minutos e os raios de 10 em 10 minutos.
+  Antes da primeira coleta, `python coletar.py esquema` cria as tabelas no `climageo`.
 - **Para atualizar**, o mesmo caminho de sempre (`git fetch`, mudar para a tag escolhida, instalar
   o que faltar) e reiniciar a tarefa do painel, porque o Streamlit não recarrega os módulos sozinho.
 - **O Docker fica para depois**, se a TI ativar containers Linux na VM ou oferecer uma VM Linux. O
   `Dockerfile` e o `docker-compose.yml` só entram no repositório quando houver onde usá-los.
 
 **Marco: o painel interno funcionando na rede da unidade.**
+
+**Enquanto a VM não fica pronta** (desde 16/10), o painel e os coletores rodam numa estação de
+trabalho da unidade, do mesmo jeito descrito acima: o painel na porta 8501, lendo do banco, e as
+tarefas do Agendador. A equipe abre o painel pelo nome da máquina, na rede interna.
 
 ## Fase 4: a API de leitura
 
@@ -239,16 +258,16 @@ instalação. Assim a equipe vê resultado novo enquanto a infraestrutura segue.
 estação, os mapas dos dias, os das semanas e o risco de fogo previsto estão prontos desde
 08/10**: os seis passos do escopo da v0.3.1.
 
-Quando o coletor do Open-Meteo estiver gravando (passo 5) e o `fonte.py` souber ler do banco
-(passo 7), a página **no servidor interno** passa a ler do banco, com a grade de 0,25°. **Na nuvem**
-ela continua sob demanda, a 0,5°, até a publicação da API (passo 11).
+Com o coletor do Open-Meteo gravando (passo 5) e o `fonte.py` lendo do banco (passo 7), as
+páginas de previsão **do painel interno** leem do banco, com a grade de 0,25°, desde a 0.4.1. **Na
+nuvem** elas continuam sob demanda, a 0,5°, até a publicação da API (passo 11).
 
 ## Em versões
 
 | Versão | O que entra |
 |---|---|
 | **v0.3.x** | a fase 1 e a página de previsão sob demanda |
-| **v0.4.x** | o banco, os dois coletores e o servidor interno no Windows (fases 2 e 3); a página de previsão passa a ler do banco no servidor; o produto de previsão do `main.py` (decidido em 09/10/2026), lendo do banco |
+| **v0.4.x** | o banco, os coletores e o servidor interno no Windows (fases 2 e 3); a página de previsão passa a ler do banco no servidor; o produto de previsão do `main.py` (decidido em 09/10/2026), lendo do banco. **A 0.4.1 trouxe** o banco, os coletores do INMET, da previsão, do CEMADEN e dos raios, e a fonte "banco"; **falta** a instalação na VM (passo 8) e o produto de previsão |
 | **v0.5.x** | a API de leitura e a versão externa (fase 4) |
 
 Cada versão entra na `main` por PR, como de costume. O Streamlit Cloud acompanha a `main`; o

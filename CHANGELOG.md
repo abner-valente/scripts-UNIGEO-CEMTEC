@@ -9,15 +9,80 @@ Cada versão separa as mudanças em até quatro grupos:
 
 Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
-## [0.4.1] — em andamento
+## [0.4.1] — 25/11/2026
 
-Ainda não está na `main`. É o começo do banco da UNIGEO e dos coletores (fase 2 de `docs/plano_arquitetura.md`). O painel e o `main.py` seguem buscando nas APIs. A correção do limite de consultas do INMET, feita aqui, já foi para a `main` na 0.3.2.
+A maior versão até aqui, com duas frentes:
 
-### Novo
+- **O banco da UNIGEO** (fase 2 de `docs/plano_arquitetura.md`). Os coletores guardam nele as leituras do INMET, a previsão, os pluviômetros do CEMADEN e a contagem dos raios do GOES. O painel e o `main.py` podem ler dele.
+- **O painel**, reorganizado numa página por assunto, cada uma com o mapa navegável ou o do boletim.
+
+No Streamlit Cloud, que lê das APIs, tudo funciona, menos o que só existe no banco: os pluviômetros do CEMADEN e os raios.
+
+### Atenção ao atualizar
+
+- **As páginas do painel mudaram de lugar.** O menu tem dois grupos:
+  - **Observado**: Mapas, Chuva, Risco de Fogo e, no painel que lê do banco, Raios;
+  - **Previsão (MS)**: Mapas, Chuva, Risco de Fogo e Semanas.
+
+  Onde foi parar o que existia:
+  - as abas **Mapas Boletim**, **Chuva** e **Risco de Fogo** do Painel viraram as páginas de mesmo nome, na vista **Boletim**. Os **Mapas interativos** e o **Mapa Navegação** viraram a vista **Navegável** dessas páginas;
+  - os gráficos das estações ficam embaixo do mapa, na página **Mapas**, e é ali que se escolhem as estações e as grandezas, que saíram da barra lateral. A **Qualidade dos dados** é a segunda aba dessa página;
+  - a **Localização Estações** é a última opção de "Variável" na página **Mapas**;
+  - a página **Estações** da previsão se dividiu: os gráficos de cada assunto ficam embaixo do mapa da página dele. As grandezas e a tabela diária estão em Mapas, a chuva em Chuva e o calendário do risco em Risco de Fogo.
+
+  Os endereços guardados das páginas antigas (`…/previsao`, `…/previsao-interativos` e os do observado) abrem a primeira página, **Observado › Mapas**.
+- **Um mapa por vez.** A aba Mapas Boletim mostrava até três variáveis lado a lado. Agora a página mostra uma, maior. A exceção é **Semanas**, na vista Boletim, com **"Todas as semanas"**: a anomalia escolhida de cada semana, lado a lado.
+- **Os downloads de cada mapa estão num menu "Baixar"**, ao lado do mapa.
+- **O painel ganhou uma dependência**, o `psycopg` (~4 MB), que lê o banco.
+  - Quem roda o painel na própria máquina: `pip install -r app/requirements.txt` e reiniciar (Ctrl+C e `streamlit run app/explorador.py`).
+  - No Streamlit Cloud, a instalação acontece sozinha na publicação, e vale o Reboot.
+  - Quem só roda o `main.py`: `pip install -r requirements.txt`.
+- **O mapa navegável busca o fundo na internet**, no Carto: países, cidades, estradas e rios. Sem rede, ou com a caixa **"Mapa de fundo"** da barra lateral desligada, ficam só os limites do estado e dos municípios.
+- **`main.py`:** os produtos não mudam. Com `FONTE_DADOS=banco` no `.env`, as leituras vêm do banco, e não da API do INMET.
+
+### Novo: o banco e os coletores
 
 - **O esquema do banco** (`banco/esquema.sql`, no schema `climageo` do PostgreSQL 16 da UNIGEO) e o `modulos/banco.py`, a única peça que fala SQL. O banco guarda só as horas, do INMET e da previsão; o dia, a semana e o mês saem delas na leitura. O EC46 fica por semana, como chega.
 - **O `.env.example` ganhou as conexões do banco** (`BANCO_GRAVACAO`, `BANCO_LEITURA` e `BANCO_TESTE`). Por enquanto, só quem programa usa a de teste.
-- **O coletor do INMET** (`python coletar.py inmet`), que grava no banco as leituras horárias de todas as estações automáticas do Brasil. De hora em hora, ele rebusca os últimos 3 dias, com uma consulta por hora que traz todas as estações, e o banco só reescreve o que o INMET mudou. Uma vez por dia (`--extras`), busca por estação a sensação térmica, a bateria e a temperatura do processador, que a consulta por hora não traz. A carga do histórico (`--historico 2018-01-01`) roda uma vez só: pode ser interrompida com Ctrl+C e retomada com o mesmo comando, e se a conexão com o banco cair no meio, reconecta e retoma sozinha. No servidor, o Agendador de Tarefas o chama pelo `servidor\coletar.bat`.
+- **O coletor do INMET** (`python coletar.py inmet`), que grava no banco as leituras horárias de todas as estações automáticas do Brasil. De hora em hora, ele rebusca os últimos 3 dias, com uma consulta por hora que traz todas as estações, e o banco só reescreve o que o INMET mudou. Uma vez por dia (`--extras`), busca por estação a sensação térmica, a bateria e a temperatura do processador, que a consulta por hora não traz. A carga do histórico (`--historico 2018-01-01`) roda uma vez só: pode ser interrompida com Ctrl+C e retomada com o mesmo comando, e se a conexão com o banco cair no meio, reconecta e retoma sozinha. Uma vez por semana (`--revisar 30`), rebusca os últimos 30 dias, para o banco receber o que o INMET corrigiu depois. No servidor, o Agendador de Tarefas o chama pelo `servidor\coletar.bat`.
+- **O coletor da previsão** (`python coletar.py previsao`), que guarda as rodadas das 00Z e das 12Z do ECMWF, do GFS e do ICON (numa grade de 0,25° sobre MS e no ponto de cada estação) e o EC46, por semana. Ele confere de hora em hora se saiu rodada nova; a conferência que não acha nada não gasta cota do Open-Meteo. A rodada dos modelos que passar sem ser guardada é recuperada depois, até 7 dias para trás; a do EC46, não. A grade fica guardada por 21 dias.
+- **O coletor dos raios** (`python coletar.py raios`), de 10 em 10 minutos. Ele conta os flashes do GLM do GOES-19 por hora e por célula de 0,1°, a partir das tabelas que o script de um colega da unidade grava no mesmo banco. Não consulta API nenhuma.
+- **A fonte "banco"** (`FONTE_DADOS=banco` no `.env`). O painel e o `main.py` leem do banco as estações, as leituras do INMET e a previsão, com o usuário que só lê, e as contas, os mapas e as planilhas saem iguais. Com ela, a grade da previsão é a do coletor, de 0,25°, e não a de 0,5° da busca direta no Open-Meteo. O padrão continua sendo `apis`, que é o que o Streamlit Cloud usa.
+- **O `servidor\criar_tarefas.ps1`**, que cria no Agendador de Tarefas do Windows as seis tarefas dos coletores:
+  - o INMET de hora em hora, aos 50 minutos;
+  - os extras do INMET às 03:00;
+  - a revisão de 30 dias aos domingos, à 01:05;
+  - a previsão de hora em hora, aos 15 minutos;
+  - o CEMADEN de hora em hora, aos 5 minutos;
+  - os raios de 10 em 10 minutos.
+
+  Elas rodam com o usuário conectado ou não, e a saída de cada uma vai para `logs\coletor_*.log`.
+
+### Novo: o painel numa página por assunto
+
+- **Cada página tem os controles em cima** (a agregação, a variável e o instante) **e o seletor "Mapa: Navegável | Boletim"**. Trocar de vista não muda a escolha nem consulta de novo. O que não é mapa fica embaixo, rolando a página: as séries, as cascatas, os gráficos do risco e os gráficos da previsão na estação.
+- **A vista Navegável** é um mapa de 900 px de altura, que se aproxima e arrasta:
+  - **o valor em qualquer ponto**: o balão traz o valor interpolado onde está o mouse, com a mesma conta da cor do mapa (o IDW das estações no observado, a bilinear da grade do modelo na previsão), mais o município e a estação mais próxima;
+  - **o clique** num ponto ou numa estação abre embaixo do mapa a série daquele lugar. Na previsão, ele mostra os três modelos lado a lado;
+  - **o relevo 3D**, nas páginas de Chuva e de Risco de Fogo (caixa "Relevo 3D"): a altura de cada célula é o valor, ou o nível do risco;
+  - **o imóvel do CAR**, escolhido na barra lateral, por coordenadas ou por arquivo (shapefile, GeoJSON, GeoPackage, KML ou KMZ, soltos ou num .zip). O mapa se centra no imóvel, destaca as células que ele toca e dá a média e a faixa delas, ou o pior nível, no risco. O arquivo fica na memória e não é gravado no servidor;
+  - **os rótulos** das estações numa caixa branca, que se lê sobre qualquer fundo;
+  - **na chuva, com o estado inteiro à vista, as estações a até 15 km umas das outras mostram só o maior valor**, como no boletim. Aproximando o mapa, cada uma mostra o seu.
+- **A vista Boletim** é o mapa do relatório, o mesmo da antiga aba Mapas Boletim, agora um por vez e no meio da tela.
+- **O menu "Baixar"** de cada mapa reúne, onde houver: o PNG da tela, o PNG do boletim (300 dpi), o GeoTIFF, as estações em GeoPackage e o GIF.
+  - **O GeoTIFF** é o mapa para o QGIS, o ArcGIS ou o PIN MS: o valor de cada pixel de 0,01° (~1 km), em SIRGAS 2000 (EPSG:4674), recortado pelo estado, com a mesma conta da tela. O do risco de fogo já vem com as cores do painel.
+  - **O GeoPackage** traz os pontos das estações que fizeram o mapa, com o valor de cada uma, para pôr sobre o GeoTIFF. No QGIS, a camada abre com o estilo dos mapas do painel.
+- **Na previsão, os mapas hora a hora**: temperatura, umidade, chuva na hora, rajada, vento e risco de fogo da hora. Eles vêm com o PNG do boletim da hora e o GIF das horas do modelo. Embaixo de cada página ficam os gráficos da estação escolhida, com os modelos lado a lado.
+
+### Novo: os raios (GOES-19)
+
+A página **Observado › Raios** aparece só no painel que lê do banco. Ela mostra os flashes do GLM, o sensor de raios do satélite GOES-19, que vê os raios dentro da nuvem e os que chegam ao solo, sem separar uns dos outros, com resolução de ~8 a 10 km.
+
+- **Agora**: os flashes dos últimos 15, 30 ou 60 minutos, cada um na cor do tempo que passou.
+  - O alcance é de até 1.500 km de Campo Grande, ou só MS. No primeiro, os anéis de distância e os municípios de MS podem ser desligados.
+  - A página se atualiza sozinha a cada minuto, e as barras mostram os flashes em MS de 5 em 5 minutos.
+  - O PNG do boletim sai nos dois alcances.
+- **Densidade**: os flashes de um período por km², em células de 0,1° (~10 km), no mapa navegável ou no do boletim, com o PNG e o GeoTIFF. O histórico chega aos poucos, de trás para frente, até 2018, e a página avisa quando faltam horas no período.
 
 ### Novo: os pluviômetros do CEMADEN
 
@@ -25,21 +90,22 @@ A rede de pluviômetros automáticos do CEMADEN em MS (29 estações, quatro só
 
 - **O coletor do CEMADEN** (`python coletar.py cemaden`). De hora em hora, ele atualiza o cadastro das estações e busca de novo os últimos 3 dias (UTC), e o banco só reescreve a leitura que a PED corrigiu. A carga do histórico (`--historico 2015-03-01`, desde a primeira estação de MS) roda uma vez só, em umas 8 horas, pula os dias que já estão no banco e busca sempre de novo os últimos 3 dias. Ela pode ser interrompida com Ctrl+C e retomada com o mesmo comando. Se a PED parar de responder, espera 15 minutos e tenta de novo, por até 2 horas.
 - **As tabelas `cemaden_estacao` e `cemaden_chuva`**, no `banco/esquema.sql`. A chuva fica uma linha por leitura, como a PED manda: sem chuva, uma por hora, com o zero escrito; chovendo, de 10 em 10 minutos. A estação que sumiu do cadastro da PED entra no banco pelas próprias leituras.
-- **No painel, todo pluviômetro do CEMADEN com dado entra nos mapas de chuva como uma estação do INMET.** Na aba **Chuva** e nos **Mapas interativos › Chuva**, ele entra na interpolação, nas barras dos acumulados, nos mapas (acumulados, hora a hora e por dia) e no ranking do PNG do boletim.
+- **No painel, todo pluviômetro do CEMADEN com dado entra nos mapas de chuva como uma estação do INMET.** Na página **Chuva**, nas duas vistas, ele entra na interpolação, nas barras dos acumulados, nos mapas (acumulados, hora a hora e por dia) e no ranking do PNG do boletim.
   - O nome é "CEMADEN · Município (Nome)", porque o nome sozinho não diz onde a estação fica.
   - Cada leitura entra na hora que termina na hora cheia seguinte: a das 13:40 conta na hora das 14:00, como a leitura do INMET das 14:00 é a chuva das 13:00 às 14:00. A hora sem leitura fica sem dado, e não seca.
-  - Nos **Mapas interativos**, os pluviômetros aparecem em laranja, menores que as estações do INMET, e o clique abre a chuva da estação.
+  - No mapa navegável, os pluviômetros aparecem em laranja, menores que as estações do INMET, e o clique abre a chuva da estação.
   - Com pluviômetro do CEMADEN no mapa, o crédito do rodapé do PNG do boletim passa a "Dados: INMET/SEMADESC/CEMADEN", e as legendas da tela também o trazem. Os termos da PED pedem a citação em inglês ("DATA FROM THE CEMADEN/MCTIC OBSERVATIONAL NETWORK"), e a equipe preferiu o crédito em português, junto com as outras instituições (16/11/2026).
   - No ranking das 5 maiores do PNG do boletim, o nome do pluviômetro sai sem o "CEMADEN · ", que alargava o quadro por cima do mapa.
   - O pluviômetro que mandar dado errado sai pela gaveta **"Estações retiradas"**, como uma estação do INMET.
-  - Na página **Localização Estações**, os pluviômetros em operação entram em laranja no mapa, na lista (com a coluna "Rede") e no PNG de referência, com o crédito "Dados: INMET/SEMADESC/CEMADEN".
-- **Nos mapas de chuva em PNG do painel (o da tela e o do boletim), as estações a até 15 km umas das outras mostram só o maior valor**: o ponto, o número e o ranking. A superfície continua com todas. O rodapé do boletim avisa quando o agrupamento tirou estações do desenho. Hoje nenhuma dupla do INMET fica a menos de 15 km (as mais próximas, Dourados e Itaporã, estão a 16,1 km): quem se junta são as estações de uma mesma cidade, com o CEMADEN. Os mapas do `main.py` e os das outras variáveis não mudam.
+  - Na **Localização das estações** (página Mapas), os pluviômetros em operação entram em laranja no mapa, na lista (com a coluna "Rede") e no PNG de referência, com o crédito "Dados: INMET/SEMADESC/CEMADEN".
+- **Nos mapas de chuva do painel, as estações a até 15 km umas das outras mostram só o maior valor**: o ponto, o número e o ranking. Isso vale no PNG da tela, no do boletim e no mapa navegável enquanto o estado inteiro está à vista. A superfície continua com todas. O rodapé do boletim avisa quando o agrupamento tirou estações do desenho. Hoje nenhuma dupla do INMET fica a menos de 15 km (as mais próximas, Dourados e Itaporã, estão a 16,1 km): quem se junta são as estações de uma mesma cidade, com o CEMADEN. Os mapas do `main.py` e os das outras variáveis não mudam.
 
 ### Atenção ao atualizar o servidor
 
-- **A conta da PED vai no `.env` da máquina do coletor** (`CEMADEN_EMAIL` e `CEMADEN_SENHA`; modelo no `.env.example`). Sem ela, `coletar.py cemaden` para com uma mensagem, e o resto segue igual.
-- **Rode `python coletar.py esquema`** para criar as tabelas do CEMADEN, e depois, uma vez, **`python coletar.py cemaden --historico 2015-03-01`**.
-- **Rode de novo o `servidor\criar_tarefas.ps1`**, que agora cria também a tarefa "UNIGEO - coletor CEMADEN", de hora em hora aos 5 minutos (a saída vai para `logs\coletor_cemaden.log`).
+- **O `.env` do servidor leva a fonte e as conexões do banco**: `FONTE_DADOS=banco` e `BANCO_LEITURA` (o painel), `BANCO_GRAVACAO` (os coletores) e a conta da PED (`CEMADEN_EMAIL` e `CEMADEN_SENHA`). O modelo está no `.env.example`. Sem a conta da PED, `coletar.py cemaden` para com uma mensagem, e o resto segue igual.
+- **Rode `python coletar.py esquema`**, que cria as tabelas que faltam: as do CEMADEN e a contagem dos raios. Depois, uma vez, rode **`python coletar.py cemaden --historico 2015-03-01`** e **`python coletar.py raios`**. A primeira contagem dos raios leva uns 20 minutos, e é melhor rodá-la à mão.
+- **Rode de novo o `servidor\criar_tarefas.ps1`**, que agora cria as seis tarefas dos coletores, com o CEMADEN e os raios.
+- **As tarefas rodam o código da pasta onde o script rodou, na branch que estiver nela.** Antes desta versão, a `main` não tinha o `coletar.py`. A partir de agora, a pasta do servidor pode ficar na `main`.
 - **A PED aceita 12 consultas por minuto por conta**, e o coletor faz no máximo 10. Não rode outra coisa contra a PED com a mesma conta enquanto a carga do histórico estiver rodando.
 - **Os mapas de chuva do painel do servidor mudam**: entram os pluviômetros do CEMADEN. No histórico há 7 leituras impossíveis, de 100 a 235 mm em 10 minutos (Rochedo em 01/12/2016, Mundo Novo em 07/10/2021 e 04/05/2023, Rio Verde de Mato Grosso em 25/10/2021, Aquidauana em 02/02/2024, Corguinho em 29/12/2018 e Corumbá em 22/10/2018), que entram nos mapas desses dias. Se aparecerem, retire a estação pela gaveta.
 

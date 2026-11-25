@@ -7,6 +7,11 @@ Produtos meteorológicos gerados a partir dos dados horários das **estações a
 | [`relatorio_inmet`](#produto-relatorio_inmet) | Extremos de temperatura, umidade e rajada e chuva acumulada de cada estação: planilha Excel e mapas |
 | [`risco_fogo`](#produto-risco_fogo) | Risco meteorológico de fogo pela regra 30-30-30, avaliada hora a hora: planilha Excel e mapas de nível de risco |
 
+Ao lado dos produtos ficam:
+
+- **o painel** ([Explorador (Streamlit)](#explorador-streamlit)), para olhar o observado e a previsão em mapas navegáveis ou no formato do boletim;
+- **os coletores** ([Banco e coletores](#banco-e-coletores-servidor)), que guardam no banco da UNIGEO as leituras do INMET, a previsão do Open-Meteo, os pluviômetros do CEMADEN e a contagem dos raios do GOES.
+
 Desenvolvido pela equipe de meteorologia do **CEMTEC** — Centro de Monitoramento do Tempo e do Clima de Mato Grosso do Sul (SEMADESC).
 
 ---
@@ -23,6 +28,7 @@ Desenvolvido pela equipe de meteorologia do **CEMTEC** — Centro de Monitoramen
 - [Como atualizar](#como-atualizar)
 - [Configuração](#configuração)
 - [Testes](#testes)
+- [Banco e coletores (servidor)](#banco-e-coletores-servidor)
 - [Explorador (Streamlit)](#explorador-streamlit)
 - [Novos produtos](#novos-produtos)
 - [Estrutura do repositório](#estrutura-do-repositório)
@@ -437,6 +443,7 @@ Principais bibliotecas (lista completa em [`requirements.txt`](requirements.txt)
 | `openpyxl` | Escrita e formatação da planilha Excel |
 | `tzdata` | Fusos horários (obrigatório no Windows) |
 | `python-dotenv` | Leitura do arquivo `.env` |
+| `psycopg` | O banco da UNIGEO (PostgreSQL), para os coletores, a fonte "banco" e os testes do banco |
 
 ## Instalação
 
@@ -541,6 +548,36 @@ CEMADEN_SENHA=senha_da_conta
 
 A PED aceita **12 consultas por minuto por conta**, e o coletor faz no máximo 10, uma a cada 6 segundos. O painel e o `main.py` não consultam a PED: o painel do servidor lê os pluviômetros do banco.
 
+### De onde vêm os dados (`FONTE_DADOS`) e o banco
+
+O painel e os produtos pedem as estações, as leituras e a previsão ao [`modulos/fonte.py`](modulos/fonte.py), que busca onde a configuração mandar:
+
+| `FONTE_DADOS` | De onde | Quem usa |
+|---|---|---|
+| `apis` (o padrão) | Direto da API do INMET e do Open-Meteo, na hora | Quem roda na própria máquina e o Streamlit Cloud |
+| `banco` | Do banco da UNIGEO (schema `climageo`), que os coletores alimentam | O painel do servidor |
+
+As contas, os mapas e as planilhas saem iguais nas duas. O que muda:
+
+- **Só o banco tem** os pluviômetros do CEMADEN e os raios do GOES. Com `apis`, a página Raios não aparece e os mapas de chuva ficam só com o INMET.
+- **A grade da previsão** é de 0,25° no banco (a do coletor) e de 0,5° na busca direta.
+
+As conexões do banco vão no `.env`, entre aspas, no formato de palavras-chave do PostgreSQL. Cada máquina põe só as que usa:
+
+```
+FONTE_DADOS=banco
+BANCO_LEITURA="host=servidor port=5432 dbname=banco user=usuario_que_le password=senha"
+BANCO_GRAVACAO="host=servidor port=5432 dbname=banco user=usuario_que_grava password=senha"
+```
+
+| Conexão | Quem usa |
+|---|---|
+| `BANCO_LEITURA` | O painel do servidor, com o usuário que só lê |
+| `BANCO_GRAVACAO` | Os coletores |
+| `BANCO_TESTE` | Os testes do banco, na máquina de quem programa (veja [Testes](#testes)) |
+
+O modelo de tudo está no [`.env.example`](.env.example).
+
 ### Logos
 
 Os logos ficam em `img/`, em **PNG com fundo transparente** — uma imagem com fundo branco cobriria o mapa. A posição e o tamanho de cada um são definidos na lista `LOGOS`, em [`modulos/config.py`](modulos/config.py), como um retângulo `[x, y, largura, altura]` em fração da moldura do mapa: `(0, 0)` é o canto inferior esquerdo e `(1, 1)` o superior direito. O logo se ajusta ao retângulo mantendo a proporção e fica alinhado ao canto superior direito dele, no mesmo lugar em todos os mapas.
@@ -573,9 +610,37 @@ pytest
 
 Rode os testes antes de cada commit: eles conferem as janelas de tempo, os cálculos, o acesso à API e a execução completa (Excel e mapas) de cada produto.
 
-Os testes do banco (`tests/test_banco.py`) precisam de um PostgreSQL de verdade: eles usam a conexão `BANCO_TESTE` do `.env` e trabalham no schema `climageo_teste`, que apagam e recriam a cada execução. Sem essa linha no `.env`, eles são pulados.
+Os testes do banco (`tests/test_banco.py` e parte dos do coletor do INMET e dos raios) precisam de um PostgreSQL de verdade. Eles usam a conexão `BANCO_TESTE` do `.env` e trabalham no schema `climageo_teste`, que apagam e recriam a cada execução. Sem essa linha no `.env`, eles são pulados.
 
-Os testes também rodam automaticamente no GitHub (GitHub Actions, em Linux, com Python 3.14) a cada push e a cada pull request para a `main`. O resultado aparece como ✓ ou ✗ ao lado de cada commit e na aba **Actions** do repositório, onde também é possível rodá-los manualmente.
+Os testes também rodam automaticamente no GitHub (GitHub Actions, em Linux, com Python 3.14) a cada push e a cada pull request para a `main`. Ali, os do banco rodam num PostgreSQL 16 com PostGIS que sobe vazio, só para eles. O resultado aparece como ✓ ou ✗ ao lado de cada commit e na aba **Actions** do repositório, onde também é possível rodá-los manualmente.
+
+## Banco e coletores (servidor)
+
+No servidor da unidade, os coletores guardam os dados no banco da UNIGEO (PostgreSQL 16, schema `climageo`), e o painel do servidor lê dali (`FONTE_DADOS=banco`, veja [De onde vêm os dados](#de-onde-vêm-os-dados-fonte_dados-e-o-banco)). Tudo pela linha de comando do [`coletar.py`](coletar.py), na raiz do projeto:
+
+| Comando | O que faz | Quando |
+|---|---|---|
+| `python coletar.py esquema` | Cria as tabelas que faltam ([`banco/esquema.sql`](banco/esquema.sql)). Pode rodar de novo | Na instalação e quando uma versão traz tabela nova |
+| `python coletar.py inmet` | As leituras horárias de todas as estações automáticas do Brasil: rebusca os últimos 3 dias, com uma consulta por hora, e o banco só reescreve o que o INMET mudou | De hora em hora, aos 50 minutos |
+| `python coletar.py inmet --extras` | A sensação térmica, a bateria e a temperatura do processador, por estação, que a consulta por hora não traz | Uma vez por dia |
+| `python coletar.py inmet --revisar 30` | Rebusca os últimos 30 dias, para o banco receber o que o INMET corrigiu depois | Uma vez por semana |
+| `python coletar.py inmet --historico 2018-01-01` | A carga do histórico. Pode ser interrompida com Ctrl+C e retomada com o mesmo comando | Uma vez só |
+| `python coletar.py previsao` | As rodadas das 00Z e das 12Z do ECMWF, do GFS e do ICON (grade de 0,25° e pontos das estações) e o EC46. A conferência que não acha rodada nova não gasta cota | De hora em hora |
+| `python coletar.py cemaden` | O cadastro e a chuva dos pluviômetros do CEMADEN em MS, dos últimos 3 dias (veja [Conta da PED do CEMADEN](#conta-da-ped-do-cemaden-só-no-servidor)) | De hora em hora, aos 5 minutos |
+| `python coletar.py cemaden --historico 2015-03-01` | A carga do histórico do CEMADEN, em umas 8 horas, retomável | Uma vez só |
+| `python coletar.py raios` | Conta os flashes do GLM (GOES-19) do estado por hora e por célula de 0,1°, a partir das tabelas que o script de um colega grava no mesmo banco. A primeira execução conta o que já está lá e leva uns 20 minutos | De 10 em 10 minutos |
+
+Com `--teste`, qualquer um deles grava no `climageo_teste`, com a conexão `BANCO_TESTE`, e não no banco de verdade. O coletor sai com código 1 quando o banco ou alguma consulta falham, para o Agendador marcar a falha.
+
+**No Windows, quem chama os coletores é o Agendador de Tarefas.** O [`servidor\criar_tarefas.ps1`](servidor/criar_tarefas.ps1) cria (ou recria) as seis tarefas, com os horários da tabela acima. Elas rodam com o usuário conectado ou não, por isso o script pede a senha do Windows, que vai direto para o Agendador:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File servidor\criar_tarefas.ps1
+```
+
+Cada tarefa chama o [`servidor\coletar.bat`](servidor/coletar.bat), que grava a saída em `logs\coletor_<trabalho>.log`. As tarefas rodam o código da pasta onde o script rodou, na branch que estiver nela. O painel do servidor sobe pelo [`servidor\iniciar_painel.bat`](servidor/iniciar_painel.bat), com a saída em `logs\painel.log`. Depois de uma atualização, ele só muda quando é reiniciado.
+
+O desenho completo (as tabelas, os usuários do banco, o que falta para o servidor definitivo) está em [`docs/plano_arquitetura.md`](docs/plano_arquitetura.md).
 
 ## Explorador (Streamlit)
 
@@ -587,7 +652,7 @@ Instale as dependências dele uma vez (quem só gera os produtos não precisa di
 pip install -r app/requirements.txt
 ```
 
-A aba de mapa usa o mesmo `modulos/mapas.py` dos produtos, então a lista inclui as bibliotecas de geoprocessamento (geopandas, shapely, pyogrio, pyproj e scipy). São ~165 MB — o preço de não manter um segundo desenho de mapa, que com o tempo divergiria do relatório.
+Os mapas do boletim usam o mesmo `modulos/mapas.py` dos produtos, então a lista inclui as bibliotecas de geoprocessamento (geopandas, shapely, pyogrio, pyproj e scipy). São ~165 MB — o preço de não manter um segundo desenho de mapa, que com o tempo divergiria do relatório.
 
 E abra:
 
@@ -595,12 +660,31 @@ E abra:
 streamlit run app/explorador.py
 ```
 
-O navegador abre em `http://localhost:8501`, na página **Observado (INMET)**. No topo da barra lateral ficam a página **Localização Estações** (veja [Localização Estações](#localização-estações)) e as da **Previsão (MS)**: **Estações**, **Mapas** e **Semanas** (veja [Previsão (MS)](#previsão-ms)). Abaixo dela ficam o **estado**, o período, as estações e as **grandezas**. O seletor de estado só oferece as UFs que têm shapefile em `shp/` — hoje **os 25 que têm estação automática operante**, ou seja, todos menos RR e SE, cujas estações estão todas em pane. Para acrescentar uma delas quando voltarem, rode `python ferramentas/simplificar_municipios.py --uf SIGLA` (veja [Shapefiles](#shapefiles)). Trocar de estado troca junto o fuso (é ele que decide onde o dia começa), as estações e os shapefiles, e cada estado tem o seu lugar no cache: duas pessoas no mesmo painel, em estados diferentes, não veem o mapa uma da outra. Cada grandeza ganha o seu gráfico — escalas diferentes nunca se misturam num eixo só —, com as séries que a equipe de meteorologia definiu: no gráfico horário, a máxima, a mínima e a média da hora; no diário, as do dia mais a compensada. **Cor separa a estação, traço separa a série**, e clicar numa série da legenda deixa só ela no gráfico **e no balão** — Shift+clique na série destacada traz todas de volta. Zoom com Shift + roda, e tudo baixável em CSV. O cursor em **qualquer ponto** do gráfico marca a hora mais próxima com uma régua vertical e abre um balão só com **todas as estações daquele instante** — antes era preciso acertar o mouse em cima de um ponto, e o balão trazia uma linha de cada vez, que é justamente a comparação que não se queria fazer.
+O navegador abre em `http://localhost:8501`, na página **Observado › Mapas**. O menu, no topo da barra lateral, tem uma página por assunto, em dois grupos:
+
+| Grupo | Páginas |
+|---|---|
+| **Observado** | [Mapas](#observado--mapas) (com a localização das estações, as séries e a qualidade dos dados), [Chuva](#observado--chuva), [Risco de Fogo](#observado--risco-de-fogo) e, só no painel que lê do banco, [Raios](#observado--raios-goes-19) |
+| **Previsão (MS)** | [Mapas, Chuva, Risco de Fogo e Semanas](#previsão-ms) |
+
+Toda página segue o mesmo desenho:
+
+1. **Em cima, os controles**: a agregação (hora a hora, por dia, período), a variável e o instante.
+2. **O seletor "Mapa: Navegável | Boletim"**, que troca o desenho sem mudar a escolha nem consultar de novo (veja [Navegável ou Boletim](#navegável-ou-boletim)).
+3. **Embaixo, o que não é mapa**, rolando a página: as séries das estações, as cascatas da chuva, os gráficos do risco e os gráficos da previsão na estação.
+
+No observado, a barra lateral tem:
+
+- o **estado** e o período, que valem para a página inteira;
+- a caixa **"Mapa de fundo"** e o **imóvel do CAR**, que valem para o mapa navegável;
+- o **cache** local.
+
+O seletor de estado só oferece as UFs que têm shapefile em `shp/` — hoje **os 25 que têm estação automática operante**, ou seja, todos menos RR e SE, cujas estações estão todas em pane. Para acrescentar uma delas quando voltarem, rode `python ferramentas/simplificar_municipios.py --uf SIGLA` (veja [Shapefiles](#shapefiles)). Trocar de estado troca junto o fuso (é ele que decide onde o dia começa), as estações e os shapefiles, e cada estado tem o seu lugar no cache: duas pessoas no mesmo painel, em estados diferentes, não veem o mapa uma da outra. Nos gráficos das estações (a seção **Séries temporais**, embaixo da página Mapas), cada grandeza ganha o seu gráfico — escalas diferentes nunca se misturam num eixo só —, com as séries que a equipe de meteorologia definiu: no gráfico horário, a máxima, a mínima e a média da hora; no diário, as do dia mais a compensada. **Cor separa a estação, traço separa a série**, e clicar numa série da legenda deixa só ela no gráfico **e no balão** — Shift+clique na série destacada traz todas de volta. Zoom com Shift + roda, e tudo baixável em CSV. O cursor em **qualquer ponto** do gráfico marca a hora mais próxima com uma régua vertical e abre um balão só com **todas as estações daquele instante** — antes era preciso acertar o mouse em cima de um ponto, e o balão trazia uma linha de cada vez, que é justamente a comparação que não se queria fazer.
 
 | | |
 |---|---|
-| **Grandezas** | Temperatura, umidade, pressão, vento e radiação — a chuva saiu para a aba dela, porque não vira linha. O que cada uma mostra — e com que regra — está no catálogo [`app/variaveis.py`](app/variaveis.py), e a regra vai escrita sob cada gráfico |
-| **Horário ou diário** | O seletor **Agregação** fica dentro da aba, e não na barra lateral: ele vale só para os gráficos, e cada outra aba tem o seu. Na lateral parecia um filtro geral — e as outras abas o ignoravam |
+| **Grandezas** | Temperatura, umidade, pressão, vento e radiação — a chuva tem a página dela, porque não vira linha. O que cada uma mostra — e com que regra — está no catálogo [`app/variaveis.py`](app/variaveis.py), e a regra vai escrita sob cada gráfico |
+| **Horário ou diário** | Cada mapa e cada grupo de gráficos tem o seu seletor **Agregação**, ao lado dele, e não na barra lateral: na lateral parecia um filtro geral, que valesse para tudo |
 | **A regra é da variável** | A estação mede de 10 em 10 minutos e transmite de hora em hora, já resumido: MAX e MIN são os extremos daquela hora, INS é a leitura da hora cheia, chuva e radiação são acumulados. Por isso **a máxima do dia é a maior das máximas horárias**, nunca a média delas — e não existe mais escolher "média, máxima, mínima ou soma" para qualquer variável |
 | **Vento** | Velocidade e rajada aparecem em **km/h**, como nos produtos (a API manda em m/s). A **direção** sai em pontos, e não em linha: entre 350° e 10° o vento mal mudou, mas uma linha desceria o gráfico inteiro. Para o período há uma **rosa dos ventos** por estação, com as horas de cada rumo separadas por faixa de velocidade |
 | **Cache** | O que já foi baixado fica em `cache/`, fora do controle de versão, para a tela responder rápido a cada filtro. Alargar o período baixa **só os dias que faltam**. O botão **Limpar cache** apaga tudo; o que faltar é baixado de novo |
@@ -608,33 +692,68 @@ O navegador abre em `http://localhost:8501`, na página **Observado (INMET)**. N
 | **A espera é de rede** | É uma consulta por estação, e são 62. Em fila, uma semana levava ~50 s e um mês, ~105 s — o processamento em si custa 0,2 s. As consultas saem **8 de cada vez** (`config.DOWNLOADS_SIMULTANEOS`), reaproveitando a conexão: a mesma semana sai em ~4 s. O limite é do processo inteiro, e não de cada pessoa que abre o painel — com 16 simultâneas o INMET derruba a conexão. Uma barra mostra quantas estações já chegaram |
 | **Na nuvem começa do zero** | O Streamlit Cloud reconstrói o contêiner a cada publicação e quando o app acorda de um período parado, e o `cache/` vai junto. Quem abrir logo depois paga a consulta inteira; a partir daí vem do cache |
 | **Baixar os dados** | O CSV traz **todas as colunas que a API devolve**, com os códigos do INMET, independente das grandezas escolhidas: inclusive as que nenhum gráfico usa, como a sensação térmica (`TEM_SEN`) e a tensão da bateria (`TEN_BAT`). A única coisa que não vem como a API mandou é o **vento, em km/h** — o painel converte ao carregar, como os produtos |
-| **Onde roda** | Na sua máquina. Não é um serviço: cada pessoa abre o seu |
+| **Onde roda** | Na sua máquina, lendo das APIs; no Streamlit Cloud, também das APIs; e no servidor da unidade, lendo do banco (veja [Banco e coletores](#banco-e-coletores-servidor)) |
+### Navegável ou Boletim
 
-### Aba "Mapas Boletim"
-
-O **mesmo mapa interpolado dos produtos** — mesma interpolação IDW, mesmo recorte pelo contorno do estado, mesmas cores —, só que sem a moldura institucional: na tela, título e logos tomariam o lugar do mapa. Na prática é o produto de mapa rodando pela tela, sem terminal: escolha o período e os mapas, ande no tempo e baixe o PNG.
+O mesmo assunto, na mesma escolha, em dois desenhos. A vista nasce em **Navegável**.
 
 | | |
 |---|---|
-| **Estações** | Todas as do estado, e não só as escolhidas na barra lateral: com duas ou três a superfície inventaria o estado inteiro. Por isso a aba começa com um botão — a primeira consulta demora, e depois vem do cache |
+| **Navegável** | O mapa que se aproxima e arrasta, com 900 px de altura, desenhado no navegador (pydeck). A superfície é a mesma do boletim: o IDW das estações no observado, a grade do modelo na previsão. Ela vai sobre um mapa de fundo da internet (o Carto, com países, cidades, estradas e rios), que a caixa **"Mapa de fundo"** desliga. Sem rede, o fundo some e ficam os limites do estado e dos municípios |
+| **O valor em qualquer ponto** | Passando o mouse em qualquer lugar, o balão traz o valor interpolado ali, com a mesma conta da cor do mapa, mais o município e a estação mais próxima. Perto de um limiar do risco, ele mostra casas a mais (29,95 °C, e não "30,0" ao lado de um ✘) |
+| **O clique** | Num ponto, numa estação ou no imóvel do CAR, abre a série daquele lugar embaixo do mapa: a hora, o dia ou o acumulado no observado; os três modelos lado a lado na previsão. A série do ponto é o IDW das estações que mediram em cada passo, então a soma dela pode diferir do mapa quando alguma estação tem falhas |
+| **Os rótulos** | O valor de cada estação numa caixa branca de cantos arredondados, que se lê sobre qualquer fundo. Onde as estações ficam juntas, os rótulos se cobrem: aproxime o mapa ou desligue a caixa "Mostrar o valor de cada estação" |
+| **Relevo 3D** | Nas páginas de Chuva e de Risco de Fogo, a caixa "Relevo 3D" levanta cada célula da grade: na chuva, a altura é o valor; no risco, um degrau por nível, com o nível 0 no chão. Segure o botão direito (ou Ctrl) e arraste para inclinar |
+| **Boletim** | O mapa do relatório, o mesmo do `main.py`: a superfície recortada pelo contorno do estado, as estações como pontos, a escala de cores fixa. Um por vez, no meio da tela |
+
+### Imóvel do CAR
+
+Para responder "quanto choveu (ou qual o risco) na minha propriedade". Na barra lateral, **"Imóvel do CAR"**:
+
+| | |
+|---|---|
+| **Coordenadas** | Um ponto, por latitude e longitude |
+| **Arquivos** | O imóvel em shapefile (as partes `.shp`, `.shx`, `.dbf`, `.prj`, soltas ou num `.zip`), GeoJSON, GeoPackage, KML ou KMZ. O tipo sai do conteúdo, não da extensão. O arquivo fica na memória do painel e não é gravado em disco |
+| **No mapa navegável** | O mapa se centra no imóvel e destaca em magenta as células da grade que ele toca. Um quadro dá a média e a faixa dessas células (ou o pior nível, no risco), e o clique no imóvel abre a série dele |
+
+### O menu "Baixar"
+
+Cada mapa tem, ao lado, um menu **"Baixar"** com o que se pode levar dele:
+
+| Item | O que é |
+|---|---|
+| **PNG da tela** | O mapa como está na vista Boletim, em 150 dpi |
+| **PNG do boletim (300 dpi)** | O mapa **na moldura do relatório**, como o `main.py` grava: título, subtítulo com a janela e o fuso, os logos, o ranking das cinco estações, a barra de cores e o crédito no rodapé. **As cores e a escala são as da tela** (decisão da equipe, 01/10/2026): o que se baixa é o que se vê. O desenho só acontece no clique (~0,7 s por mapa) |
+| **GeoTIFF** | Para o QGIS, o ArcGIS ou o PIN MS: o valor de cada pixel de 0,01° (~1 km), em SIRGAS 2000 (EPSG:4674), recortado pelo estado, com a mesma conta da tela (o IDW refeito em cada pixel, ou a bilinear da previsão). O risco de fogo, calculado na grade dos produtos (~8 km), vai aos pixels pelo vizinho mais próximo e já vem com as cores do painel |
+| **Estações (GeoPackage)** | Os pontos das estações que fizeram o mapa, com o valor de cada uma, no sistema do GeoTIFF, para pôr por cima dele. Vêm também as vizinhas de fora do estado (coluna `uf`). No QGIS, a camada abre com os pontos pretos de borda branca do painel e os rótulos prontos, desligados |
+| **GIF** | "Gerar GIF" monta a sequência das horas (ou dos dias) e vira "Baixar GIF" quando fica pronta. Veja o GIF do período em [Observado › Mapas](#observado--mapas) |
+
+### Observado › Mapas
+
+As variáveis do observado, menos a chuva, uma por vez. É o **mesmo mapa interpolado dos produtos**: mesma interpolação IDW, mesmo recorte pelo contorno do estado, mesmas cores. Na vista Boletim, é o produto de mapa rodando pela tela, sem terminal: escolha o período e a variável, ande no tempo e baixe o PNG. Na Navegável, a mesma superfície, para aproximar e clicar.
+
+A página tem duas abas: **Mapas**, com o mapa e, embaixo, as [séries temporais](#séries-temporais) das estações escolhidas; e **[Qualidade dos dados](#qualidade-dos-dados)**. A última opção de "Variável" é a [Localização das estações](#localização-das-estações).
+
+| | |
+|---|---|
+| **Estações** | Todas as do estado, e não só as escolhidas nas séries: com duas ou três a superfície inventaria o estado inteiro. Por isso a página começa com um botão — a primeira consulta demora, e depois vem do cache |
 | **As vizinhas seguram a borda** | A interpolação usa também as estações **de fora do estado** que caem a até 1,5° do enquadramento, **podadas** às que podem entrar na conta de alguma célula (ver abaixo) — em MS são 39, de PR, MT, GO, SP e MG. Sem elas, os 8 vizinhos que o IDW enxerga numa célula da divisa estão todos para dentro, e a superfície extrapola tendo medição do outro lado. Medido numa hora real: na borda a temperatura muda até 4,5 °C e a umidade até 11,9 pontos; **no miolo, 0,01 °C** — o efeito é onde tinha de ser. Elas não viram ponto desenhado, rótulo, tabela, ranking nem opção na barra lateral: são insumo da conta, não resultado |
 | **Só as vizinhas que entram na conta** | Estar dentro da margem não basta: o IDW olha as **8 mais próximas de cada célula**, e uma estação pode não ser vizinha de célula nenhuma. Baixar os dados dela é requisição jogada fora, e isso se decide **antes de baixar qualquer coisa**, porque só depende de coordenadas. A poda corta 54→39 em MS, 54→49 em MT e 89→60 em SC. Ela olha o dobro de vizinhas que o IDW usa (`config.VIZINHOS_NA_PODA`): numa hora em que faltam estações, as 8 mais próximas passam a ser outras, e sem essa folga a poda mudaria mapa. Conferido nos três estados, nas duas grades: **nenhuma estação usada foi perdida, e a superfície sai idêntica bit a bit** |
-| **O que já vem escolhido** | O trio do boletim em cada agregação, de `variaveis.PADRAO_MAPA`: na hora, temperatura da hora cheia, umidade mínima e rajada; no dia e no período, temperatura média, umidade mínima e rajada máxima. No período a média é a **compensada** — de vários dias, é ela que é a média. Quem quiser outro troca no seletor |
+| **O que já vem escolhido** | A primeira do boletim em cada agregação, de `variaveis.PADRAO_MAPA`: na hora, a temperatura da hora cheia; no dia e no período, a temperatura média. No período a média é a **compensada** — de vários dias, é ela que é a média. Quem quiser outra troca no seletor "Variável" |
 | **Os valores já vêm escritos** | A caixa "Mostrar o valor de cada estação" nasce ligada: o mapa serve para ler número, não só padrão de cor. Onde os rótulos se cobrirem, amplie no ícone de tela cheia ou desligue a caixa |
 | **Três modos** | **Hora a hora** mostra a leitura como a estação mandou; **por dia** e **período inteiro** mostram os produtos do boletim, cada um com a sua regra. O deslizante anda de hora em hora ou de dia em dia, desenhado como **linha do tempo**: um risco em cada virada de dia, as datas do começo e do fim à mostra e o trilho sem cor, porque o mapa é de um instante, e não um acumulado até ele (o mesmo vale para os deslizantes do Risco de Fogo). No período inteiro não há deslizante, porque é um mapa só para a janela |
 | **A escala de cores é fixa** | A mesma cor quer dizer o mesmo valor em qualquer mapa. Esticada ao dado de cada instante, ela enganava: num dia de 34 a 41 °C, os 36 °C saíam azuis e pareciam amenos. As faixas estão em [`app/variaveis.py`](app/variaveis.py) — temperatura 0 a 45 °C, umidade 0 a 100%, vento 0 a 130 km/h. Chuva e radiação vão por **classes**, escolhidas pela duração da janela, porque o acumulado de uma hora e o de um mês não cabem na mesma régua. A pressão é a exceção: fica ajustada ao dado, porque a API manda a pressão da estação, sem redução ao nível do mar, e entre altitudes diferentes o mapa desenharia o relevo |
 | **Quando a escala atrapalha** | Num dia em que o estado inteiro fica entre 20 e 25 °C, a escala fixa deixa o mapa quase de uma cor só. A caixa **"Ajustar a escala ao dado"** devolve o contraste — com o custo de as cores mudarem de significado |
 | **A régua embaixo** | Cada mapa traz a sua barra de cores deitada e fina, sob o desenho. Com escala fixa ela vale para qualquer mapa daquela grandeza |
 | **A regra é da variável** | Não existe mais escolher "média, máxima, mínima ou soma" para qualquer coisa: a máxima do dia é a **maior das máximas horárias**, a chuva do dia é a **soma**, a umidade do mapa é a **menor mínima**. O catálogo com todas as regras está em [`app/variaveis.py`](app/variaveis.py), e a regra de cada mapa vai escrita embaixo dele |
-| **Vários mapas lado a lado** | Os mapas escolhidos saem em linha, três por linha, no mesmo instante: dá para ver a temperatura alta bater com a umidade baixa sem trocar de tela |
-| **O que o mapa mostra** | Neste tamanho, o **padrão**: a superfície interpolada e as estações como pontos. Barra de cores, grade de latitude e longitude e valor de cada estação saem do desenho — com 62 estações numa coluna de ~470 px eles se cobrem e viram borrão, e a moldura de coordenadas toma a borda inteira. A **faixa de valores** (mínimo e máximo do instante) vai escrita sob cada mapa, e a caixa **"Mostrar o valor de cada estação"** traz os números de volta, para ler ampliando no ícone de tela cheia |
+| **Uma variável por vez** | Até a 0.3.9, a aba Mapas Boletim punha até três mapas lado a lado, estreitos. Agora o mapa é um só e maior, e trocar de variável mantém o instante escolhido |
+| **O que o mapa mostra** | Na vista Boletim, o **padrão**: a superfície interpolada e as estações como pontos. A grade de latitude e longitude sai do desenho, porque a moldura de coordenadas tomaria a borda inteira. A caixa **"Mostrar o valor de cada estação"** escreve os números, para ler ampliando no ícone de tela cheia |
 | **Variáveis** | Todas, menos a direção do vento: interpolar ângulo entre 350° e 10° daria 180°, o rumo oposto. No mapa, direção se mostra com seta, como o relatório faz sobre a rajada. A **"Rajada s/ direção"** é a mesma rajada sem a seta e sem os graus, para um mapa mais limpo para o público; no PNG do boletim, o título sai "Rajada máxima em MS" |
 | **Quando não desenha** | Se menos de 3 estações mediram naquele instante, a tela avisa em vez de mostrar uma superfície inventada |
-| **Baixar PNG** | Um botão por mapa, com o mesmo desenho da tela em 150 dpi |
-| **Baixar PNG do boletim** | Um segundo botão por mapa, nesta aba, na Chuva e no Risco de Fogo: o mapa **na moldura do relatório**, como o `main.py` grava — título, subtítulo com a janela e o fuso, os logos do CEMTEC e da SEMADESC, o ranking das cinco estações, a barra de cores e o crédito INMET/SEMADESC no rodapé, em 300 dpi. **As cores e a escala são as da tela** (decisão da equipe, 01/10/2026): o que se baixa é o que se vê, e não o que o `main.py` pintaria — ele estica a escala ao dado do dia e usa outras paletas na temperatura. Os mapas de risco saem com os títulos e os nomes de arquivo do `risco_fogo`, e o horário leva o nível e as condições de cada estação, como o mapa horário do produto. O desenho só acontece no clique (~0,7 s e 1,5 MB por mapa), para o deslizante não pagar por um arquivo que se baixa de vez em quando. Exige o Streamlit 1.52 ou mais novo |
-| **GIF do período** | Um botão por mapa monta a **sequência** da janela — um quadro por hora (ou por dia), cada um com a data e a hora escritas dentro, porque fora do painel o GIF vira um arquivo solto. O mapa parado diz como estava naquela hora; a sequência mostra por onde a frente entrou. A escala de cores fica **travada no período inteiro**: esticada a cada quadro, as cores piscariam e quem olha veria variação onde não houve. Acima de 72 quadros ele passa a pular de tantas em tantas horas — o carimbo deixa o salto à vista. Fica atrás de um botão porque custa ~0,08 s por quadro |
+| **PNG do boletim** | No menu "Baixar" (veja [O menu "Baixar"](#o-menu-baixar)), aqui, na Chuva e no Risco de Fogo. As cores são as da tela, e não as que o `main.py` pintaria: ele estica a escala ao dado do dia e usa outras paletas na temperatura. Os mapas de risco saem com os títulos e os nomes de arquivo do `risco_fogo`, e o horário leva o nível e as condições de cada estação, como o mapa horário do produto |
+| **GIF do período** | No menu "Baixar", **"Gerar GIF"** monta a **sequência** da janela — um quadro por hora (ou por dia), cada um com a data e a hora escritas dentro, porque fora do painel o GIF vira um arquivo solto. O mapa parado diz como estava naquela hora; a sequência mostra por onde a frente entrou. A escala de cores fica **travada no período inteiro**: esticada a cada quadro, as cores piscariam e quem olha veria variação onde não houve. Acima de 72 quadros ele passa a pular de tantas em tantas horas — o carimbo deixa o salto à vista. Fica atrás de um botão porque custa ~0,08 s por quadro |
 
-### Aba "Risco de Fogo"
+### Observado › Risco de Fogo
 
 A regra **30-30-30** na tela, com o mesmo código do produto: `modulos/produtos/risco_fogo.py` é
 importado, não copiado. Duas implementações da regra divergiriam com o tempo, e aí a tela e o
@@ -644,44 +763,47 @@ produto trabalha com uma lista de `(estação, leituras)`, o painel com uma tabe
 | | |
 |---|---|
 | **A regra** | Conta quantas das três condições valem **em cada hora**: temperatura máxima ≥ 30 °C, umidade mínima ≤ 30 % e rajada ≥ 30 km/h. Hora a hora porque os extremos do dia acontecem em horários diferentes: 32 °C às 15 h, 28 % às 18 h e rajada às 03 h não são um dia de risco alto. Os limiares foram confirmados pela equipe em 28/09/2026 |
-| **O dado é o mesmo dos mapas** | Mesma janela, mesma chave de cache: se a pessoa já carregou a aba **Mapas Boletim**, o risco não consulta a API de novo |
-| **Hora a hora** | Deslizante + o mapa em quatro classes, com o botão de GIF. A caixa **"só as horas em que alguma estação chegou ao risco alto"** faz o deslizante parar só nelas. O critério é o nível **medido**: a superfície pode mostrar nível 2 numa célula onde nenhuma estação chegou a 2 |
+| **O dado é o mesmo dos mapas** | Mesma janela, mesma chave de cache: se a pessoa já carregou a página **Mapas**, o risco não consulta a API de novo |
+| **Hora a hora** | Deslizante + o mapa em quatro classes, com o GIF no menu "Baixar". A caixa **"só as horas em que alguma estação chegou ao risco alto"** faz o deslizante parar só nelas. O critério é o nível **medido**: a superfície pode mostrar nível 2 numa célula onde nenhuma estação chegou a 2 |
 | **Por dia** | O **pior** nível que cada lugar alcançou no dia — um dia é de risco alto se houve uma hora em que as três condições valeram juntas |
-| **Período inteiro** | O pior nível da janela, as **horas em risco alto** célula a célula, e a tabela por estação com as mesmas colunas da planilha do produto (CSV) |
-| **Três gráficos** | Horas em cada nível, o calendário do pior nível de cada dia, e as condições atendidas de um dia — o gráfico que responde se o risco veio do calor, da secura ou do vento. A ordem das estações é a mesma nos três, para dar para comparar. Nas barras e nas legendas, os níveis vão do **alto para o baixo**: a estação que chegou ao risco alto mostra o vermelho primeiro. No calendário, **dia vazio** é dia sem nenhuma hora com as três medidas (estação sem transmitir, ou um sensor sem dado), e **cinza** é dia medido em que nenhuma condição valeu |
-| **Nível de cada estação** | A caixa "Mostrar o nível e as condições de cada estação" vem **ligada**: o nível escrito sobre cada estação e, no hora a hora, um ponto para cada condição atendida. Desligue para ler só as cores |
+| **Período inteiro** | O pior nível da janela ou as **horas em risco alto** célula a célula, e a tabela por estação com as mesmas colunas da planilha do produto (CSV) |
+| **No navegável** | No hora a hora, o balão traz, em qualquer ponto, o nível e as três medidas interpoladas, com ✔ ou ✘ em cada uma, e o clique abre um gráfico por medida, com o limiar; por dia e no período, as horas em risco alto. A célula clicada fica em ciano. O "Relevo 3D" sobe um degrau por nível |
+| **Três gráficos** | Embaixo do mapa: horas em cada nível, o calendário do pior nível de cada dia, e as condições atendidas de um dia — o gráfico que responde se o risco veio do calor, da secura ou do vento. A ordem das estações é a mesma nos três, para dar para comparar. Nas barras e nas legendas, os níveis vão do **alto para o baixo**: a estação que chegou ao risco alto mostra o vermelho primeiro. No calendário, **dia vazio** é dia sem nenhuma hora com as três medidas (estação sem transmitir, ou um sensor sem dado), e **cinza** é dia medido em que nenhuma condição valeu |
+| **Nível de cada estação** | A caixa "Mostrar o nível de cada estação" vem **ligada**: o nível escrito sobre cada estação e, no boletim hora a hora, um ponto para cada condição atendida. Desligue para ler só as cores |
 | **Interpolação** | As três variáveis são interpoladas **separadas** e a regra é aplicada célula a célula. Interpolar o nível 0–3 direto produziria "1,7 condições" e espalharia risco médio onde estação nenhuma o registrou |
 | **Custo** | Três interpolações por hora, 31 ms cada: uma semana sai em ~5 s, com barra de progresso, e fica em cache |
 
-### Aba "Chuva"
+### Observado › Chuva
 
-Todos os mapas de chuva ficam aqui, e não junto dos outros, por um motivo de fundo: **a chuva é a única grandeza que precisa de dado fora do período escolhido**. Um acumulado de 96 h, ou o do mês, começa antes do início da janela da barra lateral. Nas outras abas, todo mapa respeita o período; misturar um que espia fora dele geraria exatamente a dúvida que o catálogo veio matar.
+Todos os mapas de chuva ficam aqui, e não junto dos outros, por um motivo de fundo: **a chuva é a única grandeza que precisa de dado fora do período escolhido**. Um acumulado de 96 h, ou o do mês, começa antes do início da janela da barra lateral. Nas outras páginas, todo mapa respeita o período; misturar um que espia fora dele geraria exatamente a dúvida que o catálogo veio matar.
+
+A página tem, de cima para baixo: o mapa (agregação **Acumulado**, **Hora a hora** ou **Por dia**); no acumulado, as barras por estação; a cascata do estado; e a cascata das estações escolhidas.
 
 | | |
 |---|---|
-| **Cascata** | Abre a aba, e vale para as **estações escolhidas na barra lateral** — é a leitura por estação, não do estado. **Um gráfico por estação**, dois por linha, cada um com o nome no título e o próprio botão de tela cheia, e todos com a mesma escala vertical, para comparar lado a lado. Cada barra é a chuva daquele passo, empilhada no que já tinha caído, e a barra escura no fim é o total, saindo do chão para comparar de relance. No horário mostra as últimas 24 horas; no diário, um dia por barra. O **rótulo só vai onde choveu**: num período seco seriam dezenas de zeros cobrindo justamente as barras que interessam. Vinha da aba de séries, e está aqui porque é chuva — e porque não depende da consulta do mês, que é o que segura o resto da aba |
-| **Até quando** | Um deslizante no topo escolhe o **instante de referência**, e toda janela conta para trás a partir dele. Sem isso ficava a dúvida de quem olha: "acumulado de 24 h, mas até que dia?" |
+| **Cascata das estações escolhidas** | No fim da página, para as **mesmas estações das séries temporais** da página Mapas (a escolha vale nas duas) — é a leitura por estação, não do estado. **Um gráfico por estação**, dois por linha, cada um com o nome no título e o próprio botão de tela cheia, e todos com a mesma escala vertical, para comparar lado a lado. Cada barra é a chuva daquele passo, empilhada no que já tinha caído, e a barra escura no fim é o total, saindo do chão para comparar de relance. No horário mostra as últimas 24 horas; no diário, um dia por barra. O **rótulo só vai onde choveu**: num período seco seriam dezenas de zeros cobrindo justamente as barras que interessam |
+| **Acumulado até** | No acumulado, um deslizante ao lado da janela escolhe o **instante de referência**, e a janela conta para trás a partir dele. Sem isso ficava a dúvida de quem olha: "acumulado de 24 h, mas até que dia?" |
 | **Cascata do estado** | A mesma forma, mas **sem depender de escolha nenhuma na barra lateral**: uma barra por passo com a **soma de todas as estações do estado**, presa ao deslizante de referência. No diário vai do começo da carga até o instante escolhido; no horário, as últimas 24 h. Sai do dado que os acumulados já baixaram, então não custa consulta nova |
 | **A soma não é a chuva de um lugar** | O número da cascata do estado é milímetro de estações diferentes somado. No MT, numa semana em que a estação mais molhada recebeu 74,8 mm, a soma das 51 deu **742,8**. Serve para ler o **ritmo** — quando choveu, e quanto do total veio de cada dia. Para quanto caiu **onde**, são os acumulados e o mapa. A legenda na tela diz isso; a equipe escolheu a soma sabendo disso, em vez da média das estações (14,6 mm) ou da média da área interpolada (14,1 mm) |
-| **Acumulados** | 3, 6, 12, 24, 48, 72, 96 h, o **mensal**, que começa no dia 1º, e o do **período**, que começa no primeiro dia da barra lateral. Com o "até quando" no fim do período (o padrão), ele é a chuva do período inteiro: de 17/10 a 03/11, por exemplo, que nenhuma janela fixa alcança |
-| **Barra primeiro, mapa sob demanda** | A barra diz **quanto** choveu em cada estação, ordenado — é o número que vai para o texto do boletim. O mapa diz **onde** choveu, e custa um desenho por janela no servidor; por isso fica atrás da caixa "Gerar também os mapas". A lista traz as 15 que mais choveram, e só quem choveu: numa janela seca, quinze barras de 0,0 mm não dizem nada |
-| **A carga é maior** | Por isso a aba tem o seu próprio botão: a consulta vai até o começo do mês (ou 96 h atrás, o que for mais antigo). Se o período da barra lateral começa antes disso e o acumulado do período é escolhido, a aba busca as horas que faltam; o cache de cada estação guarda o resto |
+| **Acumulados** | Uma janela por vez: 3, 6, 12, 24, 48, 72, 96 h, o **mensal**, que começa no dia 1º, e o do **período**, que começa no primeiro dia da barra lateral. Com o "Acumulado até" no fim do período (o padrão), ele é a chuva do período inteiro: de 17/10 a 03/11, por exemplo, que nenhuma janela fixa alcança |
+| **As barras por estação** | Embaixo do mapa: **quanto** choveu em cada estação na janela, ordenado — é o número que vai para o texto do boletim. A lista traz as 15 que mais choveram; a caixa "Listar as N estações" traz todas. Ali entram também as estações retiradas do mapa |
+| **No navegável** | Onde não choveu fica branco, e não transparente. O clique num ponto ou numa estação abre a chuva dele por hora ou por dia. Com o estado inteiro à vista, as estações a até 15 km umas das outras mostram só o maior valor (veja abaixo); aproximando, cada uma mostra o seu |
+| **A carga é maior** | Por isso a página tem o seu próprio botão: a consulta vai até o começo do mês (ou 96 h atrás, o que for mais antigo). Se o período da barra lateral começa antes disso e o acumulado do período é escolhido, a aba busca as horas que faltam; o cache de cada estação guarda o resto |
 | **Quando não fecha** | Se o dado carregado não alcança o começo de uma janela, a tela avisa e não desenha aquele mapa — um acumulado de 96 h feito com 48 h de dado mostraria metade da chuva como se fosse o total |
-| **Hora a hora e por dia** | Também estão aqui, e esses respeitam o período escolhido, como as outras abas |
+| **Hora a hora e por dia** | Também estão aqui, e esses respeitam o período escolhido, como as outras páginas |
 | **Os pluviômetros do CEMADEN** | No painel que lê do banco (o do servidor), todo pluviômetro do CEMADEN com dado entra nas barras, nos mapas e no ranking do boletim como uma estação do INMET, com o nome "CEMADEN · Município (Nome)" (no ranking do PNG do boletim, sem o "CEMADEN · ", que alargava o quadro por cima do mapa). Cada leitura entra na hora que termina na hora cheia seguinte (a das 13:40 na das 14:00), e a hora sem leitura fica sem dado. Com pluviômetro do CEMADEN no mapa, o crédito do rodapé passa a "Dados: INMET/SEMADESC/CEMADEN". No Streamlit Cloud não há CEMADEN |
-| **Estações perto umas das outras** | Nos mapas de chuva em PNG (o da tela e o do boletim), as estações a até 15 km umas das outras mostram só o maior valor: o ponto, o número e o ranking. A superfície continua com todas, e o rodapé do boletim avisa. Na prática, junta as estações de uma mesma cidade (Campo Grande tem a do INMET e quatro do CEMADEN). O raio fica em `config.AGRUPAR_CHUVA_KM` |
+| **Estações perto umas das outras** | Nos mapas de chuva em PNG (o da tela e o do boletim), as estações a até 15 km umas das outras mostram só o maior valor: o ponto, o número e o ranking. No navegável, o mesmo vale enquanto o estado inteiro está à vista. A superfície continua com todas, e o rodapé do boletim avisa. Na prática, junta as estações de uma mesma cidade (Campo Grande tem a do INMET e quatro do CEMADEN). O raio fica em `config.AGRUPAR_CHUVA_KM` |
 
-### Aba "Mapa Navegação"
+### Observado › Raios (GOES-19)
 
-Em avaliação. A **mesma superfície** da aba anterior — mesma interpolação IDW sobre as mesmas 62 estações —, mas desenhada sobre um mapa base que se aproxima e arrasta, com as cidades e as estradas por baixo. Passando o mouse numa estação sai o nome e o valor; o enquadramento sobrevive a andar no tempo, então dá para aproximar numa região e seguir as horas ali.
+Só no painel que lê do banco (`FONTE_DADOS=banco`): no Streamlit Cloud a página não aparece. Os flashes vêm do **GLM**, o sensor de raios do satélite GOES-19. Ele vê os raios dentro da nuvem e os que chegam ao solo, sem separar uns dos outros, com resolução de ~8 a 10 km, e não pega todos: o flash marca onde houve atividade elétrica, não o ponto exato de uma descarga. Os flashes vêm das tabelas que o script de um colega da unidade grava no mesmo banco; a contagem por hora é do `coletar.py raios`.
 
-O que ela custa, e por isso está em teste:
-
-- **É um segundo desenho de mapa.** O compartilhado é a conta (`modulos/calculos.py`); a tela e o relatório podem divergir com o tempo.
-- **O mapa base vem do Carto**, fora da SEMADESC: o navegador de cada pessoa busca as imagens lá.
-- **Convida a aproximar mais do que o dado permite.** São 62 estações, não a grade de um modelo: ampliada até o município, a interpolação parece mais segura do que é. O mapa de escala fixa do relatório é honesto quanto à sua resolução.
-
-A decisão — substituir a aba `Mapa`, conviver com ela ou não valer a manutenção — depende de a equipe usar o explorador para **explorar** ou para **conferir e baixar** o mapa do relatório.
+| | |
+|---|---|
+| **Agora** | Os flashes dos últimos 15, 30 ou 60 minutos, cada um na cor do tempo que passou (até 5, 15, 30 e 60 minutos). A página se atualiza sozinha a cada minuto, e as barras contam os flashes em MS de 5 em 5 minutos |
+| **O alcance** | Até 1.500 km de Campo Grande, com os anéis de distância e os municípios de MS, que podem ser desligados, ou só MS. No círculo, os flashes de MS vão um a um e os de fora, em quadradinhos de 0,1°: um ponto por flash pesaria de 10 a 25 MB por minuto no navegador. O PNG do boletim sai nos dois alcances |
+| **Densidade** | Os flashes de um período por km², em células de 0,1° (~10 km), de MS e de até ~1° em volta, no mapa navegável (o balão traz quantos flashes a célula teve) ou no do boletim, com o PNG e o GeoTIFF. O período é o da barra lateral, ou as últimas horas |
+| **O histórico** | Chega aos poucos, de trás para frente, até 2018. A página avisa quando faltam horas no período, ou quando faltam muitos dos arquivos de 20 s do GLM, e soma só o que está no banco |
 
 ### Botão "Estações retiradas"
 
@@ -689,17 +811,21 @@ A mesma retirada do `main.py` (veja [Estações retiradas dos mapas](#estações
 
 | | |
 |---|---|
-| **Onde fica** | Nas abas **Mapas Boletim**, **Chuva** e **Risco de Fogo**, o botão **"Estações retiradas"** no canto de cima, à direita, por cima dos mapas. Ele abre uma barra lateral da altura da tela, com uma lista para cada variável dos mapas na tela, e abre e fecha sem refazer os mapas. Fechado, mostra quantas estações estão fora ("Estações retiradas (2)"), para ninguém esquecer delas |
-| **O que sai** | O ponto, o ranking e a interpolação dos mapas da variável, inclusive no PNG do boletim e no GIF, sem nota sobre a retirada (decisão da equipe). Os gráficos e as tabelas continuam com todas as estações, que é onde se vê o erro |
-| **Por variável** | Quem falha é um sensor: um pluviômetro entupido não estraga a temperatura da mesma estação. A lista de uma variável, escolhida numa aba, vale nos mapas dela em todas as abas, inclusive no **Mapa Navegação**, que diz embaixo do mapa quem ficou de fora |
+| **Onde fica** | Nas páginas **Mapas**, **Chuva** e **Risco de Fogo** do observado, nas duas vistas, o botão **"Estações retiradas"** no canto de cima, à direita, por cima dos mapas. Ele abre uma barra lateral da altura da tela, com uma lista para cada variável dos mapas na tela, e abre e fecha sem refazer os mapas. Fechado, mostra quantas estações estão fora ("Estações retiradas (2)"), para ninguém esquecer delas |
+| **O que sai** | O ponto, o ranking e a interpolação dos mapas da variável, inclusive no PNG do boletim, no GIF, no GeoTIFF e no balão do navegável, sem nota sobre a retirada no PNG (decisão da equipe). Os gráficos e as tabelas continuam com todas as estações, que é onde se vê o erro; a série da estação clicada também |
+| **Por variável** | Quem falha é um sensor: um pluviômetro entupido não estraga a temperatura da mesma estação. A lista de uma variável, escolhida numa página, vale nos mapas dela em todas as páginas |
 | **As vizinhas** | As estações de fora do estado que seguram a borda da interpolação também podem sair, no fim da lista, marcadas como "(vizinha)" |
 | **O CEMADEN** | Nos mapas de chuva do painel que lê do banco, os pluviômetros do CEMADEN vêm depois das vizinhas e saem do mesmo jeito |
 | **No risco de fogo** | A estação sai das três medidas da regra, e o risco dos mapas é avaliado de novo sem ela. A tabela por estação e os gráficos continuam com todas |
 | **Até quando vale** | Enquanto a página estiver aberta: recarregar a página, ou abrir em outra máquina, começa sem retirada nenhuma. Cada pessoa tem a sua lista |
 
-### Aba "Qualidade dos dados"
+### Séries temporais
 
-Conferências que nenhum produto faz — os produtos calculam em cima do que a API mandou; aqui a pergunta é se dá para confiar nesse dado. Dá para analisar só as estações escolhidas ou **todas as de MS** de uma vez.
+Embaixo do mapa, na página **Mapas**: os gráficos das estações escolhidas ali, um por grandeza, por hora ou por dia, como descrito no começo desta seção. As estações escolhidas valem também para a cascata da página Chuva e para a Qualidade dos dados.
+
+### Qualidade dos dados
+
+A segunda aba da página **Mapas**. Conferências que nenhum produto faz — os produtos calculam em cima do que a API mandou; aqui a pergunta é se dá para confiar nesse dado. Dá para analisar só as estações escolhidas ou **todas as de MS** de uma vez.
 
 | Verificação | O que procura |
 |---|---|
@@ -715,33 +841,36 @@ Radiação levemente negativa à noite é ruído conhecido do sensor, não defei
 
 > Para o dia em curso, as horas mais recentes podem não estar no cache. Se precisar do dado de agora, limpe o cache ou consulte de novo mais tarde.
 
-### Localização Estações
+### Localização das estações
 
-Onde fica cada estação automática do INMET em MS, para quem não lida com elas todo dia: os mapas do painel mostram números em pontos, e esta página diz de quem é cada ponto. São as 60 estações em operação, as mesmas dos mapas.
+A última opção de "Variável" na página **Mapas**. Onde fica cada estação automática do INMET em MS, para quem não lida com elas todo dia: os mapas do painel mostram números em pontos, e esta opção diz de quem é cada ponto. São as estações em operação, as mesmas dos mapas.
 
 | | |
 |---|---|
-| **O mapa** | Navegável, com o fundo da Carto e cada estação com o nome escrito ao lado; aproxime para os nomes deixarem de se cobrir no sul. Passando o mouse, o município, o código, a altitude e desde quando ela opera |
+| **O mapa** | Só navegável, com o fundo da Carto e cada estação com o nome escrito ao lado; aproxime para os nomes deixarem de se cobrir no sul. O ponto fica do mesmo tamanho em qualquer zoom. Passando o mouse, o município, o código, a altitude e desde quando ela opera |
 | **A lista e a busca** | Ao lado do mapa, numerada em ordem alfabética. A busca procura no nome, no município e no código, sem ligar para acento e maiúscula ("corumba" acha as 7 de Corumbá e Nhumirim), e as achadas ficam em vermelho no mapa |
 | **O município** | Não vem na lista do INMET. Vale o do começo do nome da estação, quando ele é um município do estado; senão, o do ponto dela no mapa. Pelas coordenadas, a estação de Dourados cai do lado de Itaporã e a de Miranda do lado de Bodoquena, e é pelo nome que o público as procura |
-| **O mapa de referência (PNG)** | As estações numeradas no mapa e a lista dos números com os nomes ao lado, no padrão do boletim (título e logos), em 300 dpi, para boletins, relatórios e apresentações. Numa imagem parada os nomes escritos no mapa se atropelariam no sul; o número cabe |
+| **O mapa de referência (PNG)** | No menu "Baixar": as estações numeradas no mapa e a lista dos números com os nomes ao lado, no padrão do boletim (título e logos), em 300 dpi, para boletins, relatórios e apresentações. Numa imagem parada os nomes escritos no mapa se atropelariam no sul; o número cabe |
 | **Os pluviômetros do CEMADEN** | No painel que lê do banco (o do servidor), os pluviômetros do CEMADEN em operação entram em laranja no mapa, na lista (depois das estações do INMET, com a coluna "Rede") e no PNG de referência, que ganha a legenda das duas redes e o crédito "Dados: INMET/SEMADESC/CEMADEN" no rodapé. A busca também acha pela rede ("cemaden"). O parado fica de fora, como fica dos mapas de chuva. Onde uma cidade tem estações coladas (os três pluviômetros de Bonito, a cerca de 1 km um do outro), os números do PNG se sobrepõem; no mapa da página, o zoom os separa |
 
 ### Previsão (MS)
 
-A previsão do tempo para Mato Grosso do Sul, do [Open-Meteo](https://open-meteo.com/), com três modelos: **ECMWF**, **GFS** e **ICON**. O ECMWF e o GFS vão até o dia 14; o ICON, até o dia 7. São páginas à parte porque não usam nenhum filtro do observado, e só consultam o Open-Meteo quando alguém as abre.
+A previsão do tempo para Mato Grosso do Sul, do [Open-Meteo](https://open-meteo.com/), com três modelos: **ECMWF**, **GFS** e **ICON**. O ECMWF e o GFS vão até o dia 14; o ICON, até o dia 7. São páginas à parte porque não usam nenhum filtro do observado. Na barra lateral ficam o **modelo** do mapa (um por vez), a caixa "Mapa de fundo" e o imóvel do CAR.
 
 | | |
 |---|---|
-| **Estações** (`…/previsao`) | Os gráficos de uma estação de MS (abre em Campo Grande), com os modelos lado a lado: temperatura, umidade, ponto de orvalho, vento e rajada, direção e chuva, por hora ou por dia. Cor separa o modelo, traço separa a série. Por dia, a chuva sai em barras, com o total previsto de cada modelo. Em "Risco de fogo", um calendário com o pior nível de cada dia em cada modelo. A tabela diária, com o risco, baixa em CSV |
-| **Mapas** (`…/previsao-mapas`) | Os mapas dos dias, um modelo por vez, com um deslizante de hoje até o último dia inteiro do modelo: temperatura máxima, mínima e média, umidade mínima, chuva do dia, chuva acumulada de hoje até o dia escolhido, rajada e vento máximos com a seta da direção, a "Rajada s/ direção" (a mesma rajada, sem a seta e sem os graus), e o risco de fogo (o pior nível do dia e as horas em risco alto). As cores e as escalas são as dos mapas do observado, e cada mapa tem o botão do PNG do boletim |
+| **Mapas** (`…/previsao-mapas`) | As variáveis menos a chuva e o risco, uma por vez. **Por dia**, com um deslizante de hoje até o último dia inteiro do modelo: temperatura máxima, mínima e média, umidade mínima, rajada e vento máximos com a seta da direção e a "Rajada s/ direção" (a mesma rajada, sem a seta e sem os graus). **Hora a hora**: temperatura, umidade, rajada e vento da hora, também com a "Rajada s/ direção". Embaixo, as **séries das estações**: os gráficos de uma estação de MS (abre em Campo Grande), com os modelos lado a lado, por hora ou por dia, e a tabela diária, com o risco, que baixa em CSV. Cor separa o modelo, traço separa a série |
+| **Chuva** (`…/previsao-chuva`) | O **acumulado** de hoje até o dia escolhido, a chuva **por dia** ou a chuva **na hora**. Embaixo, a chuva prevista na estação escolhida: por dia, em barras, com o total previsto de cada modelo |
+| **Risco de Fogo** (`…/previsao-risco-de-fogo`) | Por dia, o pior nível ou as horas em risco alto; hora a hora, o nível de cada hora. Embaixo, o calendário com o pior nível de cada dia em cada modelo, na estação escolhida |
 | **O risco de fogo** | A regra 30-30-30 do produto `risco_fogo`, sem reescrever, aplicada a cada hora prevista: no mapa, as três variáveis viram superfície e a regra é aplicada em cada célula, como o produto faz com as estações. O modelo dá o valor da hora cheia, e a estação mede a máxima e a mínima dentro da hora: o risco previsto tende a sair um pouco abaixo do medido |
-| **Semanas** (`…/previsao-semanas`) | A anomalia semanal do **EC46**, a previsão estendida do ECMWF (média dos membros, uma rodada por dia): quanto cada semana, de segunda a domingo, deve ficar acima ou abaixo do normal do próprio modelo, na temperatura média, na máxima e na mínima de 6 em 6 horas (quatro por dia, na média da semana: não são a máxima e a mínima do dia) e na chuva. Os números são desvios, com sinal, e não temperaturas. No topo, os gráficos da estação escolhida mostram a previsão de cada semana contra a **normal da época** (temperatura média e chuva), com a anomalia como a distância entre as duas linhas: é o que explica os mapas. Entram as semanas inteiras depois da rodada, cinco na prática. Uma semana com vários mapas, ou um mapa com todas as semanas lado a lado. Branco é o normal; azul e vermelho, mais frio e mais quente; marrom e verde, menos e mais chuva. Dá a tendência da semana, e não o tempo de um dia |
-| **A superfície** | É a do próprio modelo, nos 178 pontos da grade de 0,5° que cobrem o estado, levada à resolução do mapa por interpolação bilinear. **Não é IDW de estação**: a previsão já vem em grade, e o IDW só mostraria um núcleo de chuva onde houvesse estação. Os números sobre as estações são a previsão do mesmo modelo no ponto de cada uma, e são eles que entram no ranking do boletim |
+| **Semanas** (`…/previsao-semanas`) | A anomalia semanal do **EC46**, a previsão estendida do ECMWF (média dos membros, uma rodada por dia): quanto cada semana, de segunda a domingo, deve ficar acima ou abaixo do normal do próprio modelo, na temperatura média, na máxima e na mínima de 6 em 6 horas (quatro por dia, na média da semana: não são a máxima e a mínima do dia) e na chuva. Os números são desvios, com sinal, e não temperaturas. Entram as semanas inteiras depois da rodada, cinco na prática. Uma semana por vez ou, na vista Boletim, **"Todas as semanas"**: a anomalia escolhida de cada semana, lado a lado. Branco é o normal; azul e vermelho, mais frio e mais quente; marrom e verde, menos e mais chuva. Dá a tendência da semana, e não o tempo de um dia. Embaixo, os gráficos da estação escolhida mostram a previsão de cada semana contra a **normal da época** (temperatura média e chuva), com a anomalia como a distância entre as duas linhas: é o que explica os mapas |
+| **No navegável** | O balão traz o valor em qualquer ponto pela mesma bilinear do mapa, e o clique num ponto, numa estação ou no imóvel do CAR mostra os três modelos lado a lado (nas semanas, a semana contra o normal). No hora a hora do risco, o clique abre um gráfico por medida da regra, com os três modelos e o limiar. Chuva e Risco de Fogo têm o "Relevo 3D" |
+| **O boletim hora a hora** | Na vista Boletim, o mapa de uma hora na moldura do relatório, e o **GIF** das horas do modelo, no menu "Baixar" |
+| **A superfície** | É a do próprio modelo, levada à resolução do mapa por interpolação bilinear: na busca direta no Open-Meteo, os 178 pontos da grade de 0,5° que cobrem o estado; no painel que lê do banco, a grade de 0,25° do coletor. **Não é IDW de estação**: a previsão já vem em grade, e o IDW só mostraria um núcleo de chuva onde houvesse estação. Os números sobre as estações são a previsão do mesmo modelo no ponto de cada uma, e são eles que entram no ranking do boletim |
 | **O dia** | O mesmo do observado: da hora das 01:00 à das 00:00 do dia seguinte, no horário de MS. No modo por dia entram só os dias inteiros |
-| **A rodada** | A página diz de que rodada é cada modelo. Cada um é buscado de novo quando sai uma rodada dele, de 6 em 6 horas, e a busca fica guardada para todos que abrem o painel: só a primeira pessoa depois da rodada espera, alguns segundos. Se o Open-Meteo falhar, fica a última rodada guardada, com aviso |
-| **A cota** | O Open-Meteo gratuito aceita 10 mil chamadas por dia. As estações custam 58 por modelo e rodada, e a grade dos mapas, 178: no pior caso, alguém abrindo tudo depois de cada rodada, umas 2.800 por dia. As semanas, no máximo umas 780, uma vez por dia |
-| **O PNG do boletim** | O subtítulo traz só a data ("Previsão para 22/10/2026", "Semana de 26/10 a 01/11/2026"), a pedido dos meteorologistas: o modelo e a rodada não dizem nada ao público geral, e ficam no nome do arquivo |
+| **A rodada** | A página diz de que rodada é cada modelo. Na busca direta, cada um é buscado de novo quando sai uma rodada dele, de 6 em 6 horas, e a busca fica guardada para todos que abrem o painel: só a primeira pessoa depois da rodada espera, alguns segundos. Se o Open-Meteo falhar, fica a última rodada guardada, com aviso. No painel que lê do banco, são as rodadas das 00Z e das 12Z que o coletor guardou |
+| **A cota** | Só na busca direta: o Open-Meteo gratuito aceita 10 mil chamadas por dia. As estações custam 58 por modelo e rodada, e a grade dos mapas, 178: no pior caso, alguém abrindo tudo depois de cada rodada, umas 2.800 por dia. As semanas, no máximo umas 780, uma vez por dia |
+| **O PNG do boletim** | O subtítulo traz só a data ("Previsão para 22/10/2026", "Semana de 26/10 a 01/11/2026"), ou a data e a hora, no hora a hora, a pedido dos meteorologistas: o modelo e a rodada não dizem nada ao público geral, e ficam no nome do arquivo |
 | **Crédito** | Os dados são do Open-Meteo, com ECMWF, NOAA e DWD, sob CC BY 4.0. O crédito vai nas páginas e, no PNG do boletim, numa linha miúda embaixo do mapa, à direita ("Dados: Open-Meteo (CC BY 4.0)/SEMADESC"), no lugar do "INMET/SEMADESC" do subtítulo |
 
 As decisões estão em [`docs/escopo_v0.3.1.md`](docs/escopo_v0.3.1.md), e o que vem depois (o banco, os coletores e o servidor da unidade), em [`docs/plano_arquitetura.md`](docs/plano_arquitetura.md).
@@ -762,15 +891,19 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 ├── coletar.py            # Os coletores do banco da UNIGEO (ex.: python coletar.py inmet), para o servidor
 ├── modulos/              # Peças compartilhadas por todos os produtos
 │   ├── config.py         # Configurações, o Recorte (o estado mapeado) e o Periodo (janelas de tempo)
-│   ├── fonte.py          # De onde vêm os dados: é a ele que os produtos e o painel pedem (hoje, as APIs)
+│   ├── fonte.py          # De onde vêm os dados: é a ele que os produtos e o painel pedem (as APIs ou o banco)
 │   ├── inmet.py          # Acesso à API do INMET (estações e dados horários)
 │   ├── openmeteo.py      # Previsão do Open-Meteo (ECMWF, GFS e ICON), hora a hora, e o dia tirado das horas
 │   ├── banco.py          # O banco da UNIGEO (PostgreSQL): a única peça que fala SQL
 │   ├── coletor_inmet.py  # O coletor do INMET: as horas de todas as estações, do INMET para o banco
 │   ├── cemaden.py        # Acesso à PED do CEMADEN (os pluviômetros): cadastro e chuva de um dia do estado
 │   ├── coletor_cemaden.py # O coletor do CEMADEN: o cadastro e as leituras de chuva, da PED para o banco
+│   ├── coletor_previsao.py # O coletor da previsão: as rodadas das 00Z e 12Z e o EC46, do Open-Meteo para o banco
+│   ├── coletor_raios.py  # O coletor dos raios: a contagem dos flashes do GLM por hora e por célula de 0,1°
 │   ├── calculos.py       # Recorte no tempo, extremos, acumulados e interpolação IDW
 │   ├── mapas.py          # Mapas pontuais, interpolados e de classes (níveis de risco)
+│   ├── geotiff.py        # O GeoTIFF dos mapas (EPSG:4674, pixel de 0,01°), para o SIG
+│   ├── gpkg.py           # O GeoPackage das estações dos mapas, com o estilo do QGIS dentro
 │   ├── graficos.py       # Gráficos de barras e calendário, com o estilo comum aos produtos
 │   ├── excel.py          # Planilha Excel
 │   ├── retiradas.py      # Estações tiradas dos mapas a pedido, uma lista por variável (painel e --retirar)
@@ -779,7 +912,11 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │       └── risco_fogo.py       # Risco de fogo pela regra 30-30-30, hora a hora
 ├── app/                  # Explorador em Streamlit (análise), com o seu cache local em cache/
 │   ├── explorador.py     # A tela: as páginas do observado e da previsão, filtros, gráficos, mapas e qualidade
-│   ├── previsao.py       # Previsão na tela: a rodada guardada de cada modelo, as séries e os mapas dos dias
+│   ├── interativo.py     # O mapa navegável (pydeck): as células da grade com o valor de cada uma, os rótulos e o 3D
+│   ├── previsao.py       # Previsão na tela: a rodada guardada de cada modelo, as séries e os mapas dos dias e das horas
+│   ├── raios.py          # Os raios do GOES-19 na tela: o Agora e a densidade por km²
+│   ├── car.py            # O imóvel do CAR: a leitura do arquivo (ou das coordenadas) e as células que ele toca
+│   ├── referencia.py     # A localização das estações: o município de cada uma e o mapa de referência
 │   ├── dados.py          # Coleta com cache, usada só pelo explorador
 │   ├── variaveis.py      # Catálogo do que se pode mapear e traçar, com a regra de cada um
 │   ├── animacao.py       # GIF do mapa no tempo: quais quadros entram e o carimbo de cada um
@@ -789,8 +926,8 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │   ├── superficie.py     # Superfície interpolada como imagem, para o mapa navegável
 │   ├── qualidade.py      # Regras de qualidade das leituras (sem tela, por isso testáveis)
 │   └── requirements.txt  # Dependências só do explorador
-├── ferramentas/          # Scripts auxiliares (ex.: preparar os shapefiles de um estado)
-├── servidor/             # Para o servidor Windows da unidade: iniciar_painel.bat e coletar.bat (logs em logs/)
+├── ferramentas/          # Scripts auxiliares (ex.: preparar os shapefiles de um estado, o mapa do Brasil e vizinhos)
+├── servidor/             # Para o servidor Windows da unidade: iniciar_painel.bat, coletar.bat e criar_tarefas.ps1 (logs em logs/)
 ├── banco/                # O esquema do banco (esquema.sql): as tabelas do schema climageo
 ├── tests/                # Testes automatizados (pytest), com a API do INMET simulada
 ├── .github/workflows/    # Execução automática dos testes no GitHub (GitHub Actions)
@@ -827,5 +964,7 @@ A ferramenta baixa a malha de 2022 do IBGE, que publica um arquivo por UF — os
 **Ilha oceânica não entra no enquadramento.** A malha do IBGE traz o território inteiro: Trindade fica a 1.100 km do Espírito Santo e Fernando de Noronha a 545 km de Pernambuco. Enquadrar por elas daria um mapa de oceano com o estado num canto — o do ES sairia com 13° de largura para 3,4° de altura, quando o continental tem 2,2°. O enquadramento sai do corpo principal mais o que estiver a até 1° dele (`config.ILHA_DISTANTE`), então Marajó, a Ilha de Santa Catarina e Ilhabela continuam entrando. As ilhas distantes seguem no shapefile; só não esticam o desenho. Dos 25 estados, só ES e PE eram afetados.
 
 MS é a exceção: o municipal dele (`MS_mun`, os 79 municípios com ~755 mil vértices) é um arquivo da equipe, e não a malha do IBGE. Quando existe uma fonte local `<UF>_mun.shp`, é ela que vale. Se essa malha for atualizada, substitua os `MS_mun.*` e gere de novo com `--refazer`.
+
+Os mapas largos dos raios (o círculo de 1.500 km em volta de Campo Grande) usam também o `shp/brasil_e_vizinhos.gpkg`, com os estados do Brasil e os países em volta, simplificados. Ele sai do `python ferramentas/brasil_e_vizinhos.py`, a partir dos contornos do IBGE que já estão em `shp/` e dos países do Natural Earth.
 
 > Cada shapefile é formado por vários arquivos com o mesmo nome (`.shp`, `.shx`, `.dbf`, `.prj`, `.cpg`), que precisam ficar juntos na mesma pasta.
