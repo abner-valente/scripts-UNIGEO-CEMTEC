@@ -1,6 +1,6 @@
 # Como migrar um script para o projeto
 
-Os scripts da equipe de meteorologia estão sendo trazidos aos poucos para este projeto. Cada script vira um **produto**: um arquivo em `modulos/produtos/` que reaproveita as peças compartilhadas (API do INMET, períodos, cálculos, mapas e Excel).
+Os scripts da equipe de meteorologia estão sendo trazidos aos poucos para este projeto. Cada script vira um **produto**: um arquivo em `modulos/produtos/` que reaproveita as peças compartilhadas (a fonte dos dados, os períodos, os cálculos, os mapas e o Excel).
 
 O primeiro foi o `relatorio_inmet`, a partir dos scripts em `legado/relatorio_inmet/`. Use-o como modelo.
 
@@ -28,9 +28,11 @@ Antes de escrever código novo, confira se a peça já existe:
 | Preciso de... | Use |
 |---|---|
 | Datas da consulta (dia, período, tempo real) | `config.Periodo` — `janela`, `janela_busca`, `inicio_do_dia`, `identificador`, `pasta_saida(produto)` |
-| Estações de MS e seus dados horários | `inmet.baixar_estacoes(inicio, fim)` |
+| O estado (sigla, shapefiles, enquadramento, fuso) | `opcoes["recorte"]`, um `config.Recorte` (MS quando não vem) |
+| As estações do estado e os dados horários delas | `fonte.leituras_do_estado(inicio, fim, uf=recorte.uf, fuso=periodo.fuso)`, que devolve pares `(estação, leituras)`; as vizinhas, para a borda do mapa, em `fonte.leituras_de_apoio`. **Nunca direto do `inmet.py`**: é o `fonte.py` que decide se os dados vêm da API ou do banco (`FONTE_DADOS`), e um teste falha se um produto passar por fora. O erro a tratar é o `fonte.ErroFonte` |
 | Recortar um intervalo, achar extremos, somar chuva | `calculos.recortar`, `calculos.indice_extremo`, `calculos.data_hora`, `calculos.acumulado_chuva` |
 | Mapas pontuais e interpolados | `mapas.EspecMapa` + `mapas.gerar_mapas` (a interpolação IDW já vem junto) |
+| Tirar dos mapas as estações retiradas (`--retirar`) | `opcoes["retirar"]` e `retiradas.retirar`: saem do mapa, do ranking e da interpolação, e a planilha fica com todas. Veja como o `relatorio_inmet` faz em `_sem_as_retiradas` |
 | Gráficos de barras ou calendário | `graficos.barras_empilhadas`, `graficos.barras_agrupadas` e `graficos.calendario` |
 | Planilha formatada | `excel.salvar_relatorio` |
 | Pastas, limites do mapa, logos e parâmetros | `config` |
@@ -43,12 +45,16 @@ Antes de escrever código novo, confira se a peça já existe:
    NOME = "<nome>"   # igual ao nome do arquivo; usado no main.py e na pasta de saída
    TITULO = "..."    # descrição curta, exibida ao rodar
 
+   # Gera o produto. Devolve 0 se deu certo e 1 se falhou
    def executar(periodo: Periodo, opcoes: dict | None = None) -> int:
-       """Gera o produto. Retorna 0 se deu certo e 1 se falhou."""
+       ...
    ```
 
-   `opcoes` traz os argumentos de linha de comando que valem só para alguns produtos (por exemplo,
-   `--hrtodas`, do `risco_fogo`). Cada produto usa as opções que conhece e ignora o resto; um produto
+   As funções do projeto não têm docstring: o porquê vai num comentário curto, quando precisa. Só o
+   topo de cada arquivo tem uma docstring, dizendo para que ele serve.
+
+   `opcoes` traz o estado (`"recorte"`), as estações retiradas (`"retirar"`) e os argumentos de linha
+   de comando que valem só para alguns produtos (por exemplo, `--hrtodas`, do `risco_fogo`). Cada produto usa as opções que conhece e ignora o resto; um produto
    sem opções próprias apenas aceita o parâmetro e não o consulta.
 
 2. Dentro de `executar`, siga o mesmo roteiro do `relatorio_inmet`: baixar os dados → calcular por estação → montar as tabelas → salvar a planilha e os mapas em `periodo.pasta_saida(NOME)`.
@@ -60,7 +66,9 @@ Antes de escrever código novo, confira se a peça já existe:
 Crie `tests/test_<nome>.py`. As fixtures de `tests/conftest.py` já simulam a API do INMET:
 
 - `serie` — dados horários sintéticos, para testar cálculos com valores conhecidos;
-- `api_simulada` — 10 estações fictícias, sem token e sem internet, com as saídas numa pasta temporária.
+- `api_simulada` — 11 estações fictícias (uma delas sem dados) e duas vizinhas, sem token e sem internet, com as saídas numa pasta temporária.
+
+Nenhum teste pode usar a rede: a fixture automática `sem_rede` derruba qualquer tentativa, com o endereço na mensagem.
 
 Teste pelo menos as janelas de tempo do produto, os cálculos com valores conhecidos e a execução completa em cada modo (dia, período e tempo real). O `tests/test_main.py` já confere se o produto segue o padrão (`NOME`, `TITULO` e `executar`).
 
@@ -82,7 +90,8 @@ Rode o script original e o produto novo para as **mesmas datas** e compare as pl
   8. **Mudanças em relação aos scripts legados** — ou "não se aplica", se o produto for novo;
   9. **Decisões da equipe de meteorologia** — resumo, com link para `docs/questoes_meteorologia.md`.
 - Para os exemplos, rode o produto com dados reais e copie alguns mapas de `saida/` para `docs/img/<nome>/`, reduzidos para cerca de 1000 px de largura (os originais têm ~1 MB e ficariam para sempre no histórico do git).
-- Trabalhe numa branch, rode `pytest` e abra um pull request para a `main`. Os testes também rodam no GitHub.
+- Conte a novidade no [`CHANGELOG.md`](../CHANGELOG.md), na versão em andamento, do ponto de vista de quem roda o `main.py`.
+- Trabalhe na branch da versão (`v0.x.y`), rode `pytest` e abra um pull request para a `main`. Os testes também rodam no GitHub.
 - O original fica em `legado/<nome>/` até a equipe validar os resultados.
 
 ---
@@ -91,9 +100,11 @@ Rode o script original e o produto novo para as **mesmas datas** e compare as pl
 
 - [ ] Original em `legado/<nome>/`, sem credenciais
 - [ ] Dúvidas registradas em `questoes_meteorologia.md`
-- [ ] `modulos/produtos/<nome>.py` com `NOME`, `TITULO` e `executar`
+- [ ] `modulos/produtos/<nome>.py` com `NOME`, `TITULO` e `executar`, pedindo os dados ao `fonte.py`
 - [ ] Produto registrado em `PRODUTOS`, no `main.py`
+- [ ] Estações retiradas (`opcoes["retirar"]`) fora dos mapas, se o produto tiver mapa
 - [ ] `tests/test_<nome>.py` passando
 - [ ] Resultados comparados com o original
 - [ ] Seção do produto no README, com as subseções padrão e exemplos em `docs/img/<nome>/`
+- [ ] Entrada no `CHANGELOG.md`
 - [ ] Pull request com os testes passando

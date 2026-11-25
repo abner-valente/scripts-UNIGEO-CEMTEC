@@ -3,6 +3,10 @@
 > Escrito em 28/09/2026, com as decisões tomadas pelo programador no mesmo dia. Este documento
 > registra **o que foi decidido e por quê**, para quem pegar o código depois não precisar
 > reconstituir o raciocínio.
+>
+> **Situação em 25/11/2026:** o que se decidiu aqui está no código e continua valendo. As contagens
+> de estações são as de 28/09. Uma mudança de lugar: desde a 0.4.1, as estações e as grandezas das
+> séries se escolhem na página Mapas do painel, e não mais na barra lateral.
 
 ## O que muda, em uma frase
 

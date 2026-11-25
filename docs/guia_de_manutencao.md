@@ -97,7 +97,7 @@ Os mapas interpolados usam também as estações de **fora** do estado que podem
 
 A regra é rígida: **o apoio entra só na superfície**. Ele não vira ponto desenhado, linha de planilha, ranking, nem critério de qual hora ganha mapa no risco de fogo. E a escala de cores fica presa na faixa que o estado faria sozinho (`mapas.mapa_interpolado`).
 
-- Quem escolhe as vizinhas é `inmet.estacoes_de_apoio`: elas precisam cair a até 1,5° do enquadramento e chegar às 16 mais próximas de alguma célula (`config.VIZINHOS_NA_PODA`, o dobro do que o IDW usa, por folga).
+- Quem escolhe as vizinhas é `inmet.estacoes_de_apoio`, chamada pelo `fonte.estacoes_de_apoio` (com a fonte "banco", a mesma escolha sai do cadastro do banco): elas precisam cair a até 1,5° do enquadramento e chegar às 16 mais próximas de alguma célula (`config.VIZINHOS_NA_PODA`, o dobro do que o IDW usa, por folga).
 - Painel e produtos usam a **mesma** função, então a tela e o boletim saem das mesmas estações.
 - Se a lista falhar, `inmet.baixar_apoio` avisa e devolve vazio, e o produto sai só com as do estado.
 
@@ -113,12 +113,14 @@ O perigo é converter duas vezes: `app/risco.py` recebe o dado do painel, que j�
 
 ### 2.5 Um desenho de mapa, duas molduras
 
-Todo mapa sai de `modulos/mapas.py`. O que muda entre o relatório e a tela é a **moldura**:
+Todo mapa em PNG sai de `modulos/mapas.py`. O que muda entre o relatório e a tela é a **moldura**:
 
-- **Sem `Tela`** (o caminho do `main.py`): título e subtítulo (o quê e quando, sem as instituições), logos, ranking das 5 estações, barra de cores vertical, grade de latitude e longitude e, no rodapé, o crédito ("Dados: INMET/SEMADESC", ou o do Open-Meteo na previsão).
-- **Com `mapas.Tela(...)`** (o caminho do painel): só o desenho, para caber numa coluna.
+- **Sem `Tela`** (o caminho do `main.py`): título e subtítulo (o quê e quando, sem as instituições), logos, ranking das 5 estações, barra de cores vertical, grade de latitude e longitude e, no rodapé, o crédito ("Dados: INMET/SEMADESC", "INMET/SEMADESC/CEMADEN" quando há pluviômetro do CEMADEN, ou o do Open-Meteo na previsão).
+- **Com `mapas.Tela(...)`** (o caminho do painel, na vista Boletim): só o desenho, para caber na tela.
 
-O botão "Baixar PNG do boletim" do painel chama o caminho **sem** `Tela`, com as cores da tela. O texto da moldura vem de `app/boletim.py`.
+O item "PNG do boletim (300 dpi)" do menu "Baixar" chama o caminho **sem** `Tela`, com as cores da tela. O texto da moldura vem de `app/boletim.py`.
+
+A exceção é a **vista Navegável** do painel: ela é desenhada no navegador, pelo pydeck, com as camadas montadas em `app/interativo.py`. É um segundo desenho, mas a **conta** é a mesma: a superfície sai do mesmo IDW (ou da mesma bilinear, na previsão), na mesma grade dos produtos, e o GeoTIFF (`modulos/geotiff.py`) refaz a mesma conta em pixels de 0,01°.
 
 O que vai num mapa é descrito por uma especificação: `EspecMapa` para valores contínuos (coluna, título, paleta, unidade, ranking, setas de vento) e `EspecClasses` para classes, como os níveis de risco.
 
@@ -136,14 +138,14 @@ O catálogo também decide a **escala de cores** (`variaveis.escala`): temperatu
 python main.py --produto relatorio_inmet --uf MS --dataini 29/09/2026
 ```
 
-1. **`main.py` → `ler_consulta()`**: lê os argumentos, ou as variáveis no topo do arquivo quando eles faltam. Devolve três coisas: o **módulo do produto** (de `PRODUTOS`, que associa o `NOME` de cada produto ao seu módulo), o **`Periodo`** (com o fuso do recorte) e as **`opcoes`** (`{"recorte": ..., "hrtodas": ...}`).
+1. **`main.py` → `ler_consulta()`**: lê os argumentos, ou as variáveis no topo do arquivo quando eles faltam. Devolve três coisas: o **módulo do produto** (de `PRODUTOS`, que associa o `NOME` de cada produto ao seu módulo), o **`Periodo`** (com o fuso do recorte) e as **`opcoes`** (`{"recorte": ..., "hrtodas": ..., "retirar": ...}`, com as estações retiradas do `RETIRAR` ou do `--retirar`).
 2. **`main.executar()`**: confere se o token está no `.env` e chama `produto.executar(periodo, opcoes)`. **Todo produto tem essa mesma assinatura**: é o contrato que o `main.py` conhece.
 3. Dentro do produto, no `relatorio_inmet.executar`:
-   1. `fonte.leituras_do_estado(...)`, que hoje repassa ao `inmet.baixar_estacoes`, lista as estações operantes da UF (as em pane ficam de fora) e baixa as leituras de cada uma, **uma por vez**, com até 3 tentativas por consulta. Devolve uma lista de pares `(estação, leituras)` e imprime quem ficou de fora e por quê.
+   1. `fonte.leituras_do_estado(...)` devolve uma lista de pares `(estação, leituras)` das estações operantes da UF (as em pane ficam de fora). Com a fonte `apis`, ele repassa ao `inmet.baixar_estacoes`, que baixa as leituras de cada estação, **uma por vez**, com até 3 tentativas por consulta, e imprime quem ficou de fora e por quê. Com a fonte `banco`, lê as mesmas colunas do `climageo`, numa consulta.
    2. `resumir_estacao` calcula, para cada estação, os extremos e os acumulados da janela, com `calculos.recortar`, `indice_extremo` e `acumulado_chuva`.
    3. `montar_tabelas` monta uma tabela por aba do Excel, ordenada.
    4. `excel.salvar_relatorio` grava a planilha.
-   5. `mapas.carregar_base(recorte)` lê os shapefiles e monta a grade. `_tabelas_de_apoio` baixa as vizinhas e faz as mesmas tabelas para elas.
+   5. `mapas.carregar_base(recorte)` lê os shapefiles e monta a grade. `_tabelas_de_apoio` baixa as vizinhas e faz as mesmas tabelas para elas, e `_sem_as_retiradas` tira dos mapas as estações retiradas.
    6. `mapas.gerar_mapas(tabelas, especificacoes_mapas(...), ...)` desenha, para cada especificação, o mapa pontual e o interpolado.
 4. O `risco_fogo.executar` segue o mesmo esqueleto, com a conta própria no meio:
    1. `leituras_validas` guarda só as horas com as três variáveis, já com a rajada em km/h.

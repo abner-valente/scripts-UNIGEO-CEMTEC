@@ -9,7 +9,7 @@
 
 ```mermaid
 flowchart LR
-    APIs["APIs<br/>INMET e Open-Meteo"] --> Coletores
+    APIs["APIs<br/>INMET, Open-Meteo e PED do CEMADEN"] --> Coletores
     subgraph IMASUL["Rede do IMASUL"]
         Coletores["Coletores<br/>agendados"] --> Banco["PostgreSQL"]
         Banco --> Painel["Painel interno"]
@@ -19,8 +19,10 @@ flowchart LR
     API -->|"HTTPS com chave"| Nuvem["App no Streamlit Cloud"]
 ```
 
-- **Os coletores** buscam no INMET (o Brasil inteiro, de hora em hora) e no Open-Meteo (MS, duas
-  vezes por dia) e gravam no banco.
+- **Os coletores** buscam no INMET (o Brasil inteiro, de hora em hora), no Open-Meteo (MS, as
+  rodadas das 00Z e das 12Z, conferidas de hora em hora) e na PED do CEMADEN (os pluviômetros de
+  MS, de hora em hora), e gravam no banco. Desde a 0.4.1, um quarto coletor conta os raios do GOES
+  que o script de um colega já grava no mesmo banco.
 - **O painel interno** lê o banco direto.
 - **A API de leitura** atende o `main.py` nas máquinas da equipe e, se a gerência e a TI aprovarem,
   o app do Streamlit Cloud. O banco nunca fica exposto.
@@ -81,6 +83,7 @@ A 16 tem suporte até novembro de 2028.
 passam a pedir os dados a ele, e não mais direto ao INMET.
 - *Como confirmar:* rodar os dois produtos antes e depois; as saídas têm de ser idênticas, pixel a
   pixel e célula a célula.
+- *Feito na 0.3.1.* Um teste falha se um produto ou o painel pedir dados direto ao `inmet.py`.
 
 **2. `modulos/openmeteo.py` e os testes.** É o passo 1 do escopo da v0.3.1: os pontos da grade e
 das estações, os três modelos, a rodada e os pedidos de até 600 chamadas por minuto.

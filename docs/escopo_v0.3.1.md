@@ -5,6 +5,17 @@
 > Open-Meteo em 05 e 06/10, e não tirados da documentação, salvo onde dito. Este documento
 > registra o que foi decidido e por quê. O que já está feito vem marcado na
 > [ordem de trabalho](#ordem-de-trabalho).
+>
+> **Situação em 25/11/2026 (versão 0.4.1):** as decisões continuam valendo, mas a forma mudou:
+> - **o coletor e a tabela** (passo 2) ficaram prontos: `modulos/coletor_previsao.py`, pelo
+>   `python coletar.py previsao`, guarda as rodadas das 00Z e das 12Z na grade de 0,25° e o EC46.
+>   O painel do servidor lê do banco (`FONTE_DADOS=banco`); a nuvem continua sob demanda, a 0,5°;
+> - **as páginas** "Estações", "Mapas" e "Semanas" viraram quatro, uma por assunto: **Mapas**,
+>   **Chuva**, **Risco de Fogo** e **Semanas**, cada uma com o mapa navegável ou o do boletim, e
+>   com os gráficos da estação embaixo do mapa. Vieram também os mapas **hora a hora**, com o
+>   boletim da hora e o GIF.
+>
+> O que o painel faz hoje está no [README](../README.md#previsão-ms).
 
 ## O que muda, em uma frase
 
@@ -271,7 +282,7 @@ decide de quais rodadas precisa.
    pouco mais da metade das linhas dos outros dois, porque para no dia 7,5.
 2. **A tabela e o coletor**, se o servidor e o banco já existirem. Se não, o cache por rodada no
    painel. **O cache ficou pronto em 08/10**, um por modelo (decisão 11); a tabela e o coletor
-   ficam para a v0.4.x, com o banco.
+   ficam para a v0.4.x, com o banco. **O coletor ficou pronto em 14/10** (entrou na 0.4.1).
 3. **Gráficos de linha por estação**, com as contas em `app/previsao.py` e a página no
    `explorador.py`. Os três modelos lado a lado. É o passo mais barato, e o que
    mostra se a fonte serve. **Feito em 08/10**: temperatura, umidade, ponto de orvalho, vento,
@@ -344,9 +355,10 @@ Em 07/10 ficaram definidos mais dois pontos:
 
 A ordem de execução dessa parte está em [`plano_arquitetura.md`](plano_arquitetura.md). Os
 arquivos novos dela: `modulos/banco.py` (o único que fala SQL), `modulos/fonte.py` (lê
-da API ou do banco), `coletores/coletar_inmet.py`, `coletores/coletar_previsao.py`,
-`banco/esquema.sql`, e o `Dockerfile` e o `docker-compose.yml` quando houver Docker no
-servidor.
+da API ou do banco), os coletores, `banco/esquema.sql`, e o `Dockerfile` e o
+`docker-compose.yml` quando houver Docker no servidor. Os coletores saíram como
+`modulos/coletor_inmet.py` e `modulos/coletor_previsao.py`, chamados pelo `coletar.py` da raiz,
+e não numa pasta `coletores/`.
 
 - **A busca da decisão 7 é o coletor do Open-Meteo**, e a tabela da decisão 6 é a dele.
 - **Se o servidor e o banco chegarem antes do passo 4**, os mapas já nascem lendo do banco. O

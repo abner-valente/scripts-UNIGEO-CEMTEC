@@ -3,6 +3,8 @@
 Durante a reestruturação dos scripts (versão 0.1.1), alguns pontos ficaram em aberto porque **mudam os resultados** e dependem de uma decisão meteorológica. Para cada um estão a situação atual, o problema e as opções. As respostas podem ser anotadas no campo **Decisão**.
 
 > **Situação em 28/09/2026:** todas as questões foram respondidas. As de 1 a 5 (versão 0.1.1) já estavam aplicadas; as de 6 a 8, do produto `risco_fogo`, tiveram o método confirmado em 17/09/2026 e os **limiares 30-30-30 confirmados em 28/09/2026**, junto com a entrada do risco de fogo no painel.
+>
+> **Depois disso**, as decisões vieram com o uso do painel, como pedidos da equipe. Elas estão na seção 10, com a data de cada uma.
 
 Nas descrições abaixo, os horários estão em UTC (horário de MS = UTC−4).
 
@@ -23,6 +25,8 @@ Nas descrições abaixo, os horários estão em UTC (horário de MS = UTC−4).
 E no mapa pontual: as estações com 0 mm devem aparecer (por exemplo, com um marcador cinza)?
 
 **Decisão (15/09/2026):** opção (a) — as estações com 0 mm entram na interpolação e aparecem no mapa pontual.
+
+**Complemento (16/10/2026, versão 0.3.3):** o zero é o que a estação **mediu**. A estação que não mandou nenhuma leitura de chuva na janela (sem transmitir, ou só com a bateria e o processador) fica sem dado e sai do mapa, em vez de entrar com 0,0 mm. Antes, a soma tratava a hora sem leitura como zero.
 
 ---
 
@@ -169,3 +173,22 @@ O que ficou registrado junto com ela, porque não é óbvio:
 - **A máxima não pode ser empilhada.** Somar o recorde de cada dia daria 170,6 mm na semana, um valor que não aconteceu em lugar nenhum, porque a estação campeã muda de um dia para o outro.
 
 ✅ **Confirmado (01/10/2026): a cascata do estado é a soma das estações.** Fica registrado o que pesou na escolha: o número é leitura de ritmo, não de quantidade caída num lugar. Se um dia o boletim precisar de uma chuva média do estado, a conta é a **média da área** — a mesma superfície do mapa de chuva — e trocar é mudar uma função (`app/chuva.py`, `cascata_do_estado`).
+
+---
+
+## 10. Decisões que vieram com o uso do painel
+
+Pedidos e escolhas da equipe depois de 01/10/2026 que mudam o que um mapa mostra. O detalhe de cada um está no [CHANGELOG](../CHANGELOG.md), na versão indicada.
+
+| Data | Decisão | Versão |
+|---|---|---|
+| 01/10/2026 | O PNG do boletim baixado do painel sai com **as cores e a escala da tela**, e não com as do `main.py`, que estica a escala ao dado do dia: o que se baixa é o que se vê | 0.2.3 |
+| 06/10/2026 | A previsão traz as grandezas que o INMET mede, menos a radiação e a pressão (detalhe em [`escopo_v0.3.1.md`](escopo_v0.3.1.md)) | 0.3.1 |
+| 13/10/2026 | Risco de fogo no painel: o nível de cada estação vem escrito por padrão, e os níveis vão do alto para o baixo nas barras e nas legendas | 0.3.2 |
+| 22/10/2026 | O PNG da previsão leva no subtítulo **só a data**: o modelo e a rodada vão para o nome do arquivo. E a **"Rajada s/ direção"**, sem a seta, para o público | 0.3.5 |
+| 22/10/2026 | O relevo 3D dos mapas navegáveis é um bloco por célula da grade (o protótipo que a equipe escolheu), na chuva e no risco | 0.4.1 |
+| 03/11/2026 | A estação com sensor com defeito sai dos mapas **da variável** dela (o ponto, o ranking e a interpolação), enquanto a correção do INMET não chega. A planilha, as tabelas e os gráficos ficam com todas, e o PNG sai **sem nota** sobre a retirada | 0.3.6 |
+| 13/11/2026 | Nos mapas de chuva do painel, as estações a até **15 km** umas das outras mostram só o maior valor (o ponto, o número e o ranking); a superfície continua com todas. Os pluviômetros do CEMADEN entram como as estações do INMET. Os mapas do `main.py` não mudam | 0.4.1 |
+| 16/11/2026 | As instituições saem do título e do subtítulo dos mapas e vão para o rodapé ("Dados: INMET/SEMADESC"). Com pluviômetro do CEMADEN no mapa, o crédito é "INMET/SEMADESC/CEMADEN", em português, no lugar da citação em inglês que os termos da PED pedem | 0.3.8 e 0.4.1 |
+| 18/11/2026 | A chuva acumulada de um **período qualquer**, do primeiro dia da barra lateral até o instante escolhido | 0.3.9 |
+| 24/11/2026 | O painel numa página por assunto, **uma variável por vez**, com o mapa navegável ou o do boletim. O agrupamento de 15 km vale também no mapa navegável enquanto o estado inteiro está à vista. A previsão no mesmo formato, com o boletim hora a hora | 0.4.1 |

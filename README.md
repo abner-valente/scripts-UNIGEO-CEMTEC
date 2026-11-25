@@ -204,7 +204,7 @@ Mapas gerados com dados reais do INMET. O **pontual** mostra só o que foi medid
 |---|---|
 | <img src="docs/img/relatorio_inmet/temp_max_pontual.png" alt="Mapa pontual de temperatura máxima em MS" width="380"> | <img src="docs/img/relatorio_inmet/temp_max_interpolado.png" alt="Mapa interpolado de temperatura máxima em MS" width="380"> |
 
-| Rajadas com direção (15/09/2026) | Chuva de 48 h — tempo real | Chuva do período (14 e 15/09/2026) |
+| Rajadas com direção (15/09/2026) | Chuva de 48 h — tempo real (até 25/11/2026) | Chuva do período (14 e 15/09/2026) |
 |---|---|---|
 | <img src="docs/img/relatorio_inmet/rajadas_direcao.png" alt="Mapa de rajadas de vento com setas de direção" width="245"> | <img src="docs/img/relatorio_inmet/chuva_48h_tempo_real.png" alt="Mapa interpolado de chuva acumulada em 48 horas" width="245"> | <img src="docs/img/relatorio_inmet/chuva_periodo.png" alt="Mapa interpolado de chuva acumulada no período" width="245"> |
 
