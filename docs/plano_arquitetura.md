@@ -252,6 +252,9 @@ enquanto só dentro da rede.
 **11. A publicação para fora**, se a gerência e a TI aprovarem: HTTPS, um endereço próprio e a
 regra no firewall ou no proxy. Feita ela, o app do Streamlit Cloud troca de fonte só nos Secrets,
 sem mexer no código. **Até lá, a nuvem segue indo direto às APIs.**
+- *Revisto em 25/11/2026:* a nuvem ficou na 0.3.9 (branch `streamlit`), que só conhece as APIs e
+  tem o painel antigo. Para ela ler da API de leitura, será preciso decidir antes qual painel vai
+  para a nuvem: a 0.3.x com uma fonte nova, ou a linha da `main`.
 
 ## Onde entra a página de previsão
 
@@ -269,10 +272,10 @@ nuvem** elas continuam sob demanda, a 0,5°, até a publicação da API (passo 1
 
 | Versão | O que entra |
 |---|---|
-| **v0.3.x** | a fase 1 e a página de previsão sob demanda |
+| **v0.3.x** | a fase 1 e a página de previsão sob demanda. A 0.3.9 é a do Streamlit Cloud, na branch `streamlit`, só com as APIs |
 | **v0.4.x** | o banco, os coletores e o servidor interno no Windows (fases 2 e 3); a página de previsão passa a ler do banco no servidor; o produto de previsão do `main.py` (decidido em 09/10/2026), lendo do banco. **A 0.4.1 trouxe** o banco, os coletores do INMET, da previsão, do CEMADEN e dos raios, e a fonte "banco"; **falta** a instalação na VM (passo 8) e o produto de previsão |
 | **v0.5.x** | a API de leitura e a versão externa (fase 4) |
 
-Cada versão entra na `main` por PR, como de costume. O Streamlit Cloud acompanha a branch
-`streamlit`, que avança até a tag de uma versão quando se decide (desde 25/11/2026); o
-servidor interno roda a tag que for escolhida.
+Cada versão da linha 0.4 em diante entra na `main` por PR, como de costume, e o servidor interno
+roda a tag que for escolhida. O Streamlit Cloud fica na branch `streamlit`, com a 0.3.9 (desde
+25/11/2026): a `main` não vai para lá, porque os dois painéis são diferentes demais.

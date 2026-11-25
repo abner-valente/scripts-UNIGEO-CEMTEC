@@ -240,7 +240,7 @@ A regra de organização: **conta vai para um módulo de `app/` sem Streamlit; t
 | `referencia.py` | a localização das estações: o município de cada uma (`tabela_de_referencia`, pelo começo do nome ou pelo ponto), o CEMADEN junto (`com_o_cemaden`) e a busca sem acento (`procurar`) |
 | `qualidade.py` | as conferências da aba de qualidade: completude, valores impossíveis, sensores travados |
 | `previsao.py` | as contas das páginas de previsão: a cópia guardada de cada modelo até a rodada seguinte (`Guarda`), o catálogo dos gráficos (`GRANDEZAS`) e as séries de cada estação; o catálogo dos mapas do dia (`MAPAS`) e da hora (`MAPAS_DA_HORA`), a escala (a do observado), o acumulado e a `superficie`, que leva a grade do modelo (0,5° na busca direta, 0,25° no banco) à do mapa por interpolação bilinear, e `vizinhos`/`no_ponto`, a mesma bilinear num ponto só; o catálogo das semanas (`MAPAS_SEMANAIS`), com as escalas divergentes, e quais semanas estão inteiras; e o risco de fogo previsto, com a regra do `risco_fogo` usada como está: o nível de cada hora (`risco_por_hora`), o pior nível e as horas em risco alto do dia (`diario_com_risco`), e a grade do dia, com a regra aplicada célula a célula, hora a hora (`risco_na_grade`). A busca é do `modulos/openmeteo.py`. |
-| `requirements.txt` | as dependências **do painel**. É este arquivo que o Streamlit Cloud instala. |
+| `requirements.txt` | as dependências **do painel**. É o que se instala para rodar o painel; o da branch `streamlit` é o que o Streamlit Cloud instala. |
 
 ### O resto
 
@@ -309,7 +309,7 @@ O valor não deve aparecer em nenhum arquivo versionado: o `.env` está no `.git
 
 **Mudar o raio do agrupamento dos mapas de chuva.** Use `config.AGRUPAR_CHUVA_KM` (15 km, pedido da equipe em 13/11/2026). Ele vale para os mapas de chuva em PNG do painel, o da tela e o do boletim, e para o mapa navegável enquanto o estado inteiro está à vista (lá, os rótulos que não são o maior do grupo são medidos em metros e só aparecem quando se aproxima o mapa): das estações a até esse raio umas das outras, em cadeia (`calculos.grupos_de_vizinhas`), só a de maior valor vai ao desenho e ao ranking (`mapas.o_maior_de_cada_grupo`, pela `EspecMapa.agrupar_km`). A superfície continua com todas. Com 0, o agrupamento some. Os mapas do `main.py` não usam o agrupamento.
 
-**Atualizar uma dependência.** Para a linha de comando, use o `requirements.txt`. Para o painel, o `app/requirements.txt`, que é o que a nuvem instala. O teste `test_app_requisitos` importa o painel num processo à parte e falha se ele carregar algo que não está declarado ali.
+**Atualizar uma dependência.** Para a linha de comando, use o `requirements.txt`. Para o painel, o `app/requirements.txt` (na branch `streamlit`, é o que a nuvem instala). O teste `test_app_requisitos` importa o painel num processo à parte e falha se ele carregar algo que não está declarado ali.
 
 ---
 
@@ -335,7 +335,7 @@ pytest
 
 **O Streamlit não recarrega `modulos/` nem os outros arquivos de `app/`.** Ele só acompanha a pasta do script, e o `explorador.py` é relido a cada execução. Quem muda uma função em `app/chuva.py` ou em `modulos/mapas.py` e só recarrega a página continua rodando o código velho, ou leva um `AttributeError` com o código certo no disco.
 - Na sua máquina: pare o servidor (Ctrl+C) e rode `streamlit run app/explorador.py` de novo.
-- No Streamlit Cloud: **Manage app → ⋮ → Reboot app**, depois de todo avanço da branch `streamlit` que mexa fora do `explorador.py`.
+- No Streamlit Cloud: **Manage app → ⋮ → Reboot app**, depois de todo push na branch `streamlit` que mexa fora do `explorador.py`.
 
 **A API do INMET é instável.** Ela encerra conexões e às vezes devolve corpo vazio (`Expecting value: line 1 column 1`). Toda consulta passa por `inmet._consultar`, que tenta 3 vezes (2 s, depois 4 s). Se nem assim vier, a estação aparece no resumo como "falha na consulta", e vale rodar de novo mais tarde. Erro 4xx (token inválido, estação inexistente) falha de primeira, porque repetir não resolve.
 
@@ -377,15 +377,22 @@ pytest
 - **`git describe --tags`** diz em que versão uma cópia está: `0.2.3`, ou `0.2.3-2-g1a2b3c4` para dois commits depois dela.
 - **O `CHANGELOG.md` é para quem usa.** Cada versão abre com "Atenção ao atualizar", o que pode quebrar um comando ou mudar um resultado. Teste, CI e reorganização interna não entram nele.
 - **As mensagens dos commits explicam o porquê**, e são longas de propósito. `git log --follow arquivo` e `git blame` levam da linha ao motivo.
-- **A `main` é a última versão fechada; o que está no ar no Streamlit Cloud é a branch `streamlit`.** Desde 25/11/2026 o app publica da `streamlit` (de 07/10 a 25/11 publicava da `main`), com `app/explorador.py` como arquivo principal, o `app/requirements.txt` como dependências, Python 3.14 e o `TOKEN_INMET` nos Secrets do app. Assim, o merge de uma versão na `main` não muda o painel da equipe na nuvem: ele só muda quando a `streamlit` avança.
-- **A `streamlit` só avança até a tag de uma versão fechada**, e nunca recebe commit próprio: `git checkout streamlit`, `git merge --ff-only 0.4.1` e o push. Faça isso numa cópia de trabalho, e nunca na pasta de onde rodam os coletores e o painel da equipe, que não pode trocar de branch (seção 8). Sem trocar de branch, o mesmo avanço é `git push origin "0.4.1^{commit}:streamlit"`, que o GitHub recusa se não for só para a frente. O Cloud publica sozinho; se a versão mexer fora do `explorador.py`, depois dela vem um Reboot (seção 8). Voltar uma versão é apontar a `streamlit` para a tag anterior (`git reset --hard 0.3.9` e um push com `--force`), o único caso em que ela não anda só para a frente.
+- **São duas linhas, uma para cada instalação** (decisão de 25/11/2026), e o painel de uma é bem diferente do da outra:
+
+  | Branch | Linha | Dados | Painel | Onde roda |
+  |---|---|---|---|---|
+  | `main` | 0.4.x em diante | o banco da UNIGEO (`FONTE_DADOS=banco`), com os coletores; também roda só com as APIs, na máquina de quem não alcança o banco | uma página por assunto, Navegável ou Boletim | o painel da equipe na rede da unidade, e o `main.py` |
+  | `streamlit` | 0.3.x, parada na 0.3.9 | só as APIs | as abas antigas (Mapas Boletim, Chuva, Risco de Fogo…) | o Streamlit Cloud |
+
+  O app do Streamlit Cloud publica da `streamlit` desde 25/11/2026 (de 07/10 a 25/11 publicava da `main`), com `app/explorador.py` como arquivo principal, o `app/requirements.txt` daquela branch, Python 3.14 e o `TOKEN_INMET` nos Secrets do app. **O merge de uma versão na `main` não muda o painel da nuvem.**
+- **Uma linha não recebe a outra.** A `main` nunca é levada à `streamlit`, nem a `streamlit` à `main`: os painéis são diferentes demais para um merge. Uma correção para a nuvem, se precisar, sai de uma branch criada a partir da `streamlit`, entra nela por PR (com base na `streamlit`) e ganha a tag seguinte da linha 0.3 (`0.3.10`). Uma correção que valha para as duas linhas é feita duas vezes, uma em cada. Depois de cada push na `streamlit` que mexa fora do `explorador.py`, vem um Reboot (seção 8).
 - **O Community Cloud não deixa trocar a branch de um app publicado.** Para mudar a branch, o caminho é apagar o app e publicar de novo, e antes copiar o conteúdo dos Secrets. O endereço `.streamlit.app` costuma poder ser reaproveitado; as estatísticas de acesso se perdem. Foi assim que o app passou da `main` para a `streamlit`.
 - **Enquanto a VM não fica pronta, o painel da equipe e os coletores rodam numa estação de trabalho da unidade**, na pasta do projeto, lendo do banco. Ela fica numa branch de versão e só muda quando alguém atualiza a pasta e reinicia o painel.
 - **O servidor definitivo roda uma tag**, e só muda quando alguém decide: `git fetch --tags`, `git checkout 0.3.2`, instalar o que faltar no ambiente virtual e reiniciar a tarefa do painel no Agendador de Tarefas do Windows. Voltar uma versão é o mesmo caminho, com a tag anterior. A VM da unidade é Windows e, por ora, roda sem Docker (passo 8 de [`plano_arquitetura.md`](plano_arquitetura.md)).
-- **O mesmo código para as duas instalações.** O que muda entre a nuvem e o servidor (de onde vêm os dados, senhas, chaves) vem da configuração, no `.env` do servidor e nos Secrets da nuvem, e não de código diferente. A `streamlit` não é uma segunda linha de desenvolvimento: ela só aponta para uma versão fechada, como a tag que o servidor roda. Uma correção feita só nela teria de ser levada de novo para a `main`.
+- **Dentro da `main`, o mesmo código para o servidor e para quem roda na própria máquina.** O que muda entre eles (de onde vêm os dados, senhas, chaves) vem da configuração, no `.env`, e não de código diferente.
 - **A CI roda no GitHub a cada push, em qualquer branch, e a cada PR para a `main`**, no Python 3.14. O resultado aparece como ✓ ou ✗ ao lado do commit.
 - **Antes de commitar, confira que o token, as conexões do banco e a conta da PED não estão em nenhum arquivo versionado.** O repositório é público.
-- **A partir da 0.4.1, o Streamlit Cloud instala o `psycopg`** (está no `app/requirements.txt`), mas continua com a fonte `apis`: ele não alcança o banco da unidade, e por isso não mostra os raios nem o CEMADEN.
+- **A partir da 0.4.1, o painel da `main` depende do `psycopg`** (está no `app/requirements.txt`), mesmo com a fonte `apis`. A `streamlit` não o tem, nem precisa.
 
 ---
 

@@ -554,7 +554,7 @@ O painel e os produtos pedem as estações, as leituras e a previsão ao [`modul
 
 | `FONTE_DADOS` | De onde | Quem usa |
 |---|---|---|
-| `apis` (o padrão) | Direto da API do INMET e do Open-Meteo, na hora | Quem roda na própria máquina e o Streamlit Cloud |
+| `apis` (o padrão) | Direto da API do INMET e do Open-Meteo, na hora | Quem roda o `main.py` ou o painel na própria máquina, sem acesso ao banco |
 | `banco` | Do banco da UNIGEO (schema `climageo`), que os coletores alimentam | O painel do servidor |
 
 As contas, os mapas e as planilhas saem iguais nas duas. O que muda:
@@ -646,6 +646,8 @@ O desenho completo (as tabelas, os usuários do banco, o que falta para o servid
 
 Ferramenta de **análise**, separada dos produtos: olha-se o dado para entender tendências e conferir a qualidade da medição, sem gerar os arquivos do relatório. Os produtos continuam saindo pelo `main.py`, e o explorador não altera nada do que eles produzem.
 
+> **Esta seção descreve o painel da `main` (0.4.x)**, o da equipe na rede da unidade, que lê do banco. O painel publicado no **Streamlit Cloud** é outra linha: a **0.3.9**, da branch `streamlit`, que só lê das APIs e tem as abas antigas (Mapas Boletim, Chuva, Risco de Fogo, Mapa Navegação, Qualidade dos dados). Ele está descrito no README daquela branch.
+
 Instale as dependências dele uma vez (quem só gera os produtos não precisa disto):
 
 ```bash
@@ -690,9 +692,9 @@ O seletor de estado só oferece as UFs que têm shapefile em `shp/` — hoje **o
 | **Cache** | O que já foi baixado fica em `cache/`, fora do controle de versão, para a tela responder rápido a cada filtro. Alargar o período baixa **só os dias que faltam**. O botão **Limpar cache** apaga tudo; o que faltar é baixado de novo |
 | **A ponta recente nunca vem do cache** | O INMET publica a **linha da hora antes das medidas** e as preenche depois. Guardar essa linha como se fosse resposta final deixava o mapa da tarde em branco para sempre — e consultar de novo não adiantava, porque a linha estava lá. Por isso a cobertura é julgada pela última hora **que trouxe medida**, e dali até o fim da janela se consulta de novo (no máximo 48 h para trás, para uma estação que ficou fora do ar em julho não ser rebaixada inteira a cada consulta) |
 | **A espera é de rede** | É uma consulta por estação, e são 62. Em fila, uma semana levava ~50 s e um mês, ~105 s — o processamento em si custa 0,2 s. As consultas saem **8 de cada vez** (`config.DOWNLOADS_SIMULTANEOS`), reaproveitando a conexão: a mesma semana sai em ~4 s. O limite é do processo inteiro, e não de cada pessoa que abre o painel — com 16 simultâneas o INMET derruba a conexão. Uma barra mostra quantas estações já chegaram |
-| **Na nuvem começa do zero** | O Streamlit Cloud reconstrói o contêiner a cada publicação e quando o app acorda de um período parado, e o `cache/` vai junto. Quem abrir logo depois paga a consulta inteira; a partir daí vem do cache |
+| **Num contêiner, começa do zero** | Onde o painel roda num contêiner que se refaz (como o Streamlit Cloud, a cada publicação e quando o app acorda de um período parado), o `cache/` vai junto. Quem abrir logo depois paga a consulta inteira; a partir daí vem do cache |
 | **Baixar os dados** | O CSV traz **todas as colunas que a API devolve**, com os códigos do INMET, independente das grandezas escolhidas: inclusive as que nenhum gráfico usa, como a sensação térmica (`TEM_SEN`) e a tensão da bateria (`TEN_BAT`). A única coisa que não vem como a API mandou é o **vento, em km/h** — o painel converte ao carregar, como os produtos |
-| **Onde roda** | Na sua máquina, lendo das APIs; no Streamlit Cloud, também das APIs; e no servidor da unidade, lendo do banco (veja [Banco e coletores](#banco-e-coletores-servidor)) |
+| **Onde roda** | No servidor da unidade, lendo do banco (veja [Banco e coletores](#banco-e-coletores-servidor)), e na sua máquina, lendo do banco ou das APIs. O Streamlit Cloud roda a 0.3.9, da branch `streamlit` |
 ### Navegável ou Boletim
 
 O mesmo assunto, na mesma escolha, em dois desenhos. A vista nasce em **Navegável**.
@@ -796,7 +798,7 @@ A página tem, de cima para baixo: o mapa (agregação **Acumulado**, **Hora a h
 
 ### Observado › Raios (GOES-19)
 
-Só no painel que lê do banco (`FONTE_DADOS=banco`): no Streamlit Cloud a página não aparece. Os flashes vêm do **GLM**, o sensor de raios do satélite GOES-19. Ele vê os raios dentro da nuvem e os que chegam ao solo, sem separar uns dos outros, com resolução de ~8 a 10 km, e não pega todos: o flash marca onde houve atividade elétrica, não o ponto exato de uma descarga. Os flashes vêm das tabelas que o script de um colega da unidade grava no mesmo banco; a contagem por hora é do `coletar.py raios`.
+Só no painel que lê do banco (`FONTE_DADOS=banco`): com a fonte `apis`, a página não aparece. Os flashes vêm do **GLM**, o sensor de raios do satélite GOES-19. Ele vê os raios dentro da nuvem e os que chegam ao solo, sem separar uns dos outros, com resolução de ~8 a 10 km, e não pega todos: o flash marca onde houve atividade elétrica, não o ponto exato de uma descarga. Os flashes vêm das tabelas que o script de um colega da unidade grava no mesmo banco; a contagem por hora é do `coletar.py raios`.
 
 | | |
 |---|---|
