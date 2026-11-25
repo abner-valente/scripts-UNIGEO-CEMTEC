@@ -68,6 +68,7 @@ def test_o_subtitulo_de_cada_modo_e_o_que_o_main_py_escreveria():
 def test_o_acumulado_da_chuva_ganha_nome_de_relatorio():
     assert boletim.nome_da_chuva("24 h") == "Chuva acumulada em 24 h"
     assert boletim.nome_da_chuva(chuva.MENSAL) == "Chuva acumulada no mês"
+    assert boletim.nome_da_chuva(chuva.PERIODO) == "Chuva acumulada no período"
 
 
 def test_a_moldura_leva_as_cores_da_tela_e_nao_as_do_main_py():
@@ -105,7 +106,8 @@ def test_o_mapa_do_boletim_sai_com_titulo_logos_ranking_e_a_escala_da_tela(base)
     textos = [texto.get_text() for texto in mapa.texts]
     superficie = next(colecao for colecao in mapa.collections if hasattr(colecao, "levels"))
 
-    assert mapa.get_title() == "Temperatura máxima em MS\n03/09/2026 — INMET/SEMADESC"
+    assert mapa.get_title() == "Temperatura máxima em MS\n03/09/2026"             # as instituições, só no rodapé
+    assert "Dados: INMET/SEMADESC" in textos
     assert len(mapa.child_axes) == len(config.LOGOS)                  # cada logo é um eixo filho
     assert any(texto.startswith("5 MAIORES TEMPERATURAS:\nCorumba: 36.2") for texto in textos)
     assert np.allclose(superficie.levels, escala_da_tela)             # a escala fixa da tela

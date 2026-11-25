@@ -17,6 +17,10 @@ import pandas as pd
 # Janelas que a equipe pediu, em horas, mais o acumulado do mês corrente.
 JANELAS_HORAS = (3, 6, 12, 24, 48, 72, 96)
 MENSAL = "Mensal"
+# Do primeiro dia do período da barra lateral até o instante escolhido: com o instante no fim do
+# período, que é o padrão, é a chuva do período inteiro (de 17/10 a 03/11, por exemplo), que
+# nenhuma janela fixa alcança quando passa de 96 h ou atravessa a virada do mês
+PERIODO = "Período"
 COLUNA = "CHUVA"
 # Nome que a cascata do estado usa no lugar da estação, por ela juntar todas numa linha só.
 TODO_O_ESTADO = "Todo o estado"
@@ -37,6 +41,10 @@ def _comeco_do_mes(fim: datetime) -> datetime:
 def janela(fim: datetime, rotulo: str) -> tuple[datetime, datetime]:
     if rotulo == MENSAL:
         return _comeco_do_mes(fim), fim
+    if rotulo == PERIODO:
+        if inicio_periodo is None:
+            raise ValueError("O acumulado do período precisa do começo do período.")
+        return inicio_periodo, fim
     return fim - timedelta(hours=int(rotulo.split()[0])), fim
 
 
@@ -48,7 +56,7 @@ def horas_da_janela(fim: datetime, rotulo: str) -> float:
 def acumulado(leituras: pd.DataFrame, fim: datetime, rotulo: str) -> pd.Series:
     if leituras.empty or COLUNA not in leituras:
         return pd.Series(dtype=float)
-    comeco, termino = janela(fim, rotulo)
+    comeco, termino = janela(fim, rotulo, inicio_periodo)
     dentro = leituras[(leituras["dt_local"] > comeco) & (leituras["dt_local"] <= termino)]
     if dentro.empty:
         return pd.Series(dtype=float)
@@ -59,7 +67,7 @@ def acumulado(leituras: pd.DataFrame, fim: datetime, rotulo: str) -> pd.Series:
 def cobre(leituras: pd.DataFrame, fim: datetime, rotulo: str) -> bool:
     if leituras.empty:
         return False
-    comeco, _ = janela(fim, rotulo)
+    comeco, _ = janela(fim, rotulo, inicio_periodo)
     return leituras["dt_local"].min() <= comeco + timedelta(hours=1)
 
 

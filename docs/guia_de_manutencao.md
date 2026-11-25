@@ -110,7 +110,7 @@ O perigo é converter duas vezes: `app/risco.py` recebe o dado do painel, que j�
 
 Todo mapa sai de `modulos/mapas.py`. O que muda entre o relatório e a tela é a **moldura**:
 
-- **Sem `Tela`** (o caminho do `main.py`): título, subtítulo com "INMET/SEMADESC", logos, ranking das 5 estações, barra de cores vertical e grade de latitude e longitude.
+- **Sem `Tela`** (o caminho do `main.py`): título e subtítulo (o quê e quando, sem as instituições), logos, ranking das 5 estações, barra de cores vertical, grade de latitude e longitude e, no rodapé, o crédito ("Dados: INMET/SEMADESC", ou o do Open-Meteo na previsão).
 - **Com `mapas.Tela(...)`** (o caminho do painel): só o desenho, para caber numa coluna.
 
 O botão "Baixar PNG do boletim" do painel chama o caminho **sem** `Tela`, com as cores da tela. O texto da moldura vem de `app/boletim.py`.

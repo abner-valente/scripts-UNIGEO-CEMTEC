@@ -9,15 +9,50 @@ Cada versão separa as mudanças em até quatro grupos:
 
 Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
-## [0.4.1] — em andamento
+## [0.3.9] — 18/11/2026
 
-Ainda não está na `main`. É o começo do banco da UNIGEO e dos coletores (fase 2 de `docs/plano_arquitetura.md`). O painel e o `main.py` seguem buscando nas APIs. A correção do limite de consultas do INMET, feita aqui, já foi para a `main` na 0.3.2.
+Um pedido da equipe de meteorologia: a chuva acumulada de um período qualquer, como de 17/10 a 03/11.
+
+### Atenção ao atualizar
+
+- **Quem roda o painel na própria máquina precisa reiniciá-lo** (Ctrl+C e `streamlit run app/explorador.py` de novo), porque o Streamlit não relê o `app/chuva.py` sozinho. No Streamlit Cloud, é o Reboot. As dependências não mudaram.
 
 ### Novo
 
-- **O esquema do banco** (`banco/esquema.sql`, no schema `climageo` do PostgreSQL 16 da UNIGEO) e o `modulos/banco.py`, a única peça que fala SQL. O banco guarda só as horas, do INMET e da previsão; o dia, a semana e o mês saem delas na leitura. O EC46 fica por semana, como chega.
-- **O `.env.example` ganhou as conexões do banco** (`BANCO_GRAVACAO`, `BANCO_LEITURA` e `BANCO_TESTE`). Por enquanto, só quem programa usa a de teste.
-- **O coletor do INMET** (`python coletar.py inmet`), que grava no banco as leituras horárias de todas as estações automáticas do Brasil. De hora em hora, ele rebusca os últimos 3 dias, com uma consulta por hora que traz todas as estações, e o banco só reescreve o que o INMET mudou. Uma vez por dia (`--extras`), busca por estação a sensação térmica, a bateria e a temperatura do processador, que a consulta por hora não traz. A carga do histórico (`--historico 2018-01-01`) roda uma vez só: pode ser interrompida com Ctrl+C e retomada com o mesmo comando, e se a conexão com o banco cair no meio, reconecta e retoma sozinha. No servidor, o Agendador de Tarefas o chama pelo `servidor\coletar.bat`.
+- **Painel, aba Chuva: o acumulado do período.** A lista de janelas dos acumulados ganha a opção **Período**, que soma a chuva do primeiro dia escolhido na barra lateral até o instante do "Acumulados até". Com o instante no fim do período, que é o padrão, é a chuva do período inteiro. Até aqui só havia as janelas fixas (3 a 96 h) e o mensal, que começa no dia 1º, e nenhuma alcançava um período de mais de quatro dias que atravessasse a virada do mês.
+  - Vem com tudo o que as outras janelas têm: as barras por estação, o mapa, as estações retiradas e o PNG do boletim, com o título "Chuva acumulada no período" e as datas no subtítulo.
+  - A escala de cores segue a duração: até 96 h, as classes curtas; acima disso, as do mensal (até 300 mm).
+  - Quando o período começa antes da carga do mês, a aba busca só as horas que faltam, e só quando a opção é escolhida.
+
+
+Um pedido da equipe de meteorologia: as instituições saem do título dos mapas e vão para o rodapé.
+
+### Atenção ao atualizar
+
+- **Os mapas mudam de cara**: o subtítulo deixa de terminar com " — INMET/SEMADESC". Quem tiver modelo de boletim ou rotina que dependa do texto antigo precisa ajustá-los.
+- **Quem roda o painel na própria máquina precisa reiniciá-lo** (Ctrl+C e `streamlit run app/explorador.py` de novo), porque o Streamlit não relê o `modulos/mapas.py` sozinho. No Streamlit Cloud, é o Reboot. As dependências não mudaram.
+
+### Mudou
+
+- **Mapas: o crédito das instituições fica só no rodapé.** O título e o subtítulo dizem só o quê e quando ("Temperatura máxima em MS", "03/09/2026"), e o crédito vai numa linha miúda embaixo do mapa, à direita: "Dados: INMET/SEMADESC". Vale para todos os mapas com moldura de relatório:
+  - os do `main.py` (o `relatorio_inmet` e o `risco_fogo`);
+  - o PNG do boletim que o painel deixa baixar, nas abas Mapas Boletim, Chuva e Risco de Fogo;
+  - o mapa de referência das estações.
+
+  Os mapas da previsão já punham o crédito do Open-Meteo no rodapé, e seguem assim. Os mapas da tela, sem moldura, continuam sem crédito.
+
+## [0.3.7] — 13/11/2026
+
+Uma correção no painel: em alguns casos, a chuva somada saía menor do que a medida.
+
+### Atenção ao atualizar
+
+- **Os mapas e os acumulados do painel podem mudar para mais**, nos períodos em que o cache estava furado (veja abaixo). O número novo é o certo. Não é preciso limpar o cache: o buraco se fecha na primeira consulta depois de atualizar.
+- **Quem roda o painel na própria máquina precisa reiniciá-lo** (Ctrl+C e `streamlit run app/explorador.py` de novo), porque o Streamlit não relê o módulo do cache sozinho. No Streamlit Cloud, é o Reboot. As dependências não mudaram.
+
+### Corrigido
+
+- **Painel: o cache local não deixa mais um buraco no meio do período.** O painel guarda as leituras de cada estação na pasta `cache/` e, numa consulta nova, busca só o que falta. Ele olhava apenas antes da primeira hora guardada e as últimas 48 horas. Assim, quando o painel ficava dias sem consultar uma estação, as horas do meio nunca eram buscadas, e a chuva desses dias ficava de fora dos acumulados, das barras e dos mapas, sem aviso. Em 13/11/2026, a chuva do mês em Fátima do Sul saiu com 112,6 mm, e o certo era 164,4. Agora o painel busca toda hora do período que não está guardada, e também as horas vazias logo antes dela, que o INMET ainda não tinha preenchido quando foram guardadas. A hora que a estação não mandou volta a ser pedida a cada consulta, mas só esse trecho, e não o período inteiro.
 
 ## [0.3.6] — 03/11/2026
 

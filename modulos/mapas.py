@@ -24,8 +24,9 @@ from . import calculos, config
 
 # Acima disso a lista de níveis é uma faixa contínua, e não classes (como as da chuva)
 MAX_CLASSES = 12
-# De quem é o dado, no fim do subtítulo. A previsão troca pelo do Open-Meteo, cuja licença
-# (CC BY 4.0) obriga o crédito.
+# De quem é o dado, numa linha miúda embaixo do mapa ("Dados: INMET/SEMADESC"). O título e o
+# subtítulo dizem só o quê e quando: as instituições ficam no rodapé (pedido da equipe, 16/11/2026).
+# A previsão troca pelo do Open-Meteo, cuja licença (CC BY 4.0) obriga o crédito.
 CREDITO = "INMET/SEMADESC"
 
 
@@ -43,7 +44,6 @@ class EspecMapa:
     direcao_vento: bool = False  # desenha as setas de direção do vento
     decimais: int = 1            # casas decimais dos rótulos e do ranking (0 para contagens, como horas)
     credito: str = CREDITO
-    credito_no_rodape: bool = False  # o crédito numa linha embaixo do mapa, e não no subtítulo
     ranking_absoluto: bool = False  # ranqueia pelo tamanho do valor, para cima ou para baixo (anomalias)
     com_sinal: bool = False         # escreve o + dos positivos: nas anomalias, o número é um desvio
 
@@ -56,7 +56,6 @@ class EspecClasses:
     cores: list[str]
     rotulos: list[str]
     credito: str = CREDITO
-    credito_no_rodape: bool = False
 
 
 @dataclass(frozen=True)
@@ -464,13 +463,11 @@ def _corpo_rotulo(tamanho: float, tela: "Tela | None") -> float:
 def _finalizar(fig, ax, espec, base: BaseCartografica, caminho: Path | None,
                tela: "Tela | None" = None) -> Figure:
     if tela is None:
-        # O crédito vai no fim do subtítulo ou, quando o subtítulo deve ficar só com a data (os
-        # mapas da previsão), numa linha miúda embaixo do mapa, à direita
-        subtitulo = espec.subtitulo if espec.credito_no_rodape else f"{espec.subtitulo} — {espec.credito}"
-        ax.set_title(f"{espec.titulo}\n{subtitulo}", fontsize=16, weight="bold", pad=20)
-        if espec.credito_no_rodape:
-            ax.annotate(f"Dados: {espec.credito}", xy=(1, 0), xycoords="axes fraction", xytext=(0, -30),
-                        textcoords="offset points", ha="right", va="top", fontsize=9, color="#555555")
+        # O título e o subtítulo dizem o quê e quando; de quem é o dado vai numa linha miúda embaixo
+        # do mapa, à direita (até a 0.3.7, o crédito do INMET ia no fim do subtítulo)
+        ax.set_title(f"{espec.titulo}\n{espec.subtitulo}", fontsize=16, weight="bold", pad=20)
+        ax.annotate(f"Dados: {espec.credito}", xy=(1, 0), xycoords="axes fraction", xytext=(0, -30),
+                    textcoords="offset points", ha="right", va="top", fontsize=9, color="#555555")
     # O enquadramento vem da base, e não do módulo: é a base que sabe de que recorte ela é
     oeste, leste, sul, norte = base.recorte.limites
     ax.set_xlim(oeste, leste)

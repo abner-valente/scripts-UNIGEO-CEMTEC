@@ -174,8 +174,8 @@ def planilha(horaria: pd.DataFrame, fuso=config.FUSO_MS) -> pd.DataFrame:
 # =====================================================
 # OS MAPAS
 # =====================================================
-# A licença do Open-Meteo (CC BY 4.0) obriga o crédito. Ele vai numa linha no rodapé do PNG do
-# boletim, e não no subtítulo, que fica só com a data (veja `subtitulo`)
+# A licença do Open-Meteo (CC BY 4.0) obriga o crédito. Ele vai na linha do rodapé do PNG do
+# boletim, no lugar do do INMET, e o subtítulo fica só com a data (veja `subtitulo`)
 CREDITO = "Open-Meteo (CC BY 4.0)/SEMADESC"
 DIAS_DA_SEMANA = ("seg", "ter", "qua", "qui", "sex", "sáb", "dom")
 

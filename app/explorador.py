@@ -684,7 +684,7 @@ def painel_da_chuva(rotulo: str, valores: pd.Series, janela: str, subtitulo: str
         st.info(f"Nenhuma estação mediu chuva em {janela}.")
         return
 
-    png = mapa_do_instante(valores, f"Chuva {rotulo}", "mm", "Blues", 1, janela, rotulos, uf,
+    png = mapa_do_instante(valores, legenda, "mm", "Blues", 1, janela, rotulos, uf,
                            niveis, apoio=apoio)
     if png is None:
         st.warning(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram chuva em {janela}.")
@@ -695,11 +695,12 @@ def painel_da_chuva(rotulo: str, valores: pd.Series, janela: str, subtitulo: str
         st.image(barra_de_escala("Blues", tuple(niveis), "mm"), width="stretch")
     st.caption(f"{valores.min():.1f} a {valores.max():.1f} mm · {valores.notna().sum()} estações · "
                f"soma das horas de {janela}.")
-    st.download_button(f"Baixar PNG — chuva {rotulo}", png, mime="image/png",
-                       key=f"baixar_chuva_{rotulo}",
-                       file_name=f"Mapa_chuva_{rotulo.replace(' ', '')}.png")
+    medida = "chuva do período" if rotulo == chuva_calc.PERIODO else f"chuva {rotulo}"
+    arquivo = carimbo if rotulo == chuva_calc.PERIODO else rotulo.replace(" ", "")
+    st.download_button(f"Baixar PNG — {medida}", png, mime="image/png",
+                       key=f"baixar_chuva_{rotulo}", file_name=f"Mapa_chuva_{arquivo}.png")
     nome = boletim.nome_da_chuva(rotulo)
-    botao_do_boletim(f"chuva {rotulo}", f"chuva_{rotulo}",
+    botao_do_boletim(medida, f"chuva_{rotulo}",
                      boletim.nome_do_arquivo(nome, uf, carimbo),
                      desenho_do_boletim(valores, nome, "Chuva", "mm", "Blues", 1, subtitulo, uf, niveis,
                                         apoio=apoio))
@@ -1148,7 +1149,7 @@ def painel_do_mapa_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: da
                        file_name=f"Mapa_{mapa.titulo.replace(' ', '_')}_{carimbo}.png")
     espec = boletim.espec(mapa.titulo, mapa.grandeza, mapa.unidade, mapa.paleta, mapa.decimais,
                           previsao.UF, previsao.subtitulo(mapa, dia, hoje), mapa.setas,
-                          credito=previsao.CREDITO, coluna=mapa.nome, credito_no_rodape=True)
+                          credito=previsao.CREDITO, coluna=mapa.nome)
     gdf = _pontos_previstos(pontos, mapa.nome)
     botao_do_boletim(mapa.nome.lower(), f"previsto_{mapa.nome}",
                      boletim.nome_do_arquivo(mapa.titulo, previsao.UF, carimbo),
@@ -1181,7 +1182,7 @@ def painel_do_risco_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: d
                   if (no_estado == classe).any()]
         st.caption(f"{' · '.join(partes)} do estado · {mapa.regra}.")
         espec = mapas.EspecClasses(boletim.titulo(mapa.titulo, previsao.UF), subtitulo, "", config.CORES_RISCO,
-                                   config.ROTULOS_RISCO, credito=previsao.CREDITO, credito_no_rodape=True)
+                                   config.ROTULOS_RISCO, credito=previsao.CREDITO)
         desenhar = lambda: mapas.mapa_classes_interpolado(nivel, gdf, mapa.nome, espec, base)  # noqa: E731
     else:
         niveis = niveis_das_horas(horas_alto)
@@ -1194,7 +1195,7 @@ def painel_do_risco_previsto(mapa: previsao.MapaPrevisto, modelo: str, rodada: d
         st.caption(f"0 a {int(no_estado.max())} h · {mapa.regra}.")
         espec = mapas.EspecMapa("", mapa.nome, boletim.titulo(mapa.titulo, previsao.UF), subtitulo, "",
                                 mapa.paleta, "Horas em risco alto", "5 MAIORES EXPOSIÇÕES", decimais=0,
-                                credito=previsao.CREDITO, credito_no_rodape=True)
+                                credito=previsao.CREDITO)
         desenhar = lambda: mapas.mapa_de_grade(horas_alto, gdf, espec, base, niveis=niveis)  # noqa: E731
 
     arquivo = mapa.titulo.replace(" — ", " ")   # sem o travessão no nome do arquivo
@@ -1339,7 +1340,7 @@ def painel_do_mapa_semanal(mapa: previsao.MapaSemanal, rodada: datetime, semana:
                             subtitulo=previsao.subtitulo_da_semana(semana), arquivo="",
                             cmap=mapa.paleta, unidade=f"{mapa.unidade} em relação ao normal",
                             ranking=previsao.RANKING_SEMANAS, decimais=mapa.decimais,
-                            credito=previsao.CREDITO, credito_no_rodape=True, ranking_absoluto=True,
+                            credito=previsao.CREDITO, ranking_absoluto=True,
                             com_sinal=True)
     gdf = _pontos_previstos(pontos, mapa.titulo)
     botao_do_boletim(mapa.titulo.lower(), f"semana_{chave}",
@@ -1973,21 +1974,39 @@ with aba_chuva:
                 escolhidos = st.multiselect("Janelas", chuva_calc.rotulos(), default=PADRAO_CHUVA,
                                             key="janelas_chuva",
                                             help="Cada janela conta para trás a partir do instante "
-                                                 "escolhido acima. O mensal começa no dia 1º.")
+                                                 "escolhido acima. O mensal começa no dia 1º; o do "
+                                                 "período, no primeiro dia da barra lateral.")
+                # O do período pode começar antes da carga do mês (um período de 17/10 a 03/11 visto
+                # de 03/11). As horas que faltam vêm numa consulta à parte, só quando ele é escolhido:
+                # o cache de cada estação guarda o que já veio, e só o começo é baixado
+                inicio_local = inicio.astimezone(recorte.fuso)
+                leituras_periodo, apoio_periodo = leituras_chuva, chuva_apoio
+                if chuva_calc.PERIODO in escolhidos and inicio_local < inicio_chuva:
+                    leituras_periodo, _ = carregar_leituras(
+                        tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]),
+                        inicio, ate.astimezone(config.FUSO_UTC), uf, f"Consultando a chuva desde {inicio_local:%d/%m}")
+                    apoio_periodo, _ = carregar_leituras(
+                        tuple(vizinhas_chuva["CD_ESTACAO"]), tuple(vizinhas_chuva["Estação"]),
+                        inicio, ate.astimezone(config.FUSO_UTC), uf, "Consultando a chuva das estações vizinhas")
+                carga = {rotulo: (leituras_periodo, apoio_periodo) if rotulo == chuva_calc.PERIODO
+                         else (leituras_chuva, chuva_apoio) for rotulo in escolhidos}
                 curtas = [rotulo for rotulo in escolhidos
-                          if not chuva_calc.cobre(leituras_chuva, ate, rotulo)]
+                          if not chuva_calc.cobre(carga[rotulo][0], ate, rotulo, inicio_local)]
                 if curtas:
                     st.warning(f"Sem dado que alcance o começo de: {', '.join(curtas)}. "
                                "Esses acumulados mostrariam menos chuva do que caiu.")
                 mostrar = [rotulo for rotulo in escolhidos if rotulo not in curtas]
 
-                somas = {rotulo: chuva_calc.acumulado(leituras_chuva, ate, rotulo) for rotulo in mostrar}
+                somas = {rotulo: chuva_calc.acumulado(carga[rotulo][0], ate, rotulo, inicio_local)
+                         for rotulo in mostrar}
                 chovidas = {rotulo: valores for rotulo, valores in somas.items()
                             if not valores.dropna().empty and valores.max() > 0}
                 secas = [rotulo for rotulo in mostrar if rotulo not in chovidas]
 
                 st.caption(f"Acumulados até **{ate:%d/%m %H:%M}**, somando a chuva de cada hora para "
-                           "trás. A barra diz quanto choveu em cada estação; o mapa, onde choveu.")
+                           "trás. A barra diz quanto choveu em cada estação; o mapa, onde choveu." +
+                           (f" O do período começa em **{inicio_local:%d/%m %H:%M}**, o primeiro dia da "
+                            "barra lateral." if chuva_calc.PERIODO in mostrar else ""))
                 if secas:
                     st.info(f"Sem chuva em nenhuma estação em: {', '.join(secas)}.")
 
@@ -2006,8 +2025,8 @@ with aba_chuva:
                         for coluna_tela, rotulo in zip(st.columns(por_linha_barras), linha):
                             with coluna_tela:
                                 quantas = (chovidas[rotulo] > 0).sum()
-                                st.markdown(f"**Chuva {rotulo}** — {quantas} de {len(estacoes)} "
-                                            "estações com registro")
+                                st.markdown(f"**{chuva_calc.legenda(rotulo)}** — {quantas} de "
+                                            f"{len(estacoes)} estações com registro")
                                 st.altair_chart(barras_do_acumulado(chovidas[rotulo], "mm",
                                                                     None if todas_estacoes else 15),
                                                 width="stretch")
@@ -2034,17 +2053,24 @@ with aba_chuva:
                                 linha = nomes_chovidos[primeiro:primeiro + por_linha]
                                 for coluna_tela, rotulo in zip(st.columns(por_linha), linha):
                                     with coluna_tela:
-                                        comeco, _ = chuva_calc.janela(ate, rotulo)
+                                        comeco, _ = chuva_calc.janela(ate, rotulo, inicio_local)
+                                        # O do período leva no nome do arquivo os dias que soma, como o
+                                        # "período inteiro" dos Mapas Boletim
+                                        if rotulo == chuva_calc.PERIODO:
+                                            carimbo = (f"{comeco:%Y%m%d}_a_{ate - timedelta(days=1):%Y%m%d}"
+                                                       if ate.hour == 0 else f"{comeco:%Y%m%d}_a_{ate:%Y%m%d_%H}h")
+                                        else:
+                                            carimbo = f"{ate:%Y%m%d_%H}h"
                                         painel_da_chuva(
                                             rotulo, retiradas.retirar(chovidas[rotulo], fora_chuva),
                                             f"{comeco:%d/%m %H:%M} a {ate:%d/%m %H:%M}",
                                             periodo_painel.descrever_janela(comeco, ate),
-                                            f"{ate:%Y%m%d_%H}h", rotulos_chuva, uf,
+                                            carimbo, rotulos_chuva, uf,
                                             niveis_da_escala(acumulada,
-                                                             chuva_calc.horas_da_janela(ate, rotulo),
+                                                             chuva_calc.horas_da_janela(ate, rotulo, inicio_local),
                                                              ajustar_chuva),
-                                            retiradas.retirar(chuva_calc.acumulado(chuva_apoio, ate, rotulo),
-                                                              fora_chuva))
+                                            retiradas.retirar(chuva_calc.acumulado(carga[rotulo][1], ate, rotulo,
+                                                                                   inicio_local), fora_chuva))
             else:
                 # Hora a hora e por dia respeitam o período escolhido, como as outras abas
                 modo = variaveis.HORA if modo_chuva == "Hora a hora" else variaveis.DIA
