@@ -273,5 +273,6 @@ nuvem** elas continuam sob demanda, a 0,5°, até a publicação da API (passo 1
 | **v0.4.x** | o banco, os coletores e o servidor interno no Windows (fases 2 e 3); a página de previsão passa a ler do banco no servidor; o produto de previsão do `main.py` (decidido em 09/10/2026), lendo do banco. **A 0.4.1 trouxe** o banco, os coletores do INMET, da previsão, do CEMADEN e dos raios, e a fonte "banco"; **falta** a instalação na VM (passo 8) e o produto de previsão |
 | **v0.5.x** | a API de leitura e a versão externa (fase 4) |
 
-Cada versão entra na `main` por PR, como de costume. O Streamlit Cloud acompanha a `main`; o
+Cada versão entra na `main` por PR, como de costume. O Streamlit Cloud acompanha a branch
+`streamlit`, que avança até a tag de uma versão quando se decide (desde 25/11/2026); o
 servidor interno roda a tag que for escolhida.

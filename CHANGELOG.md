@@ -20,6 +20,7 @@ No Streamlit Cloud, que lê das APIs, tudo funciona, menos o que só existe no b
 
 ### Atenção ao atualizar
 
+- **O Streamlit Cloud publica da branch `streamlit`, e não mais da `main`** (desde 25/11/2026). O merge desta versão na `main` não muda o painel da nuvem: ele recebe a 0.4.1 quando a `streamlit` avançar até ela. Como fazer está no [guia de manutenção](docs/guia_de_manutencao.md#9-versões-branches-e-publicação).
 - **As páginas do painel mudaram de lugar.** O menu tem dois grupos:
   - **Observado**: Mapas, Chuva, Risco de Fogo e, no painel que lê do banco, Raios;
   - **Previsão (MS)**: Mapas, Chuva, Risco de Fogo e Semanas.
@@ -35,7 +36,7 @@ No Streamlit Cloud, que lê das APIs, tudo funciona, menos o que só existe no b
 - **Os downloads de cada mapa estão num menu "Baixar"**, ao lado do mapa.
 - **O painel ganhou uma dependência**, o `psycopg` (~4 MB), que lê o banco.
   - Quem roda o painel na própria máquina: `pip install -r app/requirements.txt` e reiniciar (Ctrl+C e `streamlit run app/explorador.py`).
-  - No Streamlit Cloud, a instalação acontece sozinha na publicação, e vale o Reboot.
+  - No Streamlit Cloud, a instalação acontece sozinha quando a `streamlit` avança, e depois vale o Reboot.
   - Quem só roda o `main.py`: `pip install -r requirements.txt`.
 - **O mapa navegável busca o fundo na internet**, no Carto: países, cidades, estradas e rios. Sem rede, ou com a caixa **"Mapa de fundo"** da barra lateral desligada, ficam só os limites do estado e dos municípios.
 - **`main.py`:** os produtos não mudam. Com `FONTE_DADOS=banco` no `.env`, as leituras vêm do banco, e não da API do INMET.
