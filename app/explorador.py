@@ -31,6 +31,7 @@ from matplotlib.figure import Figure
 
 from app import animacao
 from app import boletim
+from app import camadas
 from app import car
 from app import chuva as chuva_calc
 from app import dados as coleta
@@ -1642,27 +1643,10 @@ def visao_do_imovel(imovel: car.Imovel, em_3d: bool) -> dict:
             "zoom": round(min(zoom, ZOOM_DO_IMOVEL_EM_3D) if em_3d else zoom, 1)}
 
 
-# Os rótulos dos mapas navegáveis (o número sobre cada estação, o nome no mapa das estações): caixa
-# branca de cantos arredondados, borda fina e o texto em seminegrito, na fonte do painel. A equipe o
-# escolheu entre seis estilos testados lado a lado (03/11/2026)
-ESTILO_DOS_ROTULOS = dict(get_size=12, get_color=[20, 20, 20], background=True,
-                          get_background_color=[255, 255, 255, 235], get_border_color=[60, 60, 60, 200],
-                          get_border_width=1, background_padding=[4, 1, 4, 1], background_border_radius=4,
-                          font_weight=600)
-FONTE_DO_PAINEL = "'Source Sans Pro', Arial, sans-serif"
 # Na chuva, o número de quem não é o maior do seu grupo de 15 km vai em metros: ~2 px com o estado
 # inteiro na tela, escondido atrás do maior, e os 12 px de sempre a partir do zoom ~8,7, quando as
 # estações do grupo já ficam a dezenas de px umas das outras
 TAMANHO_DOS_ESCONDIDOS_M = 4000
-
-
-def camada_de_rotulos(dados: pd.DataFrame, coluna: str, posicao: list[str], deslocamento: list[int],
-                      **extras) -> pdk.Layer:
-    camada = pdk.Layer("TextLayer", data=dados, get_position=posicao, get_text=coluna, get_pixel_offset=deslocamento,
-                       **{**ESTILO_DOS_ROTULOS, **extras})
-    # Como a imagem dos mapas: passada no construtor, a fonte viraria expressão, e não o nome dela
-    camada.font_family = FONTE_DO_PAINEL
-    return camada
 
 
 def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos: bool,
@@ -1678,11 +1662,8 @@ def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos:
     estado, municipios = contornos_interativos(uf)
     com_celulas = celulas is not None and not celulas.empty
     em_3d = com_celulas and relevo is not None
-    # O quadrado de cada célula sai do centro no navegador, para não mandar quatro cantos por célula
-    dx, dy = grade_do_ponto(uf).meio_passo
-    quadrado = (f"[[Longitude - {dx:.6f}, Latitude - {dy:.6f}], [Longitude + {dx:.6f}, Latitude - {dy:.6f}], "
-                f"[Longitude + {dx:.6f}, Latitude + {dy:.6f}], [Longitude - {dx:.6f}, Latitude + {dy:.6f}]]")
-    camadas = []
+    quadrado = camadas.quadrado(*grade_do_ponto(uf).meio_passo)
+    pilha = []
     if em_3d:
         # Os blocos vão numa GridCellLayer porque, no clique, o Streamlit apaga para 40% as camadas que
         # conhece (PolygonLayer, ColumnLayer...), e o relevo inteiro ficaria translúcido; esta ele deixa
@@ -1692,40 +1673,27 @@ def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos:
         # mesmo, ao ligar o 3D, o deck.gl passaria o estado da camada plana à de colunas, e ela quebra.
         # Os limites vêm depois, como sobre a imagem: no chão, por cima do que fica no nível 0
         lado = interativo.lado_do_bloco(grade_do_ponto(uf))
-        camadas.append(pdk.Layer(
+        pilha.append(pdk.Layer(
             "GridCellLayer", data=relevo.loc[relevo["pintada"], interativo.COLUNAS_DO_RELEVO], id="relevo",
             get_position=["Longitude", "Latitude"], cell_size=lado, offset=[0, 0], extruded=True,
             get_elevation="altura", get_fill_color="cor", pickable=False))
-        camadas.append(pdk.Layer(
+        pilha.append(pdk.Layer(
             "ColumnLayer", data=celulas[interativo.COLUNAS_DA_CAMADA].assign(altura=relevo["altura"].to_numpy()),
             id=PONTOS_NO_RELEVO, get_position=["Longitude", "Latitude"], disk_resolution=4, angle=45,
             radius=lado / math.sqrt(2), extruded=True, get_elevation="altura", get_fill_color=[*escolhido, 2],
             opacity=0.5, pickable=True))
     else:
-        # A imagem entra depois de criada a camada: passada no construtor, o pydeck a trataria como
-        # expressão a ser avaliada no navegador ("@@=data:image/png;...")
-        campo = pdk.Layer("BitmapLayer", data=None, bounds=superficie.limites(recorte))
-        campo.image = imagem
-        camadas.append(campo)
-    camadas += [
-        # Preenchidos quase transparentes: é o preenchimento que responde ao mouse com o nome. Com a
-        # grade do ponto por cima, quem responde é ela, que já traz o município; clicável, o
-        # município inteiro ficaria pintado no clique (veja a camada da grade)
-        pdk.Layer("GeoJsonLayer", data=municipios, id="municipios", stroked=True, filled=True,
-                  get_fill_color=[255, 255, 255, 1], get_line_color=[70, 70, 70, 150],
-                  line_width_min_pixels=0.6, pickable=not com_celulas),
-        # O contorno do estado com uma borda clara por baixo: no mapa de fundo escuro, a linha preta sumiria
-        pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[235, 235, 235, 220],
-                  line_width_min_pixels=3.5),
-        pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[25, 25, 25],
-                  line_width_min_pixels=1.6),
-    ]
+        pilha.append(camadas.imagem(imagem, superficie.limites(recorte)))
+    # Os municípios respondem ao mouse com o nome. Com a grade do ponto por cima, quem responde é ela,
+    # que já traz o município; clicável, o município inteiro ficaria pintado no clique (veja a camada
+    # da grade)
+    pilha += camadas.limites(estado, municipios, clicaveis=not com_celulas)
     if com_celulas and not em_3d:
         # A grade invisível do valor em qualquer ponto, por cima dos municípios (o balão dela já traz
         # o nome do município) e por baixo das estações, que continuam respondendo ao clique.
         # No clique, o Streamlit pinta o objeto escolhido com a cor dele, mas opaca, e apaga os outros:
         # a célula leva o vermelho quase transparente, e a opacidade da camada deixa o escolhido em 50%
-        camadas.append(pdk.Layer(
+        pilha.append(pdk.Layer(
             "PolygonLayer", data=celulas[interativo.COLUNAS_DA_CAMADA], id="pontos", filled=True,
             stroked=False, get_fill_color=[*escolhido, 2], opacity=0.5, pickable=True, get_polygon=quadrado))
     if imovel is not None and com_celulas:
@@ -1736,14 +1704,14 @@ def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos:
         dele = celulas["celula"].isin(celulas_do_imovel(imovel, imovel.chave, uf)).to_numpy()
         quadrados = celulas.loc[dele, ["Longitude", "Latitude"]].assign(
             altura=relevo["altura"].to_numpy()[dele] + ACIMA_DO_BLOCO if em_3d else 0.0)
-        camadas.append(pdk.Layer(
+        pilha.append(pdk.Layer(
             "PolygonLayer", data=quadrados, id="celulas_do_imovel", get_polygon=quadrado, filled=True,
             stroked=True, extruded=em_3d, wireframe=em_3d, get_elevation="altura",
             get_fill_color=[*COR_DO_IMOVEL, 70], get_line_color=[*COR_DO_IMOVEL, 230], line_width_min_pixels=1.5,
             pickable=False))
         contorno = gpd.GeoDataFrame(geometry=[imovel.forma], crs="EPSG:4326").__geo_interface__
         ponto = imovel.forma.geom_type == "Point"
-        camadas += [
+        pilha += [
             pdk.Layer("GeoJsonLayer", data=contorno, id="imovel_borda", stroked=True, filled=ponto,
                       get_fill_color=[*COR_DO_IMOVEL, 255], get_line_color=[255, 255, 255, 230],
                       line_width_min_pixels=4, point_radius_min_pixels=7, pickable=False),
@@ -1754,18 +1722,10 @@ def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos:
     # No 3D, as estações e os números ficam no alto e sempre na frente: no chão, sumiriam dentro dos blocos
     posicao, na_frente = ((["Longitude", "Latitude", "altura"], {"parameters": {"depthCompare": "always"}})
                           if em_3d and "altura" in pontos else (["Longitude", "Latitude"], {}))
-    camadas += [
-        pdk.Layer("ScatterplotLayer", data=pontos, id="estacoes", get_position=posicao,
-                  get_fill_color="cor", get_line_color=[25, 25, 25], stroked=True, line_width_min_pixels=1,
-                  get_radius=3000, radius_min_pixels=6, radius_max_pixels=14, pickable=True, **na_frente),
-    ]
+    pilha.append(camadas.estacoes(pontos, posicao, **na_frente))
     com_cemaden = cemaden is not None and not cemaden.empty
     if com_cemaden:
-        # Menores que as estações do INMET e em laranja: Campo Grande tem quatro, a poucos km
-        camadas.append(pdk.Layer(
-            "ScatterplotLayer", data=cemaden, id="cemaden", get_position=posicao, get_fill_color="cor",
-            get_line_color=interativo.COR_DO_CEMADEN, stroked=True, line_width_min_pixels=2, get_radius=2000,
-            radius_min_pixels=5, radius_max_pixels=10, pickable=True, **na_frente))
+        pilha.append(camadas.pluviometros(cemaden, posicao, **na_frente))
     if escritos:
         escritas = pd.concat([pontos, cemaden], ignore_index=True) if com_cemaden else pontos
         if "maior_do_grupo" in escritas:
@@ -1773,11 +1733,11 @@ def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos:
             # com o número em metros: cresce ao aproximar o mapa. O CollisionFilterExtension do deck.gl,
             # que esconderia os números que se encostam, apaga todos no Streamlit 1.64 (testado em 24/11/2026)
             maior = escritas["maior_do_grupo"].astype(bool)
-            camadas.append(camada_de_rotulos(escritas[~maior], "rotulo", posicao, [0, -18], **na_frente,
-                                             get_size=TAMANHO_DOS_ESCONDIDOS_M, size_units="meters",
-                                             size_min_pixels=0, size_max_pixels=ESTILO_DOS_ROTULOS["get_size"]))
+            pilha.append(camadas.rotulos(escritas[~maior], "rotulo", posicao, [0, -18], **na_frente,
+                                         get_size=TAMANHO_DOS_ESCONDIDOS_M, size_units="meters", size_min_pixels=0,
+                                         size_max_pixels=camadas.ESTILO_DOS_ROTULOS["get_size"]))
             escritas = escritas[maior]
-        camadas.append(camada_de_rotulos(escritas, "rotulo", posicao, [0, -18], **na_frente))
+        pilha.append(camadas.rotulos(escritas, "rotulo", posicao, [0, -18], **na_frente))
     if "angulo" in pontos:
         # As setas do vento, ao lado de cada estação
         setas = pdk.Layer("TextLayer", data=pontos.dropna(subset=["angulo"]).assign(seta="↑"),
@@ -1785,15 +1745,10 @@ def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos:
                           get_size=22, get_color=[25, 25, 25], get_pixel_offset=[18, 0])
         # Como a imagem acima: passado no construtor, o "↑" viraria expressão ("@@=↑") e a seta não sairia
         setas.character_set = "↑"
-        camadas.append(setas)
+        pilha.append(setas)
     visao = visao_inicial(recorte) if imovel is None else visao_do_imovel(imovel, em_3d)
     visao = pdk.ViewState(**visao, **(VISAO_3D if em_3d else {}))
-    if st.session_state.get("fundo_interativo", True):
-        # O fundo da Carto, claro ou escuro como o tema (é o que o Streamlit põe com map_style=None):
-        # países, cidades, estradas e rios, da internet. Sem rede, só ele some
-        return pdk.Deck(layers=camadas, map_style=None, initial_view_state=visao, tooltip=interativo.BALAO)
-    return pdk.Deck(layers=camadas, map_provider=None, map_style=interativo.ESTILO_SEM_FUNDO,
-                    initial_view_state=visao, tooltip=interativo.BALAO)
+    return camadas.deck(pilha, visao, st.session_state.get("fundo_interativo", True))
 
 
 def legenda_do_risco(vertical: bool = False) -> str:
@@ -4634,11 +4589,9 @@ def mapa_das_estacoes(tabela: pd.DataFrame, destacadas: pd.Series, uf: str) -> p
         "cor": [[200, 30, 30, 235] if destacada else cores.get(rede, cores["INMET"])
                 for destacada, rede in zip(destacadas, tabela["Rede"])],
     })
-    nomes = camada_de_rotulos(pontos, "nome", ["Longitude", "Latitude"], [11, 0])
-    # Como a imagem dos mapas: passados no construtor, o pydeck trataria os textos como expressões
-    nomes.get_text_anchor = "start"
-    nomes.get_alignment_baseline = "center"
-    camadas = [
+    nomes = camadas.rotulos(pontos, "nome", ["Longitude", "Latitude"], [11, 0], get_text_anchor="start",
+                            get_alignment_baseline="center")
+    pilha = [
         pdk.Layer("GeoJsonLayer", data=base.municipios[[referencia.COLUNA_DO_MUNICIPIO, "geometry"]].__geo_interface__,
                   stroked=True, filled=False, get_line_color=[110, 110, 110, 140], line_width_min_pixels=0.5),
         pdk.Layer("GeoJsonLayer", data=base.uf.__geo_interface__, stroked=True, filled=False,
@@ -4655,7 +4608,7 @@ def mapa_das_estacoes(tabela: pd.DataFrame, destacadas: pd.Series, uf: str) -> p
     visao = visao_inicial(config.recorte_de(uf))
     visao["zoom"] = round(visao["zoom"] - 0.7, 1)
     # O fundo claro da Carto, como era o do Mapa Navegação: os nomes escuros se leem nele em qualquer tema
-    return pdk.Deck(layers=camadas, map_style=pdk.map_styles.LIGHT, initial_view_state=pdk.ViewState(**visao),
+    return pdk.Deck(layers=pilha, map_style=pdk.map_styles.LIGHT, initial_view_state=pdk.ViewState(**visao),
                     tooltip={"html": "<b>{nome}</b><br/>Rede: {rede}<br/>Município: {municipio}<br/>Código: {codigo}<br/>"
                                      "Altitude: {altitude}<br/>Em operação desde: {desde}"})
 
@@ -4780,32 +4733,13 @@ def carregar_alcance_dos_raios() -> tuple:
     return fonte.alcance_dos_raios()
 
 
-def legenda_de_cores(itens: list[tuple[str, str]], titulo: str) -> str:
-    # Uma linha por cor, na ordem dos itens, para ir por cima do mapa navegável (escala_no_mapa)
-    linhas = "".join(f'<span style="display:flex;align-items:center;margin-top:0.25rem">'
-                     f'<span style="width:0.9rem;height:0.9rem;border-radius:2px;margin-right:0.35rem;'
-                     f'background:{cor}"></span>{rotulo}</span>' for cor, rotulo in itens)
-    return f'<div style="font-size:0.8rem;color:#e0e0e0"><b>{titulo}</b>{linhas}</div>'
-
-
 def mapa_dos_raios(uf: str, camada: pdk.Layer, por_cima: bool) -> pdk.Deck:
     # O fundo, os municípios e o estado dos outros mapas navegáveis. Os flashes do Agora vão por cima
     # dos limites; as células da densidade, por baixo, como as superfícies
-    estado, municipios = contornos_interativos(uf)
-    limites = [
-        pdk.Layer("GeoJsonLayer", data=municipios, id="municipios", stroked=True, filled=False,
-                  get_line_color=[70, 70, 70, 150], line_width_min_pixels=0.6),
-        pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[235, 235, 235, 220],
-                  line_width_min_pixels=3.5),
-        pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[25, 25, 25],
-                  line_width_min_pixels=1.6),
-    ]
-    camadas = [*limites, camada] if por_cima else [camada, *limites]
+    limites = camadas.limites(*contornos_interativos(uf))
+    pilha = [*limites, camada] if por_cima else [camada, *limites]
     visao = pdk.ViewState(**visao_inicial(config.recorte_de(uf)))
-    if st.session_state.get("fundo_interativo", True):
-        return pdk.Deck(layers=camadas, map_style=None, initial_view_state=visao, tooltip=interativo.BALAO)
-    return pdk.Deck(layers=camadas, map_provider=None, map_style=interativo.ESTILO_SEM_FUNDO,
-                    initial_view_state=visao, tooltip=interativo.BALAO)
+    return camadas.deck(pilha, visao, st.session_state.get("fundo_interativo", True))
 
 
 @st.cache_resource(show_spinner=False, max_entries=1)
@@ -4837,8 +4771,8 @@ def mapa_do_circulo(uf: str, celulas: pdk.Layer, pontos: pdk.Layer, com_aneis: b
                       get_color=[235, 235, 235, 150], width_min_pixels=3),
             pdk.Layer("PathLayer", data=aneis[["caminho"]], id="aneis", get_path="caminho",
                       get_color=[40, 40, 40, 220], width_min_pixels=1.2),
-            camada_de_rotulos(aneis[["lon_rotulo", "lat_rotulo", "rotulo"]], "rotulo", ["lon_rotulo", "lat_rotulo"],
-                              [0, -10], id="rotulos_dos_aneis"),
+            camadas.rotulos(aneis[["lon_rotulo", "lat_rotulo", "rotulo"]], "rotulo", ["lon_rotulo", "lat_rotulo"],
+                            [0, -10], id="rotulos_dos_aneis"),
         ]
     regiao = []
     if not com_fundo:
@@ -4848,17 +4782,12 @@ def mapa_do_circulo(uf: str, celulas: pdk.Layer, pontos: pdk.Layer, com_aneis: b
                   pdk.Layer("GeoJsonLayer", data=estados, id="estados_do_brasil", stroked=True, filled=False,
                             get_line_color=[110, 110, 110, 150], line_width_min_pixels=0.6)]
     # Os municípios do estado, como no mapa do alcance do estado (só eles: pedido da equipe, 24/11/2026)
-    municipios = ([pdk.Layer("GeoJsonLayer", data=municipios_do_estado, id="municipios", stroked=True,
-                             filled=False, get_line_color=[70, 70, 70, 150], line_width_min_pixels=0.6)]
-                  if com_municipios else [])
-    camadas = [
+    municipios = [camadas.municipios(municipios_do_estado)] if com_municipios else []
+    pilha = [
         celulas,
         *municipios,
         *regiao,
-        pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[235, 235, 235, 220],
-                  line_width_min_pixels=3.5),
-        pdk.Layer("GeoJsonLayer", data=estado, stroked=True, filled=False, get_line_color=[25, 25, 25],
-                  line_width_min_pixels=1.6),
+        *camadas.contorno_do_estado(estado),
         *linhas_dos_aneis,
         pontos,
         pdk.Layer("ScatterplotLayer", data=pd.DataFrame({"lon": [lon], "lat": [lat]}), id="centro",
@@ -4868,10 +4797,7 @@ def mapa_do_circulo(uf: str, celulas: pdk.Layer, pontos: pdk.Layer, com_aneis: b
     _, sul, _, norte = calculos.caixa_do_circulo(config.CENTRO_DOS_RAIOS, config.RAIO_DOS_RAIOS_KM)
     visao = pdk.ViewState(latitude=raios.latitude_do_meio(sul, norte), longitude=lon,
                           zoom=round(raios.zoom_para_caber(sul, norte, ALTURA_MAPA), 2))
-    if com_fundo:
-        return pdk.Deck(layers=camadas, map_style=None, initial_view_state=visao, tooltip=interativo.BALAO)
-    return pdk.Deck(layers=camadas, map_provider=None, map_style=interativo.ESTILO_SEM_FUNDO,
-                    initial_view_state=visao, tooltip=interativo.BALAO)
+    return camadas.deck(pilha, visao, com_fundo)
 
 
 @st.cache_data(ttl=ATUALIZACAO_DOS_RAIOS, show_spinner=False, max_entries=3)
@@ -4960,10 +4886,11 @@ def raios_no_circulo(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, de
         st.error(f"Não foi possível ler os raios do círculo no banco ({erro}). A página tenta de novo a cada minuto.")
         return
     if vista == VISTAS_DO_AGORA[0]:
-        st.pydeck_chart(mapa_do_circulo(uf, camada_de_quadradinhos(celulas, "celulas_do_circulo"),
-                                        camada_de_flashes(pontos), com_aneis, com_municipios),
+        st.pydeck_chart(mapa_do_circulo(uf, camadas.quadradinhos(celulas, "celulas_do_circulo"),
+                                        camadas.flashes(pontos), com_aneis, com_municipios),
                         key="mapa_raios_circulo", height=ALTURA_MAPA)
-        escala_no_mapa("escala_raios_circulo", legenda_de_cores(raios.rotulos_das_idades(), raios.LEGENDA_DO_TEMPO))
+        escala_no_mapa("escala_raios_circulo",
+                       camadas.legenda(raios.rotulos_das_idades(), raios.LEGENDA_DO_TEMPO, sobre_o_mapa=True))
         total = len(pontos) + int(celulas["flashes"].sum())
         st.caption(f"{inteiro_br(total)} flashes nos últimos {janela} min até {nome}. "
                    + (f"Com mais de {inteiro_br(raios.LIMITE_DE_PONTOS)} flashes em {uf} na janela, o estado também "
@@ -4982,22 +4909,6 @@ def raios_no_circulo(uf: str, recorte: config.Recorte, flashes: pd.DataFrame, de
     with menu_de_baixar("raios_circulo"):
         botao_do_boletim("raios_circulo", arquivo,
                          desenho_do_circulo(agora, janela, uf, recorte.fuso, com_aneis, com_municipios))
-
-
-def camada_de_flashes(pontos: pd.DataFrame) -> pdk.Layer:
-    return pdk.Layer("ScatterplotLayer", data=pontos[["longitude", "latitude", "cor", "titulo", "detalhe"]],
-                     id="flashes", get_position=["longitude", "latitude"], get_fill_color="cor",
-                     get_line_color=[40, 40, 40, 200], stroked=True, line_width_min_pixels=0.5, get_radius=1500,
-                     radius_min_pixels=2.5, radius_max_pixels=8, pickable=True)
-
-
-def camada_de_quadradinhos(celulas: pd.DataFrame, nome: str) -> pdk.Layer:
-    # As células de 0,1° com flash (raios.celulas_da_janela), cada uma um quadrado na cor do mais novo
-    meio = 0.5 / config.CELULAS_POR_GRAU_RAIOS
-    quadrado = (f"[[Longitude - {meio}, Latitude - {meio}], [Longitude + {meio}, Latitude - {meio}], "
-                f"[Longitude + {meio}, Latitude + {meio}], [Longitude - {meio}, Latitude + {meio}]]")
-    return pdk.Layer("PolygonLayer", data=celulas[["Longitude", "Latitude", "cor", "titulo", "detalhe"]], id=nome,
-                     get_polygon=quadrado, filled=True, stroked=False, get_fill_color="cor", pickable=True)
 
 
 def grafico_dos_raios(barras: pd.DataFrame, uf: str) -> alt.Chart:
@@ -5083,11 +4994,12 @@ def mapa_navegavel_do_estado(uf: str, recorte: config.Recorte, flashes: pd.DataF
     muitos = len(pontos) > raios.LIMITE_DE_PONTOS
     if muitos:
         celulas = raios.celulas_da_janela(raios.em_celulas(flashes, agora), agora, janela, recorte.fuso)
-        camada = camada_de_quadradinhos(celulas, "celulas_do_estado")
+        camada = camadas.quadradinhos(celulas, "celulas_do_estado")
     else:
-        camada = camada_de_flashes(pontos)
+        camada = camadas.flashes(pontos)
     st.pydeck_chart(mapa_dos_raios(uf, camada, por_cima=True), key="mapa_raios_agora", height=ALTURA_MAPA)
-    escala_no_mapa("escala_raios_agora", legenda_de_cores(raios.rotulos_das_idades(), raios.LEGENDA_DO_TEMPO))
+    escala_no_mapa("escala_raios_agora",
+                   camadas.legenda(raios.rotulos_das_idades(), raios.LEGENDA_DO_TEMPO, sobre_o_mapa=True))
     if muitos:
         st.caption(f"{inteiro_br(len(pontos))} flashes nos últimos {janela} min no mapa, de {uf} e de até ~1° em volta. "
                    f"Com mais de {inteiro_br(raios.LIMITE_DE_PONTOS)}, eles vão em quadradinhos de 0,1° (~10 km) na cor "
@@ -5184,16 +5096,10 @@ def densidade_de_raios(uf: str, recorte: config.Recorte, intervalo: tuple) -> No
     vista = st.segmented_control("Mapa", VISTAS_DA_DENSIDADE, default=VISTAS_DA_DENSIDADE[0],
                                  key="vista_raios_densidade") or VISTAS_DA_DENSIDADE[0]
     if vista == VISTAS_DA_DENSIDADE[0]:
-        celulas = raios.celulas_do_mapa(por_celula)
-        meio = 0.5 / config.CELULAS_POR_GRAU_RAIOS
-        quadrado = (f"[[Longitude - {meio}, Latitude - {meio}], [Longitude + {meio}, Latitude - {meio}], "
-                    f"[Longitude + {meio}, Latitude + {meio}], [Longitude - {meio}, Latitude + {meio}]]")
-        camada = pdk.Layer("PolygonLayer", data=celulas[["Longitude", "Latitude", "cor", "titulo", "detalhe"]],
-                           id="celulas", get_polygon=quadrado, filled=True, stroked=False, get_fill_color="cor",
-                           pickable=True)
+        camada = camadas.quadradinhos(raios.celulas_do_mapa(por_celula), "celulas")
         st.pydeck_chart(mapa_dos_raios(uf, camada, por_cima=False), key="mapa_raios_densidade", height=ALTURA_MAPA)
         classes = list(zip(raios.CORES_DENSIDADE, raios.rotulos_das_classes()))[::-1]
-        escala_no_mapa("escala_raios_densidade", legenda_de_cores(classes, raios.UNIDADE_DENSIDADE))
+        escala_no_mapa("escala_raios_densidade", camadas.legenda(classes, raios.UNIDADE_DENSIDADE, sobre_o_mapa=True))
         st.caption(f"{quando}: os flashes por km² em cada célula de 0,1° (~10 km), de {uf} e de até ~1° em volta; a "
                    "célula sem flash fica sem cor. **Passe o mouse** numa célula para ver quantos flashes ela teve.")
     else:
