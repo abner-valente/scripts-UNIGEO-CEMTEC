@@ -230,7 +230,7 @@ A regra de organização: **conta vai para um módulo de `app/` sem Streamlit; t
 |---|---|
 | `explorador.py` | a tela (seção 4.2) |
 | `variaveis.py` | o catálogo de produtos do painel (`PRODUTOS`), as regras de agregação (`CALCULOS`), a escala de cores (`escala`) e o que já vem escolhido (`PADRAO_MAPA`) |
-| `dados.py` | a coleta com cache em disco e download em paralelo (8 por vez), e o CSV com as 29 colunas da API |
+| `dados.py` | a coleta com cache em disco e download em paralelo (8 por vez), o CSV com as 29 colunas da API e o formato de todo CSV do painel (`csv`: separado por "|", vírgula decimal e no máximo 2 casas, menos as coordenadas; `arredondado`, que também arredonda os dados de todo gráfico, em `explorador.grafico`) |
 | `chuva.py` | as janelas dos acumulados (3 a 96 h, o mensal e o do período), `cobre` (o dado carregado alcança a janela?) e as cascatas |
 | `risco.py` | traduz o dado do painel para o formato do `risco_fogo` e de volta. **Não** reimplementa a regra. |
 | `boletim.py` | o texto da moldura do PNG do boletim: título, subtítulo, ranking, nome do arquivo |

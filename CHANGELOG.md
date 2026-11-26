@@ -15,6 +15,7 @@ O **mapa de camadas**, um pedido do CICOE: os produtos do painel empilhados como
 
 ### Atenção ao atualizar
 
+- **Os CSV do painel mudaram de formato**: o separador é o **"|"** (barra vertical), as casas decimais vão com **vírgula** e os números têm no máximo **2 casas** (as coordenadas ficam como vieram). Vale para os botões "Baixar CSV" (as leituras, a tabela do risco de fogo, a previsão diária e o novo, ao lado da chuva por estação). Uma planilha ou um processo que lia o CSV com vírgula precisa trocar o separador.
 - **O menu ganhou o grupo CICOE (em desenvolvimento)**, com a página **Mapa de camadas** (`…/cicoe-camadas`). As outras páginas não mudaram de lugar.
 - **A página consulta o PIN MS** (`www.pinms.ms.gov.br`), o portal de mapas do estado, para os relatos do CICOE, no máximo a cada 10 minutos. Sem acesso a ele, o mapa sai sem os relatos, com um aviso, e o resto da página funciona.
 - **Não há dependência nova.** Quem roda o painel na própria máquina precisa só reiniciá-lo (Ctrl+C e `streamlit run app/explorador.py`): o Streamlit não carrega módulos novos sozinho.
@@ -57,6 +58,12 @@ O **mapa de camadas**, um pedido do CICOE: os produtos do painel empilhados como
 ### Novo: a trava da gravação dos raios (servidor)
 
 - **O `ferramentas/trava_glm.py`** liga e desliga uma trava que recusa a gravação na tabela de raios do colega (`relampagos_glm_rt`), enquanto ela não é recortada a 2.500 km de Campo Grande: o script dele grava o disco inteiro do GOES-19, uns 7 GB por dia com a carga do histórico. Para o script dele, é como se o banco recusasse a gravação; o painel e o nosso coletor de raios continuam lendo a tabela. Quem roda é quem administra o banco, com a conexão de gravação: `python ferramentas/trava_glm.py estado`, `parar` ou `retomar`.
+
+### Mudou: os CSV
+
+- **O formato dos processos internos da equipe** (pedido de 26/11/2026): separado por "|", com a vírgula nas casas decimais, no máximo 2 casas e com BOM, para o Excel abrir os acentos certos. As coordenadas mantêm todas as casas: com 2, uma estação andaria até 1 km.
+- **A chuva por estação**, embaixo da página Chuva, ganha o seu "Baixar CSV": todas as estações com registro na janela, da que mais choveu à que menos choveu.
+- **O "Download as CSV" que o próprio Streamlit põe nas tabelas e no "Show data" dos gráficos** continua separado por vírgula: o Streamlit não deixa trocar. Ali, as tabelas e os dados dos gráficos passam a ir com no máximo 2 casas, sem rabichos como 66.60000000000001.
 
 ### Corrigido
 
