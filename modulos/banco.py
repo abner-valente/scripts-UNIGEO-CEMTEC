@@ -546,12 +546,14 @@ def _caixa_dos_raios() -> dict:
     return {"oeste": oeste, "sul": sul, "leste": leste, "norte": norte}
 
 
-def _circulo_dos_raios() -> dict:
-    oeste, sul, leste, norte = calculos.caixa_do_circulo(config.CENTRO_DOS_RAIOS, config.RAIO_DOS_RAIOS_KM)
+def circulo_dos_raios(km: float | None = None) -> dict:
+    # Os parâmetros de NO_CIRCULO: o do Agora, ou outro raio (o da glm_rt, config.RAIO_DA_TABELA_GLM_KM)
+    km = config.RAIO_DOS_RAIOS_KM if km is None else km
+    oeste, sul, leste, norte = calculos.caixa_do_circulo(config.CENTRO_DOS_RAIOS, km)
     folga = FOLGA_DA_CAIXA_DO_CIRCULO
     lon, lat = config.CENTRO_DOS_RAIOS
     return {"c_oeste": oeste - folga, "c_sul": sul - folga, "c_leste": leste + folga, "c_norte": norte + folga,
-            "c_lon": lon, "c_lat": lat, "c_metros": config.RAIO_DOS_RAIOS_KM * 1000.0}
+            "c_lon": lon, "c_lat": lat, "c_metros": km * 1000.0}
 
 
 @_sem_deixar_transacao
@@ -685,7 +687,7 @@ def ler_celulas_do_circulo(conexao: psycopg.Connection, desde, ate, idades: list
         "WHERE r.time_utc >= %(desde)s AND r.time_utc < %(ate)s AND {} AND NOT ({}) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3")
         .format(_do_glm("controle_processamento_glm"), _do_glm("relampagos_glm_rt"), NO_CIRCULO, NA_CAIXA),
         {"de": desde - timedelta(minutes=1), "desde": desde, "ate": ate, "celulas": config.CELULAS_POR_GRAU_RAIOS,
-         "idades": [float(minutos) for minutos in idades[:-1]], **_caixa_dos_raios(), **_circulo_dos_raios()})
+         "idades": [float(minutos) for minutos in idades[:-1]], **_caixa_dos_raios(), **circulo_dos_raios()})
     tabela = _horas_em_utc(tabela, ["mais_novo"])
     return tabela.astype({"lon_celula": int, "lat_celula": int, "faixa": int, "flashes": int})
 
@@ -698,7 +700,7 @@ def ler_raios_do_circulo(conexao: psycopg.Connection, desde, ate) -> pd.DataFram
         "SELECT r.time_utc AS hora_utc, r.flash_lon AS longitude, r.flash_lat AS latitude "
         "FROM c JOIN {} r ON r.id_cena = c.id WHERE r.time_utc >= %(desde)s AND r.time_utc < %(ate)s AND {} "
         "ORDER BY r.time_utc").format(_do_glm("controle_processamento_glm"), _do_glm("relampagos_glm_rt"), NO_CIRCULO),
-        {"de": desde - timedelta(minutes=1), "desde": desde, "ate": ate, **_circulo_dos_raios()})
+        {"de": desde - timedelta(minutes=1), "desde": desde, "ate": ate, **circulo_dos_raios()})
     return _numeros(_horas_em_utc(tabela, ["hora_utc"]), ["longitude", "latitude"])
 
 
