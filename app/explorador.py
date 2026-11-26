@@ -41,9 +41,10 @@ from app import qualidade
 from app import raios
 from app import referencia
 from app import risco
+from app import servicos
 from app import superficie
 from app import variaveis
-from modulos import calculos, config, fonte, geotiff, gpkg, mapas, openmeteo, retiradas
+from modulos import arcgis, calculos, config, fonte, geotiff, gpkg, mapas, openmeteo, retiradas
 from modulos.produtos import risco_fogo
 
 # A API manda o vento em m/s; os produtos trabalham em km/h, e aqui seguimos a mesma unidade
@@ -5170,6 +5171,109 @@ def chuva_das_camadas(rotulo: str, hora: pd.Timestamp) -> dict | None:
             "horas": chuva_calc.horas_da_janela(ate, rotulo), "fora": fora}
 
 
+# Os serviços de fora (app/servicos.py). Uma falha do servidor não fica no cache: as funções com
+# cache deixam o erro passar, e quem as chama o trata, para a próxima execução tentar de novo
+@st.cache_data(ttl=86400, show_spinner=False, max_entries=10)
+def _nomes_dos_tipos(chave: str) -> dict[str, str]:
+    servico = servicos.por_chave(chave)
+    return arcgis.dominio(servico.url, servico.campo_do_tipo)
+
+
+def nomes_dos_tipos(chave: str) -> dict[str, str]:
+    try:
+        return _nomes_dos_tipos(chave)
+    except arcgis.ErroArcgis:
+        return {}
+
+
+# Dez minutos, como o CEMADEN: um relato novo aparece no mapa em até dez minutos
+@st.cache_data(ttl=600, show_spinner=False, max_entries=10)
+def _pontos_do_servico(chave: str) -> pd.DataFrame:
+    servico = servicos.por_chave(chave)
+    pontos = arcgis.pontos(servico.url, servico.campos, servico.proibidos, id_do_ponto=servico.id_do_ponto)
+    return servicos.pontos_do_servico(servico, pontos, nomes_dos_tipos(chave), config.recorte_de(config.UF).fuso)
+
+
+def pontos_do_servico(chave: str) -> tuple[pd.DataFrame, str | None]:
+    try:
+        return _pontos_do_servico(chave), None
+    except arcgis.ErroArcgis as erro:
+        return pd.DataFrame(columns=servicos.COLUNAS_DOS_PONTOS), str(erro)
+
+
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=20)
+def _foto_do_ponto(chave: str, objectid: int) -> bytes | None:
+    return servicos.foto_sem_metadados(arcgis.primeira_foto(servicos.por_chave(chave).url, objectid))
+
+
+def foto_do_ponto(chave: str, objectid: int) -> bytes | None:
+    # Só a do ponto aberto, e só no clique
+    try:
+        return _foto_do_ponto(chave, objectid)
+    except arcgis.ErroArcgis:
+        return None
+
+
+@st.cache_data(ttl=600, show_spinner=False, max_entries=30)
+def condicoes_no_ponto(lon: float, lat: float, quando: str) -> dict:
+    # O tempo na hora da observação, para a ficha (servicos.ficha): a leitura do INMET que cobre
+    # aquele horário na estação mais próxima (do estado ou vizinha), o pluviômetro do CEMADEN mais
+    # próximo que tenha leitura, a até 50 km, e os flashes em volta nas horas antes. Dez minutos de cache: num
+    # relato de agora, a leitura da hora ainda pode chegar
+    uf = config.UF
+    fuso = config.recorte_de(uf).fuso
+    hora = servicos.hora_da_leitura(quando, fuso)
+    inicio, fim = _em_utc(hora - pd.Timedelta(hours=25)), _em_utc(hora)
+    saida: dict = {}
+    estacoes = pd.concat([carregar_estacoes(uf), estacoes_vizinhas(uf, avisar=False)],
+                         ignore_index=True).drop_duplicates("CD_ESTACAO")
+    for estacao, km in servicos.mais_perto(estacoes, lon, lat):
+        leituras, _ = coleta.varias((estacao["CD_ESTACAO"],), (estacao["Estação"],), inicio, fim, fuso=fuso)
+        linha = servicos.leitura_da_hora(leituras, hora)
+        if linha is not None:
+            rajada = linha.get("VEN_RAJ")
+            saida["inmet"] = {"nome": estacao["Estação"], "codigo": estacao["CD_ESTACAO"], "km": km,
+                              "leitura": linha["dt_local"], "temperatura": linha.get("TEM_INS"),
+                              "umidade": linha.get("UMD_INS"),
+                              "rajada": None if pd.isna(rajada) else float(rajada) * CONVERSOES["VEN_RAJ"],
+                              "chuva_hora": servicos.chuva_ate(leituras, linha["dt_local"], 1),
+                              "chuva_24h": servicos.chuva_ate(leituras, linha["dt_local"], 24)}
+    cadastro_cemaden = estacoes_do_cemaden(uf)
+    if not cadastro_cemaden.empty:
+        saida["cemaden"] = None   # a ficha diz que não há pluviômetro com leitura perto
+    for pluviometro, km in servicos.pluviometros_candidatos(cadastro_cemaden, lon, lat):
+        try:
+            coletados = fonte.chuva_cemaden(cadastro_cemaden.loc[[pluviometro.name]], inicio, fim, fuso)
+        except fonte.ErroFonte:
+            break
+        do_cemaden = coleta.juntar_cemaden(coletados, inicio, fim, fuso)
+        if not do_cemaden.empty and do_cemaden[chuva_calc.COLUNA].notna().any():
+            saida["cemaden"] = {"nome": pluviometro["Estação"], "km": km,
+                                "chuva_hora": servicos.chuva_ate(do_cemaden, hora, 1),
+                                "chuva_24h": servicos.chuva_ate(do_cemaden, hora, 24)}
+            break
+    if fonte.tem_raios():
+        try:
+            por_celula, _ = carregar_raios_do_periodo(_em_utc(hora - pd.Timedelta(hours=servicos.HORAS_DOS_RAIOS)), fim)
+            saida["raios"] = servicos.flashes_em_volta(raios.densidade(por_celula), lon, lat)
+        except fonte.ErroFonte:
+            pass
+    return saida
+
+
+def ficha_do_ponto(servico: servicos.Servico, ponto: pd.Series) -> None:
+    with st.spinner("Buscando o tempo na hora da observação e a foto..."):
+        condicoes = (condicoes_no_ponto(float(ponto["longitude"]), float(ponto["latitude"]), ponto["quando"])
+                     if ponto["quando"] else {})
+        foto = foto_do_ponto(servico.chave, int(ponto["objectid"]))
+    st.html(servicos.ficha(servico, ponto, ponto["titulo"], condicoes))
+    if foto:
+        st.image(foto, caption=f"Foto anexada ao registro ({servico.credito})", width="stretch")
+    if st.button("Fechar a ficha", icon=":material/close:", key="fechar_ficha"):
+        st.session_state.pop("ponto_aberto", None)
+        st.rerun(scope="fragment")
+
+
 @st.fragment(run_every=ATUALIZACAO_DOS_RAIOS)
 def corpo_das_camadas(rotulo: str, janela_raios: int | None, catalogo: tuple[camadas.Camada, ...]) -> None:
     # O quadro, o mapa e as legendas se refazem sozinhos a cada minuto, pelos raios recentes; mexer no
@@ -5270,7 +5374,22 @@ def corpo_das_camadas(rotulo: str, janela_raios: int | None, catalogo: tuple[cam
         resumo.append(f"raios dos últimos {janela_raios} min: {inteiro_br(len(pontos))} flashes")
         return [camadas.flashes(pontos, opacidade)]
 
+    # Os pontos de cada serviço desenhado, para a ficha do que for clicado
+    pontos_dos_servicos: dict[str, pd.DataFrame] = {}
+
+    def do_servico(servico: servicos.Servico, opacidade: float) -> list[pdk.Layer]:
+        pontos, erro = pontos_do_servico(servico.chave)
+        if erro:
+            avisos.append(f"{servico.nome}: {erro}. O mapa sai sem eles; a página tenta de novo no próximo minuto.")
+            return []
+        pontos_dos_servicos[servico.chave] = pontos
+        legendas[servico.chave] = servicos.legenda_dos_tipos(servico, nomes_dos_tipos(servico.chave))
+        resumo.append(f"{inteiro_br(len(pontos))} {servico.plural}")
+        return [servicos.camada(servico, pontos, opacidade)] if not pontos.empty else []
+
     construtores = {"limites": lambda opacidade: camadas.limites(*contornos_interativos(uf), opacidade=opacidade)}
+    construtores |= {servico.chave: (lambda opacidade, servico=servico: do_servico(servico, opacidade))
+                     for servico in servicos.SERVICOS}
     if chuva is not None:
         construtores |= {"chuva": da_chuva, "estacoes_chuva": das_estacoes}
     if janela_raios is not None:
@@ -5278,12 +5397,29 @@ def corpo_das_camadas(rotulo: str, janela_raios: int | None, catalogo: tuple[cam
     deck = camadas.deck(camadas.montar(pilha, construtores), pdk.ViewState(**visao_inicial(recorte)),
                         st.session_state.get("fundo_interativo", True))
     with mapa_tela:
-        st.pydeck_chart(deck, key="mapa_de_camadas", height=ALTURA_DO_MAPA_DE_CAMADAS)
+        evento = st.pydeck_chart(deck, key="mapa_de_camadas", height=ALTURA_DO_MAPA_DE_CAMADAS, on_select="rerun",
+                                 selection_mode="single-object")
         st.caption((("No mapa: " + "; ".join(reversed(resumo)) + ".") if resumo else "Nenhuma camada ligada.")
-                   + "".join(notas) + " **Passe o mouse** num ponto ou numa célula para ver o que ela tem.")
+                   + "".join(notas) + " **Passe o mouse** num ponto ou numa célula para ver o que ela tem"
+                   + ("; **clique num ícone** para abrir a ficha." if pontos_dos_servicos else "."))
         for aviso in avisos:
             st.warning(aviso)
+    # O ponto clicado fica aberto até outro clique num ponto de serviço ou o botão de fechar. A seleção
+    # do mapa continua marcada depois de fechar a ficha: abre-se só quando ela muda, senão a ficha
+    # fechada voltaria na execução seguinte
+    objetos = evento.selection.get("objects", {}) if evento is not None else {}
+    clicado = next(((servico.chave, int(objetos[servico.chave][0]["objectid"])) for servico in servicos.SERVICOS
+                    if objetos.get(servico.chave)), None)
+    if clicado != st.session_state.get("ponto_visto"):
+        st.session_state["ponto_visto"] = clicado
+        if clicado is not None:
+            st.session_state["ponto_aberto"] = clicado
     with quadro_tela:
+        aberto = st.session_state.get("ponto_aberto")
+        pontos = pontos_dos_servicos.get(aberto[0]) if aberto else None
+        escolhido = pontos[pontos["objectid"] == aberto[1]] if pontos is not None else None
+        if escolhido is not None and not escolhido.empty:
+            ficha_do_ponto(servicos.por_chave(aberto[0]), escolhido.iloc[0])
         if legendas:
             st.subheader("Legendas")
             for camada in catalogo:
@@ -5296,8 +5432,8 @@ def pagina_camadas() -> None:
     com_raios = fonte.tem_raios()
     with st.sidebar:
         st.header("Tempo")
-        rotulo = st.selectbox("Janela da chuva" + (" e da densidade de raios" if com_raios else ""), JANELAS_DAS_CAMADAS,
-                              index=JANELAS_DAS_CAMADAS.index("24 h"), key="janela_camadas",
+        rotulo = st.selectbox("Janela da chuva" + (" e da densidade de raios" if com_raios else ""),
+                              JANELAS_DAS_CAMADAS, index=JANELAS_DAS_CAMADAS.index("24 h"), key="janela_camadas",
                               help="Conta para trás a partir da última hora com leitura do INMET.")
         janela_raios = None
         if com_raios:
@@ -5308,10 +5444,10 @@ def pagina_camadas() -> None:
         st.checkbox("Mapa de fundo", value=True, key="fundo_interativo",
                     help="Países, cidades, estradas e rios, da internet. Desligado, ficam só os limites do estado e "
                          "dos municípios.")
-    st.caption(f"Os produtos do painel como camadas de um SIG, em {config.NOME_UF}: ligue, desligue, mude a opacidade e "
-               "a ordem no quadro ao lado do mapa. Ele se atualiza sozinho a cada minuto."
+    st.caption(f"Os produtos do painel como camadas de um SIG, em {config.NOME_UF}: ligue, desligue, mude a "
+               "opacidade e a ordem no quadro ao lado do mapa. Ele se atualiza sozinho a cada minuto."
                + ("" if com_raios else " Os raios só vêm do banco: lendo das APIs, as camadas deles não aparecem."))
-    corpo_das_camadas(rotulo, janela_raios, camadas.disponiveis(com_raios))
+    corpo_das_camadas(rotulo, janela_raios, servicos.camadas_dos_servicos() + camadas.disponiveis(com_raios))
 
 
 # A previsão não usa nenhum filtro do observado (estado, período, estações), e numa aba ela ficaria
