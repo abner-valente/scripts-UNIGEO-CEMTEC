@@ -106,6 +106,25 @@ def sem_leituras(fuso: ZoneInfo) -> pd.DataFrame:
                          "dt_local": pd.Series(dtype=pd.DatetimeTZDtype(tz=fuso))})
 
 
+# O CSV que o painel entrega (pedido da equipe, 26/11/2026): separado por "|", com a vírgula nas casas
+# decimais, que é como os processos internos da equipe o leem, e os números com no máximo 2 casas (a
+# soma das leituras e o vento em km/h deixavam rabichos como 66.60000000000001). As coordenadas ficam
+# como vieram: com 2 casas, uma estação andaria até 1 km. Com BOM, para o Excel abrir os acentos
+SEPARADOR_DO_CSV = "|"
+CASAS_DECIMAIS = 2
+COORDENADAS = {"VL_LATITUDE", "VL_LONGITUDE", "Latitude", "Longitude", "latitude", "longitude"}
+
+
+def arredondado(tabela: pd.DataFrame) -> pd.DataFrame:
+    # Os números com no máximo CASAS_DECIMAIS, menos as coordenadas; o texto e as datas como estão
+    casas = {coluna: CASAS_DECIMAIS for coluna in tabela.select_dtypes("number").columns if coluna not in COORDENADAS}
+    return tabela.round(casas) if casas else tabela
+
+
+def csv(tabela: pd.DataFrame) -> bytes:
+    return arredondado(tabela).to_csv(index=False, sep=SEPARADOR_DO_CSV, decimal=",").encode("utf-8-sig")
+
+
 def planilha(leituras: pd.DataFrame, uf: str = config.UF) -> pd.DataFrame:
     if leituras.empty:
         return leituras
