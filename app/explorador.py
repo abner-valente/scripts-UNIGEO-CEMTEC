@@ -5215,18 +5215,19 @@ def foto_do_ponto(chave: str, objectid: int) -> bytes | None:
 
 
 @st.cache_data(ttl=600, show_spinner=False, max_entries=30)
-def condicoes_no_ponto(lon: float, lat: float, quando: str) -> dict:
+def condicoes_no_ponto(lon: float, lat: float, quando: str, fora: tuple[str, ...] = ()) -> dict:
     # O tempo na hora da observação, para a ficha (servicos.ficha): a leitura do INMET que cobre
     # aquele horário na estação mais próxima (do estado ou vizinha), o pluviômetro do CEMADEN mais
-    # próximo que tenha leitura, a até 50 km, e os flashes em volta nas horas antes. Dez minutos de cache: num
-    # relato de agora, a leitura da hora ainda pode chegar
+    # próximo que tenha leitura, a até 50 km, e os flashes em volta nas horas antes. `fora` são as
+    # estações retiradas dos mapas de chuva (as que estão em falha): a ficha as pula e vai à seguinte.
+    # Dez minutos de cache: num relato de agora, a leitura da hora ainda pode chegar
     uf = config.UF
     fuso = config.recorte_de(uf).fuso
     hora = servicos.hora_da_leitura(quando, fuso)
     inicio, fim = _em_utc(hora - pd.Timedelta(hours=25)), _em_utc(hora)
     saida: dict = {}
-    estacoes = pd.concat([carregar_estacoes(uf), estacoes_vizinhas(uf, avisar=False)],
-                         ignore_index=True).drop_duplicates("CD_ESTACAO")
+    estacoes = retiradas.retirar(pd.concat([carregar_estacoes(uf), estacoes_vizinhas(uf, avisar=False)],
+                                           ignore_index=True).drop_duplicates("CD_ESTACAO"), set(fora))
     for estacao, km in servicos.mais_perto(estacoes, lon, lat):
         leituras, _ = coleta.varias((estacao["CD_ESTACAO"],), (estacao["Estação"],), inicio, fim, fuso=fuso)
         linha = servicos.leitura_da_hora(leituras, hora)
@@ -5239,6 +5240,7 @@ def condicoes_no_ponto(lon: float, lat: float, quando: str) -> dict:
                               "chuva_hora": servicos.chuva_ate(leituras, linha["dt_local"], 1),
                               "chuva_24h": servicos.chuva_ate(leituras, linha["dt_local"], 24)}
     cadastro_cemaden = estacoes_do_cemaden(uf)
+    cadastro_cemaden = cadastro_cemaden[~cadastro_cemaden["Estação"].isin(fora)]
     if not cadastro_cemaden.empty:
         saida["cemaden"] = None   # a ficha diz que não há pluviômetro com leitura perto
     for pluviometro, km in servicos.pluviometros_candidatos(cadastro_cemaden, lon, lat):
@@ -5263,7 +5265,8 @@ def condicoes_no_ponto(lon: float, lat: float, quando: str) -> dict:
 
 def ficha_do_ponto(servico: servicos.Servico, ponto: pd.Series) -> None:
     with st.spinner("Buscando o tempo na hora da observação e a foto..."):
-        condicoes = (condicoes_no_ponto(float(ponto["longitude"]), float(ponto["latitude"]), ponto["quando"])
+        condicoes = (condicoes_no_ponto(float(ponto["longitude"]), float(ponto["latitude"]), ponto["quando"],
+                                        tuple(sorted(retiradas_da_variavel("Chuva"))))
                      if ponto["quando"] else {})
         foto = foto_do_ponto(servico.chave, int(ponto["objectid"]))
     st.html(servicos.ficha(servico, ponto, ponto["titulo"], condicoes))
@@ -5455,6 +5458,10 @@ def pagina_camadas() -> None:
     st.caption(f"Os produtos do painel como camadas de um SIG, em {config.NOME_UF}: ligue, desligue, mude a "
                "opacidade e a ordem no quadro ao lado do mapa. Ele se atualiza sozinho a cada minuto."
                + ("" if com_raios else " Os raios só vêm do banco: lendo das APIs, as camadas deles não aparecem."))
+    # A mesma gaveta dos mapas de chuva (pedido de 26/11/2026): a lista é da sessão e vale para a chuva
+    # das páginas Chuva e Mapa de camadas; a ficha dos relatos também pula as estações que estão nela
+    uf = config.UF
+    gaveta_das_retiradas("camadas", ["Chuva"], carregar_estacoes(uf), estacoes_vizinhas(uf), estacoes_do_cemaden(uf))
     corpo_das_camadas(rotulo, janela_raios, servicos.camadas_dos_servicos() + camadas.disponiveis(com_raios))
 
 
