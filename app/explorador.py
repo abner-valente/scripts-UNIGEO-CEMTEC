@@ -5501,8 +5501,9 @@ pagina = st.navigation({
                 url_path="previsao-risco-de-fogo"),
         st.Page(pagina_semanas, title="Semanas", icon=":material/date_range:", url_path="previsao-semanas"),
     ],
-    # Um grupo só do CICOE (pedido de 26/11/2026): o que ele pediu fica aqui, e não no observado
-    "CICOE": [
+    # Um grupo só do CICOE (pedido de 26/11/2026): o que ele pediu fica aqui, e não no observado. O
+    # "(em desenvolvimento)" fica no nome enquanto a equipe mexe na página (pedido do mesmo dia)
+    "CICOE (em desenvolvimento)": [
         st.Page(pagina_camadas, title="Mapa de camadas", icon=":material/layers:", url_path="cicoe-camadas"),
     ],
 })

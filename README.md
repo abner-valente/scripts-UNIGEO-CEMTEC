@@ -630,6 +630,14 @@ No servidor da unidade, os coletores guardam os dados no banco da UNIGEO (Postgr
 | `python coletar.py cemaden --historico 2015-03-01` | A carga do histórico do CEMADEN, em umas 8 horas, retomável | Uma vez só |
 | `python coletar.py raios` | Conta os flashes do GLM (GOES-19) do estado por hora e por célula de 0,1°, a partir das tabelas que o script de um colega grava no mesmo banco. A primeira execução conta o que já está lá e leva uns 20 minutos | De 10 em 10 minutos |
 
+**A trava da gravação dos raios.** O script do colega grava o disco inteiro do GOES-19 na tabela dele (`relampagos_glm_rt`), uns 7 GB por dia com a carga do histórico. Até a tabela ser recortada a 2.500 km de Campo Grande, o [`ferramentas/trava_glm.py`](ferramentas/trava_glm.py) liga e desliga um gatilho que recusa essa gravação, sem renomear a tabela: o painel e o `coletar.py raios` continuam lendo. Roda com a conexão de gravação:
+
+```bash
+python ferramentas/trava_glm.py estado     # a trava, o tamanho da tabela e se ainda entra flash
+python ferramentas/trava_glm.py parar      # liga a trava
+python ferramentas/trava_glm.py retomar    # desliga a trava (o gatilho fica, desligado)
+```
+
 Com `--teste`, qualquer um deles grava no `climageo_teste`, com a conexão `BANCO_TESTE`, e não no banco de verdade. O coletor sai com código 1 quando o banco ou alguma consulta falham, para o Agendador marcar a falha.
 
 **No Windows, quem chama os coletores é o Agendador de Tarefas.** O [`servidor\criar_tarefas.ps1`](servidor/criar_tarefas.ps1) cria (ou recria) as seis tarefas, com os horários da tabela acima. Elas rodam com o usuário conectado ou não, por isso o script pede a senha do Windows, que vai direto para o Agendador:
@@ -668,7 +676,7 @@ O navegador abre em `http://localhost:8501`, na página **Observado › Mapas**.
 |---|---|
 | **Observado** | [Mapas](#observado--mapas) (com a localização das estações, as séries e a qualidade dos dados), [Chuva](#observado--chuva), [Risco de Fogo](#observado--risco-de-fogo) e, só no painel que lê do banco, [Raios](#observado--raios-goes-19) |
 | **Previsão (MS)** | [Mapas, Chuva, Risco de Fogo e Semanas](#previsão-ms) |
-| **CICOE** | [Mapa de camadas](#cicoe--mapa-de-camadas): os produtos empilhados como camadas de um SIG, com os relatos do CICOE |
+| **CICOE (em desenvolvimento)** | [Mapa de camadas](#cicoe--mapa-de-camadas): os produtos empilhados como camadas de um SIG, com os relatos do CICOE |
 
 Toda página segue o mesmo desenho:
 
@@ -880,7 +888,7 @@ As decisões estão em [`docs/escopo_v0.3.1.md`](docs/escopo_v0.3.1.md), e o que
 
 ### CICOE › Mapa de camadas
 
-Um pedido do CICOE, num grupo do menu só dele (`…/cicoe-camadas`): os produtos do painel **empilhados como camadas de um SIG**, e por cima os relatos que chegam pelo formulário do CICOE no PIN MS. Só MS, porque os raios e os relatos são do estado.
+Um pedido do CICOE, num grupo do menu só dele, **CICOE (em desenvolvimento)**, enquanto a página segue mudando (`…/cicoe-camadas`): os produtos do painel **empilhados como camadas de um SIG**, e por cima os relatos que chegam pelo formulário do CICOE no PIN MS. Só MS, porque os raios e os relatos são do estado.
 
 | | |
 |---|---|

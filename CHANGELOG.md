@@ -11,11 +11,11 @@ Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
 ## [0.5.1] — 26/11/2026
 
-O **mapa de camadas**, um pedido do CICOE: os produtos do painel empilhados como num SIG, com os relatos que chegam pelo formulário do CICOE no PIN MS por cima. Fica num grupo novo do menu, **CICOE**, no painel da `main`. O Streamlit Cloud continua na 0.3.9.
+O **mapa de camadas**, um pedido do CICOE: os produtos do painel empilhados como num SIG, com os relatos que chegam pelo formulário do CICOE no PIN MS por cima. Fica num grupo novo do menu, **CICOE (em desenvolvimento)**, no painel da `main`: a página vai seguir mudando. O Streamlit Cloud continua na 0.3.9.
 
 ### Atenção ao atualizar
 
-- **O menu ganhou o grupo CICOE**, com a página **Mapa de camadas** (`…/cicoe-camadas`). As outras páginas não mudaram de lugar.
+- **O menu ganhou o grupo CICOE (em desenvolvimento)**, com a página **Mapa de camadas** (`…/cicoe-camadas`). As outras páginas não mudaram de lugar.
 - **A página consulta o PIN MS** (`www.pinms.ms.gov.br`), o portal de mapas do estado, para os relatos do CICOE, no máximo a cada 10 minutos. Sem acesso a ele, o mapa sai sem os relatos, com um aviso, e o resto da página funciona.
 - **Não há dependência nova.** Quem roda o painel na própria máquina precisa só reiniciá-lo (Ctrl+C e `streamlit run app/explorador.py`): o Streamlit não carrega módulos novos sozinho.
 
@@ -48,6 +48,10 @@ O **mapa de camadas**, um pedido do CICOE: os produtos do painel empilhados como
 
   As estações retiradas ficam de fora: a ficha vai à seguinte.
 - **O contato de quem respondeu o formulário e quem criou ou editou o registro nunca são pedidos ao servidor**, nem aparecem no painel.
+
+### Novo: a trava da gravação dos raios (servidor)
+
+- **O `ferramentas/trava_glm.py`** liga e desliga uma trava que recusa a gravação na tabela de raios do colega (`relampagos_glm_rt`), enquanto ela não é recortada a 2.500 km de Campo Grande: o script dele grava o disco inteiro do GOES-19, uns 7 GB por dia com a carga do histórico. Para o script dele, é como se o banco recusasse a gravação; o painel e o nosso coletor de raios continuam lendo a tabela. Quem roda é quem administra o banco, com a conexão de gravação: `python ferramentas/trava_glm.py estado`, `parar` ou `retomar`.
 
 ### Corrigido
 
