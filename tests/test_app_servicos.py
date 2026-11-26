@@ -205,16 +205,19 @@ def test_sem_temperatura_na_hora_vale_a_leitura_anterior():
 
 
 def estacoes_em_volta() -> pd.DataFrame:
+    # O pluviômetro do CEMADEN só mede chuva: a temperatura, a umidade e a rajada dele ficam sem valor
     return pd.DataFrame({"Longitude": [-54.70, -54.80, -54.60, -55.50], "Latitude": [-22.40, -22.50, -22.30, -21.00],
-                         "chuva_hora": [2.0, 0.0, np.nan, 10.0], "chuva_24h": [20.0, 10.0, 30.0, 0.0]},
+                         "chuva_hora": [2.0, 0.0, np.nan, 10.0], "chuva_24h": [20.0, 10.0, 30.0, 0.0],
+                         "temperatura": [30.0, np.nan, 28.0, 25.0], "umidade": [40.0, np.nan, 50.0, 70.0],
+                         "rajada": [20.0, np.nan, 35.0, np.nan]},
                         index=["Dourados", "CEMADEN · Dourados (Centro)", "Douradina", "Vizinha"])
 
 
-def test_a_chuva_no_local_e_a_conta_da_superficie_no_ponto():
+def test_no_local_e_a_conta_da_superficie_no_ponto():
     centro = (-54.0, -20.5)                                   # o do recorte, que fixa a projeção do mapa
     pontos = estacoes_em_volta()
 
-    saida = servicos.chuva_no_local(pontos, -54.69, -22.43, centro)
+    saida = servicos.no_local(pontos, -54.69, -22.43, centro)
 
     lon_grade, lat_grade = np.meshgrid([-54.69, -53.0], [-22.43, -20.0])
     superficie = calculos.interpolar_idw(pontos["Longitude"], pontos["Latitude"], pontos["chuva_24h"], lon_grade,
@@ -222,12 +225,37 @@ def test_a_chuva_no_local_e_a_conta_da_superficie_no_ponto():
     assert saida["chuva_24h"] == pytest.approx(superficie[0, 0])   # o mesmo número da cor do mapa ali
     assert saida["chuva_24h_estacoes"] == 4 and saida["chuva_hora_estacoes"] == 3   # quem não mediu fica fora
     assert 0 < saida["chuva_hora"] < 10
+    assert saida["temperatura_estacoes"] == 3 and 25 < saida["temperatura"] < 30   # sem o pluviômetro
+    assert 40 < saida["umidade"] < 70
 
 
-def test_com_poucas_estacoes_a_chuva_no_local_fica_sem_valor():
-    saida = servicos.chuva_no_local(estacoes_em_volta().iloc[:2], -54.69, -22.43, (-54.0, -20.5))
+def test_com_poucas_estacoes_a_medida_no_local_fica_sem_valor():
+    saida = servicos.no_local(estacoes_em_volta(), -54.69, -22.43, (-54.0, -20.5))
 
-    assert saida["chuva_hora"] is None and saida["chuva_24h"] is None
+    assert saida["rajada"] is None and saida["rajada_estacoes"] == 2        # só duas mediram a rajada
+    assert servicos.no_local(estacoes_em_volta().iloc[:2], -54.69, -22.43, (-54.0, -20.5))["chuva_24h"] is None
+
+
+def test_medida_que_nao_veio_fica_sem_valor_no_local():
+    saida = servicos.no_local(estacoes_em_volta()[["Longitude", "Latitude", "chuva_24h"]], -54.69, -22.43,
+                              (-54.0, -20.5))
+
+    assert saida["temperatura"] is None and saida["temperatura_estacoes"] == 0
+    assert saida["chuva_24h"] is not None
+
+
+def test_o_interpolado_usa_a_hora_que_ja_chegou_da_maioria_das_estacoes():
+    # Às 15:00 só duas das seis mandaram; às 14:00, todas: vale a das 14:00. A das 16:00 é depois da observação
+    linhas = [(nome, hora) for nome in "ABCDEF" for hora in ("13:00", "14:00")] + [("A", "15:00"), ("B", "15:00"),
+                                                                                   ("A", "16:00")]
+    leituras = pd.DataFrame({"Estação": [nome for nome, _ in linhas],
+                             "dt_local": [pd.Timestamp(f"2026-11-26 {hora}", tz=FUSO) for _, hora in linhas],
+                             "TEM_INS": 25.0})
+    hora = pd.Timestamp("2026-11-26 15:00", tz=FUSO)
+
+    assert servicos.hora_das_medidas(leituras, hora) == pd.Timestamp("2026-11-26 14:00", tz=FUSO)
+    assert servicos.hora_das_medidas(leituras.assign(TEM_INS=np.nan), hora) is None
+    assert servicos.hora_das_medidas(pd.DataFrame(), hora) is None
 
 
 def test_os_flashes_das_celulas_a_ate_20_km():
@@ -272,23 +300,25 @@ def test_a_ficha_escapa_a_descricao_e_diz_o_que_faltou():
     assert "CEMADEN" not in texto and "Raios" not in texto                # sem pluviômetro e sem o banco dos raios
 
 
-def test_a_ficha_traz_a_chuva_interpolada_no_local_antes_das_estacoes():
-    condicoes = {"no_local": {"chuva_hora": 1.23, "chuva_24h": 18.46, "chuva_hora_estacoes": 79,
-                              "chuva_24h_estacoes": 80},
+def test_a_ficha_traz_as_medidas_interpoladas_no_local_antes_das_estacoes():
+    condicoes = {"no_local": {"temperatura": 24.64, "umidade": 81.4, "rajada": 18.6, "chuva_hora": 1.23,
+                              "chuva_24h": 18.46, "chuva_hora_estacoes": 79, "chuva_24h_estacoes": 80},
                  "inmet": {"nome": "FATIMA DO SUL", "codigo": "S708", "km": 21.0,
                            "leitura": pd.Timestamp("2026-11-25 14:00", tz=FUSO), "temperatura": 25.0, "umidade": 86.0,
                            "rajada": 15.0, "chuva_hora": 0.0, "chuva_24h": 23.8}}
 
     texto = servicos.ficha(servicos.CICOE, ponto_aberto(), "Rodovia interditada", condicoes)
 
-    assert "<b>No local do relato</b>, interpolada: o IDW das 80 estações que mediram" in texto
-    assert "1,2 mm" in texto and "18,5 mm" in texto
+    assert "<b>No local do relato</b>, interpolado: o IDW das estações que mediram cada medida" in texto
+    local = texto[texto.index("No local do relato"):texto.index("Estação do INMET mais próxima")]
+    assert "24,6 °C" in local and "81 %" in local and "19 km/h" in local and "1,2 mm" in local
+    assert "18,5 mm" in local
     assert texto.index("No local do relato") < texto.index("Estação do INMET mais próxima")
 
 
 def test_sem_estacoes_para_interpolar_a_ficha_nao_mostra_o_local():
-    condicoes = {"no_local": {"chuva_hora": None, "chuva_24h": None, "chuva_hora_estacoes": 1,
-                              "chuva_24h_estacoes": 2}}
+    condicoes = {"no_local": {"temperatura": None, "umidade": None, "rajada": None, "chuva_hora": None,
+                              "chuva_24h": None, "chuva_hora_estacoes": 1, "chuva_24h_estacoes": 2}}
 
     assert "No local do relato" not in servicos.ficha(servicos.CICOE, ponto_aberto(), "Rodovia interditada", condicoes)
 

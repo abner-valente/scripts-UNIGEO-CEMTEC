@@ -46,7 +46,7 @@ O **mapa de camadas**, um pedido do CICOE: os produtos do painel empilhados como
 - **Os relatos do formulário do CICOE (Survey123) no PIN MS**, com um ícone por tipo de ocorrência: alagamento ou inundação, ponte danificada, rodovia interditada, queda de árvores, vendaval ou granizo, deslizamento de terra, incêndio e outra. Os nomes dos tipos vêm do próprio serviço.
 - **O clique num ícone abre a ficha da ocorrência**, ao lado do mapa: o tipo, a descrição, a data e horário da observação, a última atualização no serviço e a **foto anexada**, reduzida e sem os dados da câmera (como a posição de GPS). A ficha fica aberta até outro clique num ícone ou o botão "Fechar a ficha".
 - **O tempo na hora da observação**, na ficha:
-  - a chuva **no local do relato**, na hora e nas 24 horas antes, interpolada pelo mesmo IDW do mapa: as estações do INMET, as vizinhas e os pluviômetros do CEMADEN que mediram;
+  - as medidas **no local do relato**, interpoladas pelo mesmo IDW do mapa: a temperatura, a umidade e a rajada da leitura mais recente até a hora da observação que já chegou da maioria das estações (as do INMET e as vizinhas), e a chuva na hora e nas 24 horas antes (com os pluviômetros do CEMADEN). Cada medida pula as estações da lista dela na gaveta;
   - a leitura do INMET que cobre aquele horário, na estação mais próxima: temperatura, umidade, rajada, chuva na hora e nas 24 horas antes;
   - o pluviômetro do CEMADEN mais próximo que tenha leitura, a até 50 km: chuva na hora e nas 24 horas antes. Sem nenhum nessa distância, a ficha diz isso;
   - os flashes do GLM a até 20 km, nas 3 horas antes.

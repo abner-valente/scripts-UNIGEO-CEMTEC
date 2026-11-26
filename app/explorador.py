@@ -5237,19 +5237,23 @@ def foto_do_ponto(chave: str, objectid: int) -> bytes | None:
 
 
 @st.cache_data(ttl=600, show_spinner=False, max_entries=30)
-def condicoes_no_ponto(lon: float, lat: float, quando: str, fora: tuple[str, ...] = ()) -> dict:
-    # O tempo na hora da observação, para a ficha (servicos.ficha): a leitura do INMET que cobre
-    # aquele horário na estação mais próxima (do estado ou vizinha), o pluviômetro do CEMADEN mais
-    # próximo que tenha leitura, a até 50 km, e os flashes em volta nas horas antes. `fora` são as
-    # estações retiradas dos mapas de chuva (as que estão em falha): a ficha as pula e vai à seguinte.
-    # Dez minutos de cache: num relato de agora, a leitura da hora ainda pode chegar
+def condicoes_no_ponto(lon: float, lat: float, quando: str, fora: tuple[str, ...] = (),
+                       fora_por_grandeza: tuple[tuple[str, tuple[str, ...]], ...] = ()) -> dict:
+    # O tempo na hora da observação, para a ficha (servicos.ficha): as medidas interpoladas no ponto,
+    # a leitura do INMET que cobre aquele horário na estação mais próxima (do estado ou vizinha), o
+    # pluviômetro do CEMADEN mais próximo que tenha leitura, a até 50 km, e os flashes em volta nas horas
+    # antes. `fora` são as estações retiradas dos mapas de chuva (as que estão em falha): a estação e o
+    # pluviômetro mais próximos as pulam e vão aos seguintes. No interpolado, cada medida pula as da
+    # lista da grandeza dela (`fora_por_grandeza`), como as camadas do mapa. Dez minutos de cache: num
+    # relato de agora, a leitura da hora ainda pode chegar
     uf = config.UF
     fuso = config.recorte_de(uf).fuso
     hora = servicos.hora_da_leitura(quando, fuso)
     inicio, fim = _em_utc(hora - pd.Timedelta(hours=25)), _em_utc(hora)
     saida: dict = {}
-    estacoes = retiradas.retirar(pd.concat([carregar_estacoes(uf), estacoes_vizinhas(uf, avisar=False)],
-                                           ignore_index=True).drop_duplicates("CD_ESTACAO"), set(fora))
+    todas = pd.concat([carregar_estacoes(uf), estacoes_vizinhas(uf, avisar=False)],
+                      ignore_index=True).drop_duplicates("CD_ESTACAO")
+    estacoes = retiradas.retirar(todas, set(fora))
     for estacao, km in servicos.mais_perto(estacoes, lon, lat):
         leituras, _ = coleta.varias((estacao["CD_ESTACAO"],), (estacao["Estação"],), inicio, fim, fuso=fuso)
         linha = servicos.leitura_da_hora(leituras, hora)
@@ -5261,8 +5265,8 @@ def condicoes_no_ponto(lon: float, lat: float, quando: str, fora: tuple[str, ...
                               "rajada": None if pd.isna(rajada) else float(rajada) * CONVERSOES["VEN_RAJ"],
                               "chuva_hora": servicos.chuva_ate(leituras, linha["dt_local"], 1),
                               "chuva_24h": servicos.chuva_ate(leituras, linha["dt_local"], 24)}
-    cadastro_cemaden = estacoes_do_cemaden(uf)
-    cadastro_cemaden = cadastro_cemaden[~cadastro_cemaden["Estação"].isin(fora)]
+    todos_os_pluviometros = estacoes_do_cemaden(uf)
+    cadastro_cemaden = todos_os_pluviometros[~todos_os_pluviometros["Estação"].isin(fora)]
     if not cadastro_cemaden.empty:
         saida["cemaden"] = None   # a ficha diz que não há pluviômetro com leitura perto
     for pluviometro, km in servicos.pluviometros_candidatos(cadastro_cemaden, lon, lat):
@@ -5276,8 +5280,9 @@ def condicoes_no_ponto(lon: float, lat: float, quando: str, fora: tuple[str, ...
                                 "chuva_hora": servicos.chuva_ate(do_cemaden, hora, 1),
                                 "chuva_24h": servicos.chuva_ate(do_cemaden, hora, 24)}
             break
-    # A chuva interpolada no ponto, pelas mesmas estações e pela mesma conta da superfície do mapa
-    saida["no_local"] = chuva_interpolada_no_ponto(lon, lat, hora, inicio, fim, estacoes, cadastro_cemaden, set(fora))
+    # As medidas interpoladas no ponto, pelas mesmas estações e pela mesma conta da superfície do mapa
+    saida["no_local"] = interpolado_no_ponto(lon, lat, hora, inicio, fim, todas, todos_os_pluviometros,
+                                             dict(fora_por_grandeza))
     if fonte.tem_raios():
         try:
             por_celula, _ = carregar_raios_do_periodo(_em_utc(hora - pd.Timedelta(hours=servicos.HORAS_DOS_RAIOS)), fim)
@@ -5287,29 +5292,47 @@ def condicoes_no_ponto(lon: float, lat: float, quando: str, fora: tuple[str, ...
     return saida
 
 
-def chuva_interpolada_no_ponto(lon: float, lat: float, hora: pd.Timestamp, inicio: datetime, fim: datetime,
-                               estacoes: pd.DataFrame, cadastro_cemaden: pd.DataFrame, fora: set[str]) -> dict:
-    # As estações do estado e as vizinhas (`estacoes`, já sem as retiradas) e os pluviômetros do CEMADEN,
-    # com a chuva de cada um na hora e nas 24 h até `hora`, interpolada no ponto (servicos.chuva_no_local)
+# A grandeza da lista de estações retiradas de cada medida da ficha
+GRANDEZA_DA_MEDIDA = {"temperatura": "Temperatura", "umidade": "Umidade", "rajada": "Vento", "chuva_hora": "Chuva",
+                      "chuva_24h": "Chuva"}
+
+
+def interpolado_no_ponto(lon: float, lat: float, hora: pd.Timestamp, inicio: datetime, fim: datetime,
+                         estacoes: pd.DataFrame, cadastro_cemaden: pd.DataFrame, fora: dict[str, tuple]) -> dict:
+    # As estações do estado e as vizinhas (`estacoes`) e os pluviômetros do CEMADEN, com a temperatura,
+    # a umidade e a rajada da leitura mais recente até a `hora` que já chegou da maioria das estações
+    # (servicos.hora_das_medidas) e a chuva na hora e nas 24 h até a `hora`, interpoladas no ponto
+    # (servicos.no_local). Cada medida sai sem as estações da lista da grandeza dela em `fora`
     uf = config.UF
     fuso = config.recorte_de(uf).fuso
     leituras, _ = coleta.varias(tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]), inicio, fim, fuso=fuso)
-    do_cemaden = retiradas.retirar(carregar_chuva_cemaden(inicio, fim, uf), fora)
-    somas = pd.DataFrame({"chuva_hora": pd.concat([chuva_calc.acumulado(dados, hora, "1 h")
-                                                   for dados in (leituras, do_cemaden)]),
-                          "chuva_24h": pd.concat([chuva_calc.acumulado(dados, hora, "24 h")
-                                                  for dados in (leituras, do_cemaden)])})
+    do_cemaden = carregar_chuva_cemaden(inicio, fim, uf)
+    tabela = pd.DataFrame({"chuva_hora": pd.concat([chuva_calc.acumulado(dados, hora, "1 h")
+                                                    for dados in (leituras, do_cemaden)]),
+                           "chuva_24h": pd.concat([chuva_calc.acumulado(dados, hora, "24 h")
+                                                   for dados in (leituras, do_cemaden)])})
+    leitura = servicos.hora_das_medidas(leituras, hora)
+    if leitura is not None:
+        na_hora = leituras[leituras["dt_local"] == leitura].groupby("Estação").first()
+        for coluna, original, fator in (("temperatura", "TEM_INS", 1), ("umidade", "UMD_INS", 1),
+                                        ("rajada", "VEN_RAJ", CONVERSOES["VEN_RAJ"])):
+            if original in na_hora:
+                tabela = tabela.join((na_hora[original] * fator).rename(coluna), how="outer")
+    for coluna in tabela.columns:
+        tabela.loc[tabela.index.isin(fora.get(GRANDEZA_DA_MEDIDA[coluna], ())), coluna] = np.nan
     cadastro = pd.concat([estacoes, cadastro_cemaden], ignore_index=True).drop_duplicates("Estação")
     pontos = (cadastro.set_index("Estação")[["VL_LONGITUDE", "VL_LATITUDE"]].astype(float)
-              .rename(columns={"VL_LONGITUDE": "Longitude", "VL_LATITUDE": "Latitude"}).join(somas, how="inner"))
+              .rename(columns={"VL_LONGITUDE": "Longitude", "VL_LATITUDE": "Latitude"}).join(tabela, how="inner"))
     oeste, leste, sul, norte = config.recorte_de(uf).limites
-    return servicos.chuva_no_local(pontos, lon, lat, ((oeste + leste) / 2, (sul + norte) / 2))
+    return {**servicos.no_local(pontos, lon, lat, ((oeste + leste) / 2, (sul + norte) / 2)), "leitura": leitura}
 
 
 def ficha_do_ponto(servico: servicos.Servico, ponto: pd.Series) -> None:
     with st.spinner("Buscando o tempo na hora da observação e a foto..."):
+        fora = tuple((grandeza, tuple(sorted(retiradas_da_variavel(grandeza))))
+                     for grandeza in sorted(set(GRANDEZA_DA_MEDIDA.values())))
         condicoes = (condicoes_no_ponto(float(ponto["longitude"]), float(ponto["latitude"]), ponto["quando"],
-                                        tuple(sorted(retiradas_da_variavel("Chuva"))))
+                                        dict(fora)["Chuva"], fora)
                      if ponto["quando"] else {})
         foto = foto_do_ponto(servico.chave, int(ponto["objectid"]))
     st.html(servicos.ficha(servico, ponto, ponto["titulo"], condicoes))

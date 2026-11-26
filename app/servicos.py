@@ -237,14 +237,40 @@ def leitura_da_hora(leituras: pd.DataFrame, hora: pd.Timestamp) -> pd.Series | N
     return None if medidas.empty else medidas.sort_values("dt_local").iloc[-1]
 
 
-def chuva_no_local(pontos: pd.DataFrame, lon: float, lat: float, centro: tuple[float, float]) -> dict:
-    # A chuva interpolada no ponto do relato, na hora e nas 24 h antes, pelo mesmo IDW que pinta o mapa:
-    # `pontos` são as estações (o estado, as vizinhas e os pluviômetros do CEMADEN) com Longitude,
-    # Latitude, chuva_hora e chuva_24h, sem valor onde a estação não mediu; com o `centro` do recorte, o
-    # número bate com a cor da superfície. Com menos de MIN_ESTACOES_INTERPOLACAO que mediram, fica sem
-    # valor, como no mapa
+# As medidas da ficha, na ordem dos ladrilhos: (chave, rótulo, casas, unidade, cor da borda)
+MEDIDAS_DA_FICHA = (
+    ("temperatura", "Temperatura", 1, "°C", "#e53935"),
+    ("umidade", "Umidade", 0, "%", "#00897b"),
+    ("rajada", "Rajada", 0, "km/h", "#5e35b1"),
+    ("chuva_hora", "Chuva na hora", 1, "mm", "#1e88e5"),
+    ("chuva_24h", "Chuva 24 h antes", 1, "mm", "#1e88e5"),
+)
+
+
+def hora_das_medidas(leituras: pd.DataFrame, hora: pd.Timestamp, coluna: str = "TEM_INS") -> pd.Timestamp | None:
+    # A hora das leituras que o interpolado usa: a mais recente até `hora` em que pelo menos metade das
+    # estações (e não menos que MIN_ESTACOES_INTERPOLACAO) mandou a medida. A leitura da hora da
+    # observação pode ainda não ter chegado, ou ter chegado só de algumas estações
+    if leituras.empty or coluna not in leituras:
+        return None
+    com_medida = leituras[(leituras["dt_local"] <= hora) & leituras[coluna].notna()]
+    if com_medida.empty:
+        return None
+    por_hora = com_medida.groupby("dt_local")["Estação"].nunique()
+    bastam = por_hora[por_hora >= max(config.MIN_ESTACOES_INTERPOLACAO, por_hora.max() / 2)]
+    return None if bastam.empty else bastam.index.max()
+
+
+def no_local(pontos: pd.DataFrame, lon: float, lat: float, centro: tuple[float, float]) -> dict:
+    # As medidas interpoladas no ponto do relato, pelo mesmo IDW que pinta o mapa: `pontos` são as
+    # estações com Longitude, Latitude e as colunas de MEDIDAS_DA_FICHA que houver, sem valor onde a
+    # estação não mediu (o CEMADEN só mede chuva). Com o `centro` do recorte, o número bate com a cor da
+    # superfície. Com menos de MIN_ESTACOES_INTERPOLACAO que mediram, a medida fica sem valor, como no mapa
     saida: dict = {}
-    for coluna in ("chuva_hora", "chuva_24h"):
+    for coluna in (chave for chave, *_ in MEDIDAS_DA_FICHA):
+        if coluna not in pontos:
+            saida[coluna], saida[f"{coluna}_estacoes"] = None, 0
+            continue
         mediram = pontos.dropna(subset=[coluna])
         saida[f"{coluna}_estacoes"] = len(mediram)
         if len(mediram) < config.MIN_ESTACOES_INTERPOLACAO:
@@ -292,32 +318,32 @@ def _numero(valor, casas: int = 1, unidade: str = "") -> str:
     return f"{float(valor):.{casas}f}".replace(".", ",") + (f" {unidade}" if unidade else "")
 
 
+def _ladrilhos(medidas: dict, cor_da_chuva: str | None = None) -> str:
+    # Um ladrilho por medida de MEDIDAS_DA_FICHA que estiver em `medidas`, na ordem delas
+    return '<div class="tempo">' + "".join(
+        f'<div style="--cor:{cor_da_chuva if cor_da_chuva and chave.startswith("chuva") else cor}"><span>{rotulo}'
+        f'</span><b>{_numero(medidas.get(chave), casas, unidade)}</b></div>'
+        for chave, rotulo, casas, unidade, cor in MEDIDAS_DA_FICHA if chave in medidas) + "</div>"
+
+
 def _bloco_do_tempo(condicoes: dict) -> list[str]:
     partes = ['<div class="bloco"><div class="rotulo">Condições meteorológicas na hora da observação</div>']
     no_local = condicoes.get("no_local")
-    if no_local and (no_local.get("chuva_hora") is not None or no_local.get("chuva_24h") is not None):
-        estacoes = no_local.get("chuva_24h_estacoes", 0)
+    if no_local and any(no_local.get(chave) is not None for chave, *_ in MEDIDAS_DA_FICHA):
+        leitura = no_local.get("leitura")
+        de_quando = f" (leitura das {leitura:%H:%M} de {leitura:%d/%m})" if leitura is not None else ""
         partes.append(
-            f'<div class="miudo" style="margin-top:0.3rem"><b>No local do relato</b>, interpolada: o IDW das '
-            f'{estacoes} estações que mediram (as do INMET, as vizinhas e os pluviômetros do CEMADEN), a mesma conta '
-            f'do mapa</div><div class="tempo">'
-            f'<div style="--cor:#3949ab"><span>Chuva na hora</span>'
-            f'<b>{_numero(no_local.get("chuva_hora"), 1, "mm")}</b></div>'
-            f'<div style="--cor:#3949ab"><span>Chuva 24 h antes</span>'
-            f'<b>{_numero(no_local.get("chuva_24h"), 1, "mm")}</b></div></div>')
+            f'<div class="miudo" style="margin-top:0.3rem"><b>No local do relato</b>, interpolado{de_quando}: o IDW '
+            'das estações que mediram cada medida (as do INMET e as vizinhas; na chuva, também os pluviômetros do '
+            'CEMADEN), a mesma conta do mapa</div>'
+            + _ladrilhos({chave: no_local.get(chave) for chave, *_ in MEDIDAS_DA_FICHA}))
     inmet = condicoes.get("inmet")
     if inmet:
         partes.append(
             f'<div class="miudo" style="margin-top:0.6rem">Estação do INMET mais próxima: '
             f'<b>{html.escape(str(inmet["nome"]))}</b> ({html.escape(str(inmet["codigo"]))}), a '
             f'{_numero(inmet["km"], 0)} km · leitura das {inmet["leitura"]:%H:%M} de {inmet["leitura"]:%d/%m}</div>'
-            f'<div class="tempo">'
-            f'<div style="--cor:#e53935"><span>Temperatura</span><b>{_numero(inmet["temperatura"], 1, "°C")}</b></div>'
-            f'<div style="--cor:#00897b"><span>Umidade</span><b>{_numero(inmet["umidade"], 0, "%")}</b></div>'
-            f'<div style="--cor:#5e35b1"><span>Rajada</span><b>{_numero(inmet["rajada"], 0, "km/h")}</b></div>'
-            f'<div style="--cor:#1e88e5"><span>Chuva na hora</span><b>{_numero(inmet["chuva_hora"], 1, "mm")}</b></div>'
-            f'<div style="--cor:#1e88e5"><span>Chuva 24 h antes</span><b>{_numero(inmet["chuva_24h"], 1, "mm")}</b>'
-            f'</div></div>')
+            + _ladrilhos(inmet))
     else:
         partes.append('<div class="miudo" style="margin-top:0.3rem">Sem leitura do INMET perto desse horário.</div>')
     cemaden = condicoes.get("cemaden")
@@ -328,9 +354,7 @@ def _bloco_do_tempo(condicoes: dict) -> list[str]:
         partes.append(
             f'<div class="miudo" style="margin-top:0.6rem">Pluviômetro do CEMADEN mais próximo com leitura: '
             f'<b>{html.escape(str(cemaden["nome"]).replace("CEMADEN · ", ""))}</b>, a {_numero(cemaden["km"], 0)} km'
-            f'</div><div class="tempo"><div style="--cor:#ef6c00"><span>Chuva na hora</span>'
-            f'<b>{_numero(cemaden["chuva_hora"], 1, "mm")}</b></div><div style="--cor:#ef6c00"><span>Chuva 24 h antes'
-            f'</span><b>{_numero(cemaden["chuva_24h"], 1, "mm")}</b></div></div>')
+            f'</div>' + _ladrilhos(cemaden, cor_da_chuva="#ef6c00"))
     flashes = condicoes.get("raios")
     if flashes is not None:
         partes.append(f'<div class="miudo" style="margin-top:0.6rem">Raios (GLM) a até {RAIO_DOS_RAIOS_KM} km nas '
