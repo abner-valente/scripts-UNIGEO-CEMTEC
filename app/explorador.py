@@ -1644,6 +1644,26 @@ def visao_do_imovel(imovel: car.Imovel, em_3d: bool) -> dict:
             "zoom": round(min(zoom, ZOOM_DO_IMOVEL_EM_3D) if em_3d else zoom, 1)}
 
 
+def camadas_do_imovel(imovel: car.Imovel, quadrados: pd.DataFrame, quadrado: str,
+                      em_3d: bool = False) -> list[pdk.Layer]:
+    # As células que o imóvel toca (`quadrados`, com Longitude, Latitude e a altura no 3D), em magenta
+    # translúcido, e o contorno dele com uma borda clara por baixo. Nada disso responde ao mouse
+    contorno = gpd.GeoDataFrame(geometry=[imovel.forma], crs="EPSG:4326").__geo_interface__
+    ponto = imovel.forma.geom_type == "Point"
+    return [
+        pdk.Layer("PolygonLayer", data=quadrados, id="celulas_do_imovel", get_polygon=quadrado, filled=True,
+                  stroked=True, extruded=em_3d, wireframe=em_3d, get_elevation="altura",
+                  get_fill_color=[*COR_DO_IMOVEL, 70], get_line_color=[*COR_DO_IMOVEL, 230], line_width_min_pixels=1.5,
+                  pickable=False),
+        pdk.Layer("GeoJsonLayer", data=contorno, id="imovel_borda", stroked=True, filled=ponto,
+                  get_fill_color=[*COR_DO_IMOVEL, 255], get_line_color=[255, 255, 255, 230],
+                  line_width_min_pixels=4, point_radius_min_pixels=7, pickable=False),
+        pdk.Layer("GeoJsonLayer", data=contorno, id="imovel", stroked=True, filled=False,
+                  get_line_color=[*COR_DO_IMOVEL, 255], line_width_min_pixels=2, point_radius_min_pixels=7,
+                  pickable=False),
+    ]
+
+
 def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos: bool,
                     celulas: pd.DataFrame | None = None,
                     escolhido: list[int] = interativo.COR_DO_PONTO_ESCOLHIDO,
@@ -1699,21 +1719,7 @@ def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos:
         dele = celulas["celula"].isin(celulas_do_imovel(imovel, imovel.chave, uf)).to_numpy()
         quadrados = celulas.loc[dele, ["Longitude", "Latitude"]].assign(
             altura=relevo["altura"].to_numpy()[dele] + ACIMA_DO_BLOCO if em_3d else 0.0)
-        pilha.append(pdk.Layer(
-            "PolygonLayer", data=quadrados, id="celulas_do_imovel", get_polygon=quadrado, filled=True,
-            stroked=True, extruded=em_3d, wireframe=em_3d, get_elevation="altura",
-            get_fill_color=[*COR_DO_IMOVEL, 70], get_line_color=[*COR_DO_IMOVEL, 230], line_width_min_pixels=1.5,
-            pickable=False))
-        contorno = gpd.GeoDataFrame(geometry=[imovel.forma], crs="EPSG:4326").__geo_interface__
-        ponto = imovel.forma.geom_type == "Point"
-        pilha += [
-            pdk.Layer("GeoJsonLayer", data=contorno, id="imovel_borda", stroked=True, filled=ponto,
-                      get_fill_color=[*COR_DO_IMOVEL, 255], get_line_color=[255, 255, 255, 230],
-                      line_width_min_pixels=4, point_radius_min_pixels=7, pickable=False),
-            pdk.Layer("GeoJsonLayer", data=contorno, id="imovel", stroked=True, filled=False,
-                      get_line_color=[*COR_DO_IMOVEL, 255], line_width_min_pixels=2, point_radius_min_pixels=7,
-                      pickable=False),
-        ]
+        pilha += camadas_do_imovel(imovel, quadrados, quadrado, em_3d)
     # No 3D, as estações e os números ficam no alto e sempre na frente: no chão, sumiriam dentro dos blocos
     posicao, na_frente = ((["Longitude", "Latitude", "altura"], {"parameters": {"depthCompare": "always"}})
                           if em_3d and "altura" in pontos else (["Longitude", "Latitude"], {}))
@@ -5305,8 +5311,34 @@ def ficha_do_ponto(servico: servicos.Servico, ponto: pd.Series) -> None:
         st.rerun(scope="fragment")
 
 
+def camadas_do_imovel_nas_camadas(imovel: car.Imovel, uf: str) -> list[pdk.Layer]:
+    # As mesmas células magenta e o mesmo contorno dos outros mapas navegáveis (camadas_do_imovel)
+    grade = grade_do_ponto(uf)
+    indices = celulas_do_imovel(imovel, imovel.chave, uf)
+    quadrados = pd.DataFrame({"Longitude": np.ravel(grade.lon)[indices], "Latitude": np.ravel(grade.lat)[indices],
+                              "altura": 0.0})
+    return camadas_do_imovel(imovel, quadrados, camadas.quadrado(*grade.meio_passo))
+
+
+def quadro_do_imovel_nas_camadas(imovel: car.Imovel, chuva: dict | None, legenda: str, quando: str, uf: str) -> None:
+    # Embaixo do mapa, como nas outras páginas: a chuva da janela no imóvel, a média e a faixa das
+    # células que ele toca, com o IDW das mesmas estações da superfície
+    if chuva is None:
+        st.info(f"**{imovel.titulo}**: sem chuva do INMET na janela, não há o que somar no imóvel.")
+        return
+    valores = pd.concat([chuva["do_inmet"], chuva["cemaden"]]).dropna()
+    if len(valores) < config.MIN_ESTACOES_INTERPOLACAO:
+        return
+    celulas = celulas_do_ponto(valores, chuva["apoio"], "Chuva acumulada", quando, uf, nome=legenda)
+    dele = celulas_dele(celulas, imovel, uf)
+    if dele is None:
+        return
+    cabecalho_do_imovel(imovel, dele, f"**{legenda} {imovel.onde}, {quando}:** {car.resumo(dele['valor'], 1, 'mm')}",
+                        uf, conta="Cada célula leva o IDW das estações, o mesmo que pinta o mapa.")
+
+
 @st.fragment(run_every=ATUALIZACAO_DOS_RAIOS)
-def corpo_das_camadas(com_raios: bool, catalogo: tuple[camadas.Camada, ...]) -> None:
+def corpo_das_camadas(com_raios: bool, catalogo: tuple[camadas.Camada, ...], imovel: car.Imovel | None) -> None:
     # Os filtros, o quadro, o mapa e as legendas se refazem sozinhos a cada minuto, pelos raios
     # recentes; mexer neles refaz só este trecho. Cada camada só é carregada se estiver ligada
     # (camadas.montar). Pedidos de 26/11/2026: os filtros e o quadro numa faixa acima do mapa, como na
@@ -5352,7 +5384,9 @@ def corpo_das_camadas(com_raios: bool, catalogo: tuple[camadas.Camada, ...]) -> 
     pilha = camadas.empilhadas(quadro, catalogo)
     ligadas = {camada.chave for camada, _ in pilha}
     hora = pd.Timestamp.now(tz=recorte.fuso).floor("h")
-    chuva = chuva_das_camadas(rotulo, hora) if ligadas & {"chuva", "estacoes_chuva"} else None
+    # Com o imóvel do CAR, a chuva vem mesmo com as camadas dela desligadas: o quadro do imóvel a usa
+    chuva = (chuva_das_camadas(rotulo, hora) if ligadas & {"chuva", "estacoes_chuva"} or imovel is not None
+             else None)
     ate = chuva["ate"] if chuva is not None else hora
     comeco, _ = chuva_calc.janela(ate, rotulo)
     quando = f"{comeco:%d/%m %H:%M} a {ate:%d/%m %H:%M}"
@@ -5453,11 +5487,14 @@ def corpo_das_camadas(com_raios: bool, catalogo: tuple[camadas.Camada, ...]) -> 
         construtores |= {"chuva": da_chuva, "estacoes_chuva": das_estacoes}
     if janela_raios is not None:
         construtores |= {"densidade_raios": da_densidade, "raios_recentes": dos_raios_recentes}
-    deck = camadas.deck(camadas.montar(pilha, construtores), pdk.ViewState(**visao_inicial(recorte)),
+    # O imóvel do CAR vai por cima de todas as camadas, fora do quadro, e o mapa abre nele
+    do_imovel = camadas_do_imovel_nas_camadas(imovel, uf) if imovel is not None else []
+    visao = visao_inicial(recorte) if imovel is None else visao_do_imovel(imovel, False)
+    deck = camadas.deck(camadas.montar(pilha, construtores) + do_imovel, pdk.ViewState(**visao),
                         st.session_state.get("fundo_interativo", True))
     with mapa_tela:
-        evento = st.pydeck_chart(deck, key="mapa_de_camadas", height=ALTURA_DO_MAPA_DE_CAMADAS, on_select="rerun",
-                                 selection_mode="single-object")
+        evento = st.pydeck_chart(deck, key=chave_do_mapa("mapa_de_camadas", imovel=imovel),
+                                 height=ALTURA_DO_MAPA_DE_CAMADAS, on_select="rerun", selection_mode="single-object")
         if legendas:
             # Uma ao lado da outra, na ordem do catálogo, e quebrando a linha quando não cabem
             st.html('<div style="display:flex;flex-wrap:wrap;column-gap:2.5rem;row-gap:0.5rem;'
@@ -5468,6 +5505,8 @@ def corpo_das_camadas(com_raios: bool, catalogo: tuple[camadas.Camada, ...]) -> 
                    + ("; **clique num ícone** para abrir a ficha." if pontos_dos_servicos else "."))
         for aviso in avisos:
             st.warning(aviso)
+        if imovel is not None:
+            quadro_do_imovel_nas_camadas(imovel, chuva, legenda_da_chuva, quando, uf)
     # O ponto clicado fica aberto até outro clique num ponto de serviço ou o botão de fechar. A seleção
     # do mapa continua marcada depois de fechar a ficha: abre-se só quando ela muda, senão a ficha
     # fechada voltaria na execução seguinte
@@ -5498,7 +5537,11 @@ def pagina_camadas() -> None:
     # das páginas Chuva e Mapa de camadas; a ficha dos relatos também pula as estações que estão nela
     uf = config.UF
     gaveta_das_retiradas("camadas", ["Chuva"], carregar_estacoes(uf), estacoes_vizinhas(uf), estacoes_do_cemaden(uf))
-    corpo_das_camadas(com_raios, servicos.camadas_dos_servicos() + camadas.disponiveis(com_raios))
+    # O imóvel do CAR, o mesmo das outras páginas (pedido de 26/11/2026): fica na barra lateral, fora
+    # do trecho que se atualiza a cada minuto, porque o Streamlit não deixa esse trecho escrever nela
+    with st.sidebar:
+        imovel = imovel_da_barra()
+    corpo_das_camadas(com_raios, servicos.camadas_dos_servicos() + camadas.disponiveis(com_raios), imovel)
 
 
 # A previsão não usa nenhum filtro do observado (estado, período, estações), e numa aba ela ficaria

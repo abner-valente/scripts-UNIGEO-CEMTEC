@@ -36,6 +36,7 @@ O **mapa de camadas**, um pedido do CICOE: os produtos do painel empilhados como
 - **O mapa** ocupa 82% da largura, com 1.008 px de altura. Embaixo dele ficam as legendas das camadas ligadas, lado a lado, e uma frase com o que cada camada mostra: quantos relatos entraram (e quantos o serviço tem), a janela da chuva e de quantas estações ela veio.
 - **A chuva é a da página Chuva**: as mesmas estações, as vizinhas na borda, os pluviômetros do CEMADEN e o agrupamento de 15 km dos números. Aqui, o número só aparece onde choveu.
 - **O botão "Estações retiradas"**, o mesmo da página Chuva, com a mesma lista nas duas páginas.
+- **O imóvel do CAR**, o mesmo das outras páginas, na barra lateral: o mapa abre no imóvel, com o contorno e as células que ele toca por cima das camadas, e embaixo do mapa vai a chuva da janela no imóvel (a média e a faixa das células).
 
 ### Novo: os relatos do CICOE
 
