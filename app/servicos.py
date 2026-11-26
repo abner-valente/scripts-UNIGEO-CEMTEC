@@ -257,7 +257,7 @@ ESTILO_DA_FICHA = """
 .ficha .quando {border-left:4px solid #00897b; padding:0.4rem 0.7rem; background:rgba(127,127,127,.08);
                 border-radius:4px; margin-top:0.35rem; font-weight:700;}
 .ficha .miudo {font-size:0.78rem; opacity:0.8;}
-.tempo {display:grid; grid-template-columns:repeat(3, 1fr); gap:0.4rem; margin-top:0.4rem;}
+.tempo {display:grid; grid-template-columns:repeat(auto-fill, minmax(6.2rem, 1fr)); gap:0.4rem; margin-top:0.4rem;}
 .tempo div {border-left:3px solid var(--cor); background:rgba(127,127,127,.08); padding:0.3rem 0.5rem;
             border-radius:4px;}
 .tempo span {display:block; font-size:0.72rem; opacity:0.8;}

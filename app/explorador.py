@@ -5137,9 +5137,11 @@ def pagina_raios() -> None:
 # A janela da barra lateral vale para a chuva e para a densidade de raios; os raios recentes contam
 # para trás a partir de agora
 JANELAS_DAS_CAMADAS = [rotulo for rotulo in chuva_calc.rotulos() if rotulo.endswith(" h")]
-# O mapa com 82% da largura e os filtros, o quadro e as legendas com 18% ao lado; a altura é a de
-# 720 px do protótipo com mais 40% (pedidos de 26/11/2026)
+# O mapa com 82% da largura e a ficha da ocorrência clicada com 18% ao lado; a altura é a de 720 px
+# do protótipo com mais 40% (pedidos de 26/11/2026)
 PROPORCAO_DO_MAPA_DE_CAMADAS = [0.82, 0.18]
+# A faixa acima do mapa: os filtros de tempo à esquerda e o quadro de camadas à direita
+PROPORCAO_DOS_CONTROLES = [0.4, 0.6]
 ALTURA_DO_MAPA_DE_CAMADAS = 1008
 LEGENDA_DAS_ESTACOES = [("rgb({}, {}, {})".format(*interativo.COR_DA_ESTACAO[:3]), "Estação do INMET"),
                         ("rgb({}, {}, {})".format(*interativo.COR_DO_CEMADEN), "Pluviômetro do CEMADEN")]
@@ -5283,27 +5285,31 @@ def ficha_do_ponto(servico: servicos.Servico, ponto: pd.Series) -> None:
 def corpo_das_camadas(com_raios: bool, catalogo: tuple[camadas.Camada, ...]) -> None:
     # Os filtros, o quadro, o mapa e as legendas se refazem sozinhos a cada minuto, pelos raios
     # recentes; mexer neles refaz só este trecho. Cada camada só é carregada se estiver ligada
-    # (camadas.montar). Os filtros ficam ao lado do mapa, e não na barra lateral (pedido de 26/11/2026)
+    # (camadas.montar). Pedidos de 26/11/2026: os filtros e o quadro numa faixa acima do mapa, como na
+    # página Raios; ao lado do mapa, só a ficha da ocorrência clicada; embaixo, as legendas lado a lado
     uf = config.UF
     recorte = config.recorte_de(uf)
-    mapa_tela, quadro_tela = st.columns(PROPORCAO_DO_MAPA_DE_CAMADAS)
-    with quadro_tela:
-        st.subheader("Tempo")
-        rotulo = st.selectbox("Janela de tempo", JANELAS_DAS_CAMADAS, index=JANELAS_DAS_CAMADAS.index("24 h"),
+    filtros_tela, quadro_tela = st.columns(PROPORCAO_DOS_CONTROLES, gap="large")
+    with filtros_tela:
+        janela_tela, raios_tela = st.columns(2)
+        rotulo = janela_tela.selectbox("Janela de tempo", JANELAS_DAS_CAMADAS, index=JANELAS_DAS_CAMADAS.index("24 h"),
                               key="janela_camadas",
                               help="A chuva" + (" e a densidade de raios contam" if com_raios else " conta")
                                    + " para trás a partir da última hora com leitura do INMET; os relatos do CICOE, "
                                      "a partir de agora, pela data e horário da observação.")
         janela_raios = None
         if com_raios:
-            janela_raios = st.segmented_control(
+            janela_raios = raios_tela.segmented_control(
                 "Raios recentes", raios.JANELAS_DO_AGORA, default=raios.JANELAS_DO_AGORA[-1],
                 format_func=lambda minutos: f"{minutos} min", key="raios_camadas",
                 help="Os flashes dos últimos minutos, contados a partir de agora.") or raios.JANELAS_DO_AGORA[-1]
         st.checkbox("Mapa de fundo", value=True, key="fundo_interativo",
                     help="Países, cidades, estradas e rios, da internet. Desligado, ficam só os limites do estado e "
                          "dos municípios.")
-        st.subheader("Camadas")
+        st.caption("No quadro ao lado, marque **Ver** para ligar a camada, e mude a **Opacidade** e a **Ordem** (1 "
+                   "fica por cima de todas, como no QGIS). A mudança vale depois de Enter, Tab ou um clique fora da "
+                   "célula.")
+    with quadro_tela:
         quadro = st.data_editor(
             camadas.quadro_inicial(catalogo), key="quadro_de_camadas", hide_index=True, width="stretch",
             disabled=["Camada"],
@@ -5315,8 +5321,7 @@ def corpo_das_camadas(com_raios: bool, catalogo: tuple[camadas.Camada, ...]) -> 
                 "Ordem": st.column_config.NumberColumn(min_value=1, max_value=len(catalogo), step=1, width="small",
                                                        help="1 fica por cima de todas"),
             })
-        st.caption("Marque **Ver** para ligar a camada, e mude a **Opacidade** e a **Ordem** (1 fica por cima de "
-                   "todas, como no QGIS).")
+    mapa_tela, ficha_tela = st.columns(PROPORCAO_DO_MAPA_DE_CAMADAS)
     pilha = camadas.empilhadas(quadro, catalogo)
     ligadas = {camada.chave for camada, _ in pilha}
     hora = pd.Timestamp.now(tz=recorte.fuso).floor("h")
@@ -5426,6 +5431,11 @@ def corpo_das_camadas(com_raios: bool, catalogo: tuple[camadas.Camada, ...]) -> 
     with mapa_tela:
         evento = st.pydeck_chart(deck, key="mapa_de_camadas", height=ALTURA_DO_MAPA_DE_CAMADAS, on_select="rerun",
                                  selection_mode="single-object")
+        if legendas:
+            # Uma ao lado da outra, na ordem do catálogo, e quebrando a linha quando não cabem
+            st.html('<div style="display:flex;flex-wrap:wrap;column-gap:2.5rem;row-gap:0.5rem;'
+                    'align-items:flex-start">' + "".join(legendas[camada.chave] for camada in catalogo
+                                                         if camada.chave in legendas) + "</div>")
         st.caption((("No mapa: " + "; ".join(reversed(resumo)) + ".") if resumo else "Nenhuma camada ligada.")
                    + "".join(notas) + " **Passe o mouse** num ponto ou numa célula para ver o que ela tem"
                    + ("; **clique num ícone** para abrir a ficha." if pontos_dos_servicos else "."))
@@ -5441,24 +5451,21 @@ def corpo_das_camadas(com_raios: bool, catalogo: tuple[camadas.Camada, ...]) -> 
         st.session_state["ponto_visto"] = clicado
         if clicado is not None:
             st.session_state["ponto_aberto"] = clicado
-    with quadro_tela:
+    with ficha_tela:
         aberto = st.session_state.get("ponto_aberto")
         pontos = pontos_dos_servicos.get(aberto[0]) if aberto else None
         escolhido = pontos[pontos["objectid"] == aberto[1]] if pontos is not None else None
         if escolhido is not None and not escolhido.empty:
             ficha_do_ponto(servicos.por_chave(aberto[0]), escolhido.iloc[0])
-        if legendas:
-            st.subheader("Legendas")
-            for camada in catalogo:
-                if camada.chave in legendas:
-                    st.html(legendas[camada.chave])
+        elif pontos_dos_servicos:
+            st.caption("**Clique num ícone** de ocorrência no mapa para ver a ficha dela aqui.")
 
 
 def pagina_camadas() -> None:
     st.title("Mapa de camadas")
     com_raios = fonte.tem_raios()
     st.caption(f"Os produtos do painel como camadas de um SIG, em {config.NOME_UF}: ligue, desligue, mude a "
-               "opacidade e a ordem no quadro ao lado do mapa. Ele se atualiza sozinho a cada minuto."
+               "opacidade e a ordem no quadro acima do mapa. Ele se atualiza sozinho a cada minuto."
                + ("" if com_raios else " Os raios só vêm do banco: lendo das APIs, as camadas deles não aparecem."))
     # A mesma gaveta dos mapas de chuva (pedido de 26/11/2026): a lista é da sessão e vale para a chuva
     # das páginas Chuva e Mapa de camadas; a ficha dos relatos também pula as estações que estão nela
