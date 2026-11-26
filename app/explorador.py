@@ -1658,10 +1658,16 @@ TAMANHO_DOS_ESCONDIDOS_M = 4000
 
 def camada_de_rotulos(dados: pd.DataFrame, coluna: str, posicao: list[str], deslocamento: list[int],
                       **extras) -> pdk.Layer:
+    # A unidade do tamanho é texto puro, como a fonte: passada no construtor, viraria expressão
+    # ("@@=meters"), o deck.gl a leria como função, e os números em metros da chuva sairiam com os
+    # 12 px de sempre (saíram assim de 24 a 26/11/2026, embolados atrás do maior do grupo)
+    unidade = extras.pop("size_units", None)
     camada = pdk.Layer("TextLayer", data=dados, get_position=posicao, get_text=coluna, get_pixel_offset=deslocamento,
                        **{**ESTILO_DOS_ROTULOS, **extras})
     # Como a imagem dos mapas: passada no construtor, a fonte viraria expressão, e não o nome dela
     camada.font_family = FONTE_DO_PAINEL
+    if unidade is not None:
+        camada.size_units = unidade
     return camada
 
 
