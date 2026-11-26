@@ -5137,8 +5137,10 @@ def pagina_raios() -> None:
 # A janela da barra lateral vale para a chuva e para a densidade de raios; os raios recentes contam
 # para trás a partir de agora
 JANELAS_DAS_CAMADAS = [rotulo for rotulo in chuva_calc.rotulos() if rotulo.endswith(" h")]
-# Mais baixo que os outros mapas: ao lado dele vão o quadro de camadas e as legendas
-ALTURA_DO_MAPA_DE_CAMADAS = 720
+# O mapa com 82% da largura e os filtros, o quadro e as legendas com 18% ao lado; a altura é a de
+# 720 px do protótipo com mais 40% (pedidos de 26/11/2026)
+PROPORCAO_DO_MAPA_DE_CAMADAS = [0.82, 0.18]
+ALTURA_DO_MAPA_DE_CAMADAS = 1008
 LEGENDA_DAS_ESTACOES = [("rgb({}, {}, {})".format(*interativo.COR_DA_ESTACAO[:3]), "Estação do INMET"),
                         ("rgb({}, {}, {})".format(*interativo.COR_DO_CEMADEN), "Pluviômetro do CEMADEN")]
 
@@ -5278,13 +5280,29 @@ def ficha_do_ponto(servico: servicos.Servico, ponto: pd.Series) -> None:
 
 
 @st.fragment(run_every=ATUALIZACAO_DOS_RAIOS)
-def corpo_das_camadas(rotulo: str, janela_raios: int | None, catalogo: tuple[camadas.Camada, ...]) -> None:
-    # O quadro, o mapa e as legendas se refazem sozinhos a cada minuto, pelos raios recentes; mexer no
-    # quadro refaz só este trecho. Cada camada só é carregada se estiver ligada (camadas.montar)
+def corpo_das_camadas(com_raios: bool, catalogo: tuple[camadas.Camada, ...]) -> None:
+    # Os filtros, o quadro, o mapa e as legendas se refazem sozinhos a cada minuto, pelos raios
+    # recentes; mexer neles refaz só este trecho. Cada camada só é carregada se estiver ligada
+    # (camadas.montar). Os filtros ficam ao lado do mapa, e não na barra lateral (pedido de 26/11/2026)
     uf = config.UF
     recorte = config.recorte_de(uf)
-    mapa_tela, quadro_tela = st.columns([2.4, 1.6])
+    mapa_tela, quadro_tela = st.columns(PROPORCAO_DO_MAPA_DE_CAMADAS)
     with quadro_tela:
+        st.subheader("Tempo")
+        rotulo = st.selectbox("Janela de tempo", JANELAS_DAS_CAMADAS, index=JANELAS_DAS_CAMADAS.index("24 h"),
+                              key="janela_camadas",
+                              help="A chuva" + (" e a densidade de raios contam" if com_raios else " conta")
+                                   + " para trás a partir da última hora com leitura do INMET; os relatos do CICOE, "
+                                     "a partir de agora, pela data e horário da observação.")
+        janela_raios = None
+        if com_raios:
+            janela_raios = st.segmented_control(
+                "Raios recentes", raios.JANELAS_DO_AGORA, default=raios.JANELAS_DO_AGORA[-1],
+                format_func=lambda minutos: f"{minutos} min", key="raios_camadas",
+                help="Os flashes dos últimos minutos, contados a partir de agora.") or raios.JANELAS_DO_AGORA[-1]
+        st.checkbox("Mapa de fundo", value=True, key="fundo_interativo",
+                    help="Países, cidades, estradas e rios, da internet. Desligado, ficam só os limites do estado e "
+                         "dos municípios.")
         st.subheader("Camadas")
         quadro = st.data_editor(
             camadas.quadro_inicial(catalogo), key="quadro_de_camadas", hide_index=True, width="stretch",
@@ -5439,22 +5457,6 @@ def corpo_das_camadas(rotulo: str, janela_raios: int | None, catalogo: tuple[cam
 def pagina_camadas() -> None:
     st.title("Mapa de camadas")
     com_raios = fonte.tem_raios()
-    with st.sidebar:
-        st.header("Tempo")
-        rotulo = st.selectbox("Janela de tempo", JANELAS_DAS_CAMADAS, index=JANELAS_DAS_CAMADAS.index("24 h"),
-                              key="janela_camadas",
-                              help="A chuva" + (" e a densidade de raios contam" if com_raios else " conta")
-                                   + " para trás a partir da última hora com leitura do INMET; os relatos do CICOE, "
-                                     "a partir de agora, pela data e horário da observação.")
-        janela_raios = None
-        if com_raios:
-            janela_raios = st.segmented_control(
-                "Raios recentes", raios.JANELAS_DO_AGORA, default=raios.JANELAS_DO_AGORA[-1],
-                format_func=lambda minutos: f"{minutos} min", key="raios_camadas",
-                help="Os flashes dos últimos minutos, contados a partir de agora.") or raios.JANELAS_DO_AGORA[-1]
-        st.checkbox("Mapa de fundo", value=True, key="fundo_interativo",
-                    help="Países, cidades, estradas e rios, da internet. Desligado, ficam só os limites do estado e "
-                         "dos municípios.")
     st.caption(f"Os produtos do painel como camadas de um SIG, em {config.NOME_UF}: ligue, desligue, mude a "
                "opacidade e a ordem no quadro ao lado do mapa. Ele se atualiza sozinho a cada minuto."
                + ("" if com_raios else " Os raios só vêm do banco: lendo das APIs, as camadas deles não aparecem."))
@@ -5462,7 +5464,7 @@ def pagina_camadas() -> None:
     # das páginas Chuva e Mapa de camadas; a ficha dos relatos também pula as estações que estão nela
     uf = config.UF
     gaveta_das_retiradas("camadas", ["Chuva"], carregar_estacoes(uf), estacoes_vizinhas(uf), estacoes_do_cemaden(uf))
-    corpo_das_camadas(rotulo, janela_raios, servicos.camadas_dos_servicos() + camadas.disponiveis(com_raios))
+    corpo_das_camadas(com_raios, servicos.camadas_dos_servicos() + camadas.disponiveis(com_raios))
 
 
 # A previsão não usa nenhum filtro do observado (estado, período, estações), e numa aba ela ficaria
