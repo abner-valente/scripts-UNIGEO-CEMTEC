@@ -5261,6 +5261,8 @@ def condicoes_no_ponto(lon: float, lat: float, quando: str, fora: tuple[str, ...
                                 "chuva_hora": servicos.chuva_ate(do_cemaden, hora, 1),
                                 "chuva_24h": servicos.chuva_ate(do_cemaden, hora, 24)}
             break
+    # A chuva interpolada no ponto, pelas mesmas estações e pela mesma conta da superfície do mapa
+    saida["no_local"] = chuva_interpolada_no_ponto(lon, lat, hora, inicio, fim, estacoes, cadastro_cemaden, set(fora))
     if fonte.tem_raios():
         try:
             por_celula, _ = carregar_raios_do_periodo(_em_utc(hora - pd.Timedelta(hours=servicos.HORAS_DOS_RAIOS)), fim)
@@ -5268,6 +5270,25 @@ def condicoes_no_ponto(lon: float, lat: float, quando: str, fora: tuple[str, ...
         except fonte.ErroFonte:
             pass
     return saida
+
+
+def chuva_interpolada_no_ponto(lon: float, lat: float, hora: pd.Timestamp, inicio: datetime, fim: datetime,
+                               estacoes: pd.DataFrame, cadastro_cemaden: pd.DataFrame, fora: set[str]) -> dict:
+    # As estações do estado e as vizinhas (`estacoes`, já sem as retiradas) e os pluviômetros do CEMADEN,
+    # com a chuva de cada um na hora e nas 24 h até `hora`, interpolada no ponto (servicos.chuva_no_local)
+    uf = config.UF
+    fuso = config.recorte_de(uf).fuso
+    leituras, _ = coleta.varias(tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]), inicio, fim, fuso=fuso)
+    do_cemaden = retiradas.retirar(carregar_chuva_cemaden(inicio, fim, uf), fora)
+    somas = pd.DataFrame({"chuva_hora": pd.concat([chuva_calc.acumulado(dados, hora, "1 h")
+                                                   for dados in (leituras, do_cemaden)]),
+                          "chuva_24h": pd.concat([chuva_calc.acumulado(dados, hora, "24 h")
+                                                  for dados in (leituras, do_cemaden)])})
+    cadastro = pd.concat([estacoes, cadastro_cemaden], ignore_index=True).drop_duplicates("Estação")
+    pontos = (cadastro.set_index("Estação")[["VL_LONGITUDE", "VL_LATITUDE"]].astype(float)
+              .rename(columns={"VL_LONGITUDE": "Longitude", "VL_LATITUDE": "Latitude"}).join(somas, how="inner"))
+    oeste, leste, sul, norte = config.recorte_de(uf).limites
+    return servicos.chuva_no_local(pontos, lon, lat, ((oeste + leste) / 2, (sul + norte) / 2))
 
 
 def ficha_do_ponto(servico: servicos.Servico, ponto: pd.Series) -> None:

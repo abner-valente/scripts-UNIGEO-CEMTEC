@@ -20,7 +20,7 @@ import pydeck as pdk
 from PIL import Image, ImageOps
 
 from app import camadas
-from modulos import calculos
+from modulos import calculos, config
 
 # Os raios em volta do ponto, nas horas antes da observação
 RAIO_DOS_RAIOS_KM = 20
@@ -237,6 +237,26 @@ def leitura_da_hora(leituras: pd.DataFrame, hora: pd.Timestamp) -> pd.Series | N
     return None if medidas.empty else medidas.sort_values("dt_local").iloc[-1]
 
 
+def chuva_no_local(pontos: pd.DataFrame, lon: float, lat: float, centro: tuple[float, float]) -> dict:
+    # A chuva interpolada no ponto do relato, na hora e nas 24 h antes, pelo mesmo IDW que pinta o mapa:
+    # `pontos` são as estações (o estado, as vizinhas e os pluviômetros do CEMADEN) com Longitude,
+    # Latitude, chuva_hora e chuva_24h, sem valor onde a estação não mediu; com o `centro` do recorte, o
+    # número bate com a cor da superfície. Com menos de MIN_ESTACOES_INTERPOLACAO que mediram, fica sem
+    # valor, como no mapa
+    saida: dict = {}
+    for coluna in ("chuva_hora", "chuva_24h"):
+        mediram = pontos.dropna(subset=[coluna])
+        saida[f"{coluna}_estacoes"] = len(mediram)
+        if len(mediram) < config.MIN_ESTACOES_INTERPOLACAO:
+            saida[coluna] = None
+            continue
+        saida[coluna] = float(calculos.interpolar_idw(
+            mediram["Longitude"].to_numpy(dtype=float), mediram["Latitude"].to_numpy(dtype=float),
+            mediram[coluna].to_numpy(dtype=float), np.array([float(lon)]), np.array([float(lat)]),
+            config.IDW_VIZINHOS, config.IDW_POTENCIA, centro=centro)[0])
+    return saida
+
+
 def flashes_em_volta(celulas: pd.DataFrame, lon: float, lat: float, raio_km: float = RAIO_DOS_RAIOS_KM) -> int:
     # Os flashes das células de 0,1° (raios.densidade) com o centro a até raio_km do ponto
     if celulas.empty:
@@ -274,10 +294,21 @@ def _numero(valor, casas: int = 1, unidade: str = "") -> str:
 
 def _bloco_do_tempo(condicoes: dict) -> list[str]:
     partes = ['<div class="bloco"><div class="rotulo">Condições meteorológicas na hora da observação</div>']
+    no_local = condicoes.get("no_local")
+    if no_local and (no_local.get("chuva_hora") is not None or no_local.get("chuva_24h") is not None):
+        estacoes = no_local.get("chuva_24h_estacoes", 0)
+        partes.append(
+            f'<div class="miudo" style="margin-top:0.3rem"><b>No local do relato</b>, interpolada: o IDW das '
+            f'{estacoes} estações que mediram (as do INMET, as vizinhas e os pluviômetros do CEMADEN), a mesma conta '
+            f'do mapa</div><div class="tempo">'
+            f'<div style="--cor:#3949ab"><span>Chuva na hora</span>'
+            f'<b>{_numero(no_local.get("chuva_hora"), 1, "mm")}</b></div>'
+            f'<div style="--cor:#3949ab"><span>Chuva 24 h antes</span>'
+            f'<b>{_numero(no_local.get("chuva_24h"), 1, "mm")}</b></div></div>')
     inmet = condicoes.get("inmet")
     if inmet:
         partes.append(
-            f'<div class="miudo" style="margin-top:0.3rem">Estação do INMET mais próxima: '
+            f'<div class="miudo" style="margin-top:0.6rem">Estação do INMET mais próxima: '
             f'<b>{html.escape(str(inmet["nome"]))}</b> ({html.escape(str(inmet["codigo"]))}), a '
             f'{_numero(inmet["km"], 0)} km · leitura das {inmet["leitura"]:%H:%M} de {inmet["leitura"]:%d/%m}</div>'
             f'<div class="tempo">'
