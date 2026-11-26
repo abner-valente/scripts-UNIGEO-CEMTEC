@@ -241,6 +241,13 @@ def carregar_chuva_cemaden(inicio: datetime, fim: datetime, uf: str) -> pd.DataF
     return coleta.juntar_cemaden(coletados, inicio, fim, fuso)
 
 
+def grafico(dados) -> alt.Chart:
+    # Todo gráfico do painel nasce aqui, com os números em no máximo 2 casas: o "Show data" do Streamlit
+    # mostra e baixa a tabela do gráfico como ela é, e a soma das leituras deixava rabichos como
+    # 66.60000000000001 (pedido da equipe, 26/11/2026)
+    return alt.Chart(coleta.arredondado(dados) if isinstance(dados, pd.DataFrame) else dados)
+
+
 def series_da_grandeza(tabela: pd.DataFrame, grandeza: str, modo: str):
     pedacos, usados = [], []
     for produto in variaveis.disponiveis(modo, variaveis.GRAFICO):
@@ -266,7 +273,7 @@ def _apelidos(longo: pd.DataFrame) -> dict[tuple[str, str], str]:
 
 def _regua(dados: pd.DataFrame, linhas_do_balao: list[tuple[str, str, str]], casas: int,
            por_dia: bool, apontar: alt.Parameter) -> alt.Chart:
-    grafico = alt.Chart(dados).transform_pivot("chave", value="valor", groupby=["dt_local"])
+    grafico = grafico(dados).transform_pivot("chave", value="valor", groupby=["dt_local"])
     balao = [alt.Tooltip("dt_local:T", title="Quando", format="%d/%m" if por_dia else "%d/%m %H:%M")]
     for nome, apelido, serie in linhas_do_balao:
         # Sem nada escolhido na legenda, tudo aparece; com uma série escolhida, só ela
@@ -317,7 +324,7 @@ def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, 
     eixo_x = alt.X("dt_local:T", title=None,
                    axis=alt.Axis(grid=True, gridOpacity=0.25, labelAngle=0, labelExpr=formato,
                                  labelFontSize=FONTE_DOS_EIXOS, tickCount="day" if por_dia else alt.Undefined))
-    base = alt.Chart(dados).encode(
+    base = grafico(dados).encode(
         x=eixo_x,
         y=alt.Y("valor:Q", title=rotulo_y, scale=alt.Scale(zero=zero_na_base),
                 axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS)),
@@ -344,11 +351,11 @@ def desenhar(longo: pd.DataFrame, rotulo_y: str, zero_na_base: bool, modo: str, 
 
 def barras_do_acumulado(valores: pd.Series, unidade: str, quantas: int | None) -> alt.Chart:
     tabela = (valores.dropna().rename("valor").rename_axis("Estação").reset_index()
-              .sort_values("valor", ascending=False))
+              .sort_values("valor", ascending=False, ignore_index=True))
     if quantas:
         # Só quem choveu: numa janela seca, quinze barras de 0,0 mm não dizem nada
         tabela = tabela[tabela["valor"] > 0].head(quantas)
-    base = alt.Chart(tabela)
+    base = grafico(tabela)
     # labelOverlap=False obriga o eixo a escrever todos os nomes. Com pouca altura ele descarta
     # um sim, um não — e aí uma lista de 15 estações parece uma de 8.
     # labelLimit de 340 px cabe "CEMADEN · Campo Grande (Jardim Panamá)" inteiro, sem reticências
@@ -372,7 +379,7 @@ def barras_do_acumulado(valores: pd.Series, unidade: str, quantas: int | None) -
 def cascata_da_chuva(barras: pd.DataFrame, por_dia: bool, titulo: str = "", teto: float | None = None,
                      altura: int = 300) -> alt.Chart:
     ordem = list(barras.sort_values("ordem")["Passo"].unique())
-    base = alt.Chart(barras).encode(
+    base = grafico(barras).encode(
         x=alt.X("Passo:N", title=None, sort=ordem, axis=alt.Axis(labelAngle=-45, labelFontSize=FONTE_DOS_EIXOS)))
     desenho = base.mark_bar(size=14 if por_dia else 8).encode(
         y=alt.Y("base:Q", title="Chuva (mm)",
@@ -1058,7 +1065,7 @@ def _legenda_dos_niveis(niveis: list[int]) -> alt.Legend:
 def barras_de_niveis(horaria: pd.DataFrame, ordem: list[str]) -> alt.Chart:
     contagem = (horaria[horaria[risco_fogo.COLUNA_NIVEL_HORA] > 0]
                 .groupby(["Estação", risco_fogo.COLUNA_NIVEL_HORA]).size().reset_index(name="Horas"))
-    return (alt.Chart(contagem)
+    return (grafico(contagem)
             .mark_bar()
             .encode(x=alt.X("Horas:Q", title="Horas",
                             axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS)),
@@ -1078,7 +1085,7 @@ def barras_de_niveis(horaria: pd.DataFrame, ordem: list[str]) -> alt.Chart:
 def calendario_de_risco(horaria: pd.DataFrame, ordem: list[str]) -> alt.Chart:
     por_dia = (horaria.groupby(["Estação", "dia"])[risco_fogo.COLUNA_NIVEL_HORA].max()
                .reset_index().assign(dia=lambda tabela: tabela["dia"].astype(str)))
-    return (alt.Chart(por_dia)
+    return (grafico(por_dia)
             .mark_rect(stroke="#111111", strokeWidth=1)
             .encode(x=alt.X("dia:O", title=None, axis=alt.Axis(labelAngle=-45, labelFontSize=FONTE_DOS_EIXOS)),
                     y=alt.Y("Estação:N", sort=ordem, title=None,
@@ -1099,7 +1106,7 @@ def condicoes_do_dia(horaria: pd.DataFrame, dia, ordem: list[str]) -> alt.Chart:
     somas = somas[somas["Horas"] > 0]
     rotulos = dict(zip(risco_fogo.COLUNAS_CONDICOES, risco_fogo.rotulos_condicoes()))
     somas["Condição"] = somas["Condição"].map(rotulos)
-    return (alt.Chart(somas)
+    return (grafico(somas)
             .mark_bar()
             .encode(x=alt.X("Horas:Q", title="Horas",
                             axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS)),
@@ -1252,7 +1259,7 @@ def previsao_semanal(estacoes: pd.DataFrame, aviso) -> Semanal:
 
 def barras_da_chuva_prevista(longo: pd.DataFrame, titulo: str = "Chuva (mm)", formato: str = ".1f") -> alt.Chart:
     # Também as horas em risco alto, nos mapas interativos da previsão
-    base = alt.Chart(longo).encode(
+    base = grafico(longo).encode(
         x=alt.X("yearmonthdate(dt_local):O", title=None,
                 axis=alt.Axis(format="%d/%m", formatType="time", labelAngle=0,
                               labelFontSize=FONTE_DOS_EIXOS)),
@@ -1454,7 +1461,7 @@ def calendario_do_risco_previsto(dias: pd.DataFrame) -> alt.Chart:
                         dia=dias["dia_previsto"].map(previsao.nome_do_dia),
                         risco_max=dias["risco_max"].astype(int))
     ordem_dos_dias = list(dict.fromkeys(dados.sort_values("dia_previsto")["dia"]))
-    return (alt.Chart(dados)
+    return (grafico(dados)
             .mark_rect(stroke="#111111", strokeWidth=1)
             .encode(x=alt.X("dia:O", sort=ordem_dos_dias, title=None, axis=alt.Axis(labelAngle=0, labelFontSize=FONTE_DOS_EIXOS)),
                     y=alt.Y("Modelo:N", sort=list(previsao.CORES), title=None,
@@ -1533,7 +1540,7 @@ def semana_contra_o_normal(tabela: pd.DataFrame, grandeza: str, unidade: str | N
     longo = (tabela.melt(id_vars=["rotulo"], value_vars=["prevista", "normal"], var_name="qual", value_name="valor")
              .assign(Série=lambda dados: dados["qual"].map({"prevista": previsao.PREVISTA,
                                                            "normal": previsao.NORMAL})))
-    linhas = (alt.Chart(longo).mark_line(point=alt.OverlayMarkDef(filled=True, size=60), strokeWidth=2.5)
+    linhas = (grafico(longo).mark_line(point=alt.OverlayMarkDef(filled=True, size=60), strokeWidth=2.5)
               .encode(x=eixo_x,
                       y=alt.Y("valor:Q", title=f"{grandeza} ({unidade})", scale=alt.Scale(zero=chuva),
                               axis=alt.Axis(grid=True, gridOpacity=0.25, labelFontSize=FONTE_DOS_EIXOS)),
@@ -1547,13 +1554,13 @@ def semana_contra_o_normal(tabela: pd.DataFrame, grandeza: str, unidade: str | N
                               texto=tabela["anomalia"].map(lambda valor: f"{valor:+.1f}".replace(".", ",")),
                               meio=(tabela["prevista"] + tabela["normal"]) / 2)
     cor_do_lado = alt.Color("lado:N", legend=None, scale=alt.Scale(domain=["acima", "abaixo"], range=[acima, abaixo]))
-    barras = (alt.Chart(com_sinal).mark_rule(strokeWidth=7, opacity=0.5)
+    barras = (grafico(com_sinal).mark_rule(strokeWidth=7, opacity=0.5)
               .encode(x=eixo_x, y="normal:Q", y2="prevista:Q", color=cor_do_lado,
                       tooltip=[alt.Tooltip("rotulo:O", title="Semana"),
                                alt.Tooltip("prevista:Q", title=previsao.PREVISTA, format=".1f"),
                                alt.Tooltip("normal:Q", title=previsao.NORMAL, format=".1f"),
                                alt.Tooltip("anomalia:Q", title="Anomalia", format="+.1f")]))
-    numeros = (alt.Chart(com_sinal).mark_text(align="left", dx=8, fontSize=FONTE_DOS_ROTULOS,
+    numeros = (grafico(com_sinal).mark_text(align="left", dx=8, fontSize=FONTE_DOS_ROTULOS,
                                               fontWeight="bold")
                .encode(x=eixo_x, y="meio:Q", text="texto:N", color=cor_do_lado))
     return alt.layer(barras, linhas, numeros).resolve_scale(color="independent").properties(height=320)
@@ -1866,7 +1873,7 @@ def graficos_do_risco(serie: pd.DataFrame, hora_local=None) -> list[alt.LayerCha
     graficos = []
     for medida, dela in serie.groupby("Medida", sort=False):
         navegar, apontar = _navegar_e_apontar("dt_local")
-        base = alt.Chart(dela).encode(x=_eixo_do_tempo("dt_local"))
+        base = grafico(dela).encode(x=_eixo_do_tempo("dt_local"))
         cor = alt.Color("Condição:N", scale=cores, legend=alt.Legend(orient="bottom", title=None))
         camadas = [
             base.mark_line(color="#607d8b", strokeWidth=1.4).encode(
@@ -1876,13 +1883,13 @@ def graficos_do_risco(serie: pd.DataFrame, hora_local=None) -> list[alt.LayerCha
             base.mark_circle(size=26).encode(y="valor:Q", color=cor),
             # O ponto da hora apontada cresce, para o número do balão ter onde morar no gráfico
             base.mark_circle(size=150).encode(y="valor:Q", color=cor).transform_filter(apontar),
-            alt.Chart(dela.head(1)).mark_rule(color=config.CORES_RISCO[-1], strokeDash=[5, 4]).encode(y="limiar:Q"),
+            grafico(dela.head(1)).mark_rule(color=config.CORES_RISCO[-1], strokeDash=[5, 4]).encode(y="limiar:Q"),
             _regua_do_instante(base, apontar, [
                 _quando_no_balao("dt_local"), alt.Tooltip("valor:Q", title=medida, format=".1f"),
                 alt.Tooltip("limiar:Q", title="Limiar", format=".0f"), alt.Tooltip("Condição:N")]),
         ]
         if hora_local is not None:
-            camadas.append(alt.Chart(pd.DataFrame({"agora": [hora_local]})).mark_rule(color="#29b6f6", strokeWidth=2)
+            camadas.append(grafico(pd.DataFrame({"agora": [hora_local]})).mark_rule(color="#29b6f6", strokeWidth=2)
                            .encode(x="agora:T"))
         graficos.append(alt.layer(*camadas).properties(height=ALTURA_GRAFICO_DO_RISCO))
     return graficos
@@ -1890,7 +1897,7 @@ def graficos_do_risco(serie: pd.DataFrame, hora_local=None) -> list[alt.LayerCha
 
 def grafico_da_chuva_na_estacao(serie: pd.DataFrame, por_dia: bool) -> alt.LayerChart:
     navegar, apontar = _navegar_e_apontar("quando")
-    base = alt.Chart(serie).encode(x=_eixo_do_tempo("quando", por_dia))
+    base = grafico(serie).encode(x=_eixo_do_tempo("quando", por_dia))
     # A barra do instante apontado acende e o acumulado ganha um ponto: o balão diz de que altura fala.
     # As camadas ficam todas no mesmo nível (aninhadas, o Vega recusa o apontador repetido), e com o
     # eixo vertical de cada uma independente: o ponto leva a mesma escala da linha do acumulado
@@ -1916,7 +1923,7 @@ def grafico_da_variavel_na_estacao(serie: pd.DataFrame, produto: variaveis.Produ
                                     momento=None) -> alt.LayerChart:
     titulo = f"{produto.nome} ({produto.unidade})"
     navegar, apontar = _navegar_e_apontar("quando")
-    base = alt.Chart(serie).encode(x=_eixo_do_tempo("quando", por_dia))
+    base = grafico(serie).encode(x=_eixo_do_tempo("quando", por_dia))
     camadas = [
         base.mark_line(color="#607d8b", strokeWidth=1.5).encode(
             y=alt.Y("valor:Q", title=titulo, scale=alt.Scale(zero=produto.zero_na_base),
@@ -1930,7 +1937,7 @@ def grafico_da_variavel_na_estacao(serie: pd.DataFrame, produto: variaveis.Produ
             alt.Tooltip("valor:Q", title=titulo, format=f".{produto.decimais}f")]),
     ]
     if momento is not None:
-        camadas.append(alt.Chart(pd.DataFrame({"agora": [momento]})).mark_rule(color="#29b6f6", strokeWidth=2)
+        camadas.append(grafico(pd.DataFrame({"agora": [momento]})).mark_rule(color="#29b6f6", strokeWidth=2)
                        .encode(x="agora:T"))
     return alt.layer(*camadas).properties(height=240)
 
@@ -2747,8 +2754,8 @@ def series_das_estacoes(uf: str, intervalo: tuple, estacoes: pd.DataFrame, inici
                    "tensão da bateria (`TEN_BAT`). **Vento em km/h**: a API manda em m/s e o painel converte ao "
                    f"carregar, como fazem os produtos. `{coleta.DATA_LOCAL} ({uf})` é o horário do estado; "
                    "`DT_MEDICAO` e `HR_MEDICAO` são os da API, em UTC.")
-        st.dataframe(visivel, width="stretch", height=300)
-        st.download_button("Baixar CSV", visivel.to_csv(index=False).encode("utf-8-sig"),
+        st.dataframe(coleta.arredondado(visivel), width="stretch", height=300)
+        st.download_button("Baixar CSV", coleta.csv(visivel),
                            file_name=f"leituras_{intervalo[0]:%Y%m%d}_a_{intervalo[1]:%Y%m%d}.csv", mime="text/csv")
     return tabela, falharam, nomes
 
@@ -2784,7 +2791,7 @@ def qualidade_dos_dados(uf: str, estacoes: pd.DataFrame, inicio: datetime, fim: 
 
     st.subheader("Por estação")
     st.caption("Da pior para a melhor. Completude é quanto das horas do período tem registro.")
-    st.dataframe(resumo, width="stretch", hide_index=True, height=340, column_config={
+    st.dataframe(coleta.arredondado(resumo), width="stretch", hide_index=True, height=340, column_config={
         "Completude": st.column_config.ProgressColumn("Completude", format="%.0f%%", min_value=0, max_value=100),
     })
 
@@ -2794,7 +2801,7 @@ def qualidade_dos_dados(uf: str, estacoes: pd.DataFrame, inicio: datetime, fim: 
              .melt("Estação", var_name="Dia", value_name="Completude")
              .assign(Dia=lambda dias: dias["Dia"].astype(str)))
     st.altair_chart(
-        alt.Chart(longo).mark_rect().encode(
+        grafico(longo).mark_rect().encode(
             x=alt.X("Dia:O", title=None, axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)),
             y=alt.Y("Estação:N", title=None, sort=list(resumo["Estação"]), axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)),
             color=alt.Color("Completude:Q", title="% das horas", scale=alt.Scale(scheme="blues", domain=[0, 100])),
@@ -2808,7 +2815,7 @@ def qualidade_dos_dados(uf: str, estacoes: pd.DataFrame, inicio: datetime, fim: 
     por_variavel = qualidade.completude_por_variavel(base).rename(columns=NOMES_CURTOS)
     longo_variavel = por_variavel.reset_index().melt("Estação", var_name="Variável", value_name="Completude")
     st.altair_chart(
-        alt.Chart(longo_variavel).mark_rect().encode(
+        grafico(longo_variavel).mark_rect().encode(
             x=alt.X("Variável:N", title=None, axis=alt.Axis(labelAngle=-45, labelFontSize=FONTE_DOS_EIXOS)),
             y=alt.Y("Estação:N", title=None, sort=list(resumo["Estação"]), axis=alt.Axis(labelFontSize=FONTE_DOS_EIXOS)),
             color=alt.Color("Completude:Q", title="% das horas", scale=alt.Scale(scheme="blues", domain=[0, 100])),
@@ -2820,13 +2827,13 @@ def qualidade_dos_dados(uf: str, estacoes: pd.DataFrame, inicio: datetime, fim: 
         impossiveis = impossiveis.assign(
             Variável=impossiveis["Variável"].map(NOMES_CURTOS).fillna(impossiveis["Variável"]))
         st.caption("Leituras fora da faixa plausível da variável — costuma ser defeito de sensor.")
-        st.dataframe(impossiveis, width="stretch", hide_index=True, height=260)
+        st.dataframe(coleta.arredondado(impossiveis), width="stretch", hide_index=True, height=260)
 
     with st.expander(f"Sensores travados ({len(travados)} trecho{'s' if len(travados) != 1 else ''})"):
         travados = travados.assign(Variável=travados["Variável"].map(NOMES_CURTOS).fillna(travados["Variável"]))
         st.caption(f"A mesma leitura repetida por {qualidade.HORAS_TRAVADO} horas ou mais, em temperatura, umidade "
                    "ou pressão. Chuva e vento ficam de fora: zero repetido ali é normal.")
-        st.dataframe(travados, width="stretch", hide_index=True, height=260)
+        st.dataframe(coleta.arredondado(travados), width="stretch", hide_index=True, height=260)
 
     st.caption(f"**Radiação negativa** à noite é ruído comum do sensor, não defeito — por isso aparece numa coluna "
                f"própria, e não como valor impossível. **Bateria** abaixo de {qualidade.TENSAO_MINIMA:g} V costuma "
@@ -2977,6 +2984,12 @@ def barras_da_janela(rotulo: str, valores: pd.Series, nas_contas: int) -> None:
                         help="Desligada, a lista traz as 15 que mais choveram.")
     st.caption(f"{quantas} de {nas_contas} estações com registro. Aqui entram todas, mesmo as retiradas do mapa.")
     st.altair_chart(barras_do_acumulado(valores, "mm", None if todas else 15), width="stretch")
+    tabela = (valores.dropna().rename(f"{chuva_calc.legenda(rotulo)} (mm)").rename_axis("Estação").reset_index()
+              .sort_values(f"{chuva_calc.legenda(rotulo)} (mm)", ascending=False))
+    st.download_button("Baixar CSV", coleta.csv(tabela), file_name=f"chuva_{rotulo.replace(' ', '')}_por_estacao.csv",
+                       mime="text/csv", key="baixar_chuva_por_estacao",
+                       help="Todas as estações com registro, da que mais choveu à que menos choveu, separadas "
+                            "por \"|\" e com a vírgula nas casas decimais.")
 
 
 def cascata_do_estado(leituras: pd.DataFrame, estacoes: pd.DataFrame, desde, ate) -> None:
@@ -3141,8 +3154,8 @@ def pagina_risco() -> None:
     st.subheader("Por estação, no período")
     st.caption("Da estação de maior risco para a de menor. As colunas são as mesmas da planilha que o `main.py` "
                "gera para o produto.")
-    st.dataframe(tabela_risco, width="stretch", hide_index=True, height=340)
-    st.download_button("Baixar CSV", tabela_risco.to_csv(index=False).encode("utf-8-sig"),
+    st.dataframe(coleta.arredondado(tabela_risco), width="stretch", hide_index=True, height=340)
+    st.download_button("Baixar CSV", coleta.csv(tabela_risco),
                        file_name=f"risco_fogo_{intervalo[0]:%Y%m%d}_a_{intervalo[1]:%Y%m%d}.csv",
                        mime="text/csv", key="baixar_tabela_risco")
 
@@ -3823,7 +3836,7 @@ def grafico_da_medida_prevista(longo: pd.DataFrame, nome: str, unidade: str, lim
                                hora_local: pd.Timestamp) -> alt.LayerChart:
     # Uma medida da regra nos três modelos, com o limiar dela tracejado e a hora do mapa em azul
     navegar = alt.selection_interval(bind="scales", encodings=["x"], zoom="wheel![event.shiftKey]")
-    base = alt.Chart(longo).encode(x=_eixo_do_tempo("dt_local"),
+    base = grafico(longo).encode(x=_eixo_do_tempo("dt_local"),
                                    color=alt.Color("Estação:N", title=None, legend=alt.Legend(orient="bottom"),
                                                    scale=_escala_das_cores(previsao.CORES, longo["Estação"])))
     titulo = f"{nome} ({unidade})"
@@ -3834,9 +3847,9 @@ def grafico_da_medida_prevista(longo: pd.DataFrame, nome: str, unidade: str, lim
         base.mark_circle(size=18).encode(y="valor:Q", tooltip=[_quando_no_balao("dt_local"),
                                                                alt.Tooltip("Estação:N", title="Modelo"),
                                                                alt.Tooltip("valor:Q", title=titulo, format=".1f")]),
-        alt.Chart(pd.DataFrame({"limiar": [limiar]})).mark_rule(color=config.CORES_RISCO[-1], strokeDash=[5, 4])
+        grafico(pd.DataFrame({"limiar": [limiar]})).mark_rule(color=config.CORES_RISCO[-1], strokeDash=[5, 4])
         .encode(y="limiar:Q"),
-        alt.Chart(pd.DataFrame({"agora": [hora_local]})).mark_rule(color="#29b6f6", strokeWidth=2).encode(x="agora:T"),
+        grafico(pd.DataFrame({"agora": [hora_local]})).mark_rule(color="#29b6f6", strokeWidth=2).encode(x="agora:T"),
     ).properties(height=ALTURA_GRAFICO_DO_RISCO)
 
 
@@ -4408,8 +4421,8 @@ def series_previstas(estacoes: pd.DataFrame) -> None:
         visivel = previsao.planilha(horaria)
         st.caption("Um dia por linha e modelo, pela regra do observado. `horas` diz quantas horas o dia tem na "
                    "previsão: menos de 24 no primeiro, no último e no fim do ICON.")
-        st.dataframe(visivel, width="stretch", height=300, hide_index=True)
-        st.download_button("Baixar CSV", visivel.to_csv(index=False).encode("utf-8-sig"),
+        st.dataframe(coleta.arredondado(visivel), width="stretch", height=300, hide_index=True)
+        st.download_button("Baixar CSV", coleta.csv(visivel),
                            file_name=f"previsao_{codigo}_{desde:%Y%m%d_%H}h.csv", mime="text/csv")
 
 
@@ -5007,7 +5020,7 @@ def camada_de_quadradinhos(celulas: pd.DataFrame, nome: str) -> pdk.Layer:
 
 
 def grafico_dos_raios(barras: pd.DataFrame, uf: str) -> alt.Chart:
-    return alt.Chart(barras).mark_bar(color="#ff9900").encode(
+    return grafico(barras).mark_bar(color="#ff9900").encode(
         x=alt.X("inicio:T", title=None, axis=alt.Axis(format="%H:%M", labelFontSize=FONTE_DOS_EIXOS, grid=True,
                                                       gridOpacity=0.25)),
         y=alt.Y("flashes:Q", title=f"Flashes em {uf} a cada {raios.MINUTOS_POR_BARRA} min",

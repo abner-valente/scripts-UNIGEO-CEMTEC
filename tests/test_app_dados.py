@@ -329,3 +329,36 @@ def test_o_pluviometro_do_cemaden_entra_nos_acumulados_e_no_mapa_do_dia_com_o_me
     assert acumulado.sort_values(ascending=False).round(1).to_dict() == {"CEMADEN · Jardim Panamá": 18.4,
                                                                         "Campo Grande": 6.0}
     assert no_dia.round(1).to_dict() == {"Campo Grande": 6.0, "CEMADEN · Jardim Panamá": 18.4}
+
+
+def test_o_csv_vai_com_pipe_virgula_decimal_e_duas_casas():
+    # O exemplo da equipe (26/11/2026): a soma das leituras saía 66.60000000000001
+    tabela = pd.DataFrame({"Estação": ["Nioaque (Faz. Buritizinho da Dominguena)", "Corumba"],
+                           "valor": [66.60000000000001, 57.0], "horas": [24, 23], "falta": [np.nan, 0.125]})
+
+    texto = coleta.csv(tabela).decode("utf-8-sig")
+
+    assert texto.splitlines() == ["Estação|valor|horas|falta",
+                                  "Nioaque (Faz. Buritizinho da Dominguena)|66,6|24|",
+                                  "Corumba|57,0|23|0,12"]
+    assert coleta.csv(tabela).startswith("﻿".encode("utf-8"))   # o Excel abre os acentos certos
+
+
+def test_as_coordenadas_ficam_como_vieram_no_csv():
+    tabela = pd.DataFrame({"Estação": ["Campo Grande"], "VL_LATITUDE": [-20.469722], "VL_LONGITUDE": [-54.620277],
+                           "TEM_INS": [31.456]})
+
+    texto = coleta.csv(tabela).decode("utf-8-sig")
+
+    assert texto.splitlines()[1] == "Campo Grande|-20,469722|-54,620277|31,46"
+
+
+def test_arredondado_so_mexe_nos_numeros():
+    tabela = pd.DataFrame({"Estação": ["A"], "quando": [pd.Timestamp("2026-11-26 14:00", tz="America/Campo_Grande")],
+                           "valor": [1.23456], "Latitude": [-20.123456]})
+
+    saida = coleta.arredondado(tabela)
+
+    assert saida["valor"].iloc[0] == 1.23 and saida["Latitude"].iloc[0] == -20.123456
+    assert saida["quando"].iloc[0] == tabela["quando"].iloc[0] and saida["Estação"].iloc[0] == "A"
+    assert coleta.arredondado(pd.DataFrame({"Estação": ["A"]})).equals(pd.DataFrame({"Estação": ["A"]}))
