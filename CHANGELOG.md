@@ -22,6 +22,9 @@ O **mapa de camadas**, um pedido do CICOE: os produtos do painel empilhados como
 ### Novo: o mapa de camadas
 
 - **As camadas**: os relatos do CICOE, os raios da última hora, as estações com a chuva, os limites do estado e dos municípios, a densidade de raios e a chuva acumulada. Lendo das APIs, as duas dos raios saem do quadro, porque os raios só vêm do banco.
+- **A temperatura máxima, a umidade mínima, a rajada máxima e o risco de fogo**, que abrem desligados, acima da chuva:
+  - as três variáveis com a regra "do período" da página Mapas, aplicada à janela de tempo (a maior das máximas horárias, a menor das mínimas, a maior rajada), cada uma com a sua superfície e as estações com o valor no balão;
+  - o risco de fogo com a regra 30-30-30 hora a hora, como na página Risco de Fogo, e o **pior nível da janela** em cada célula e em cada estação. Em 30 dias são 720 horas: a avaliação leva perto de um minuto, com uma barra de progresso, e se refaz a cada hora cheia, quando a janela anda.
 - **O quadro de camadas**, acima do mapa:
   - **Ver** liga e desliga cada camada. Uma camada desligada nem é carregada;
   - a **Opacidade** vai de 0 a 100%;
@@ -35,7 +38,7 @@ O **mapa de camadas**, um pedido do CICOE: os produtos do painel empilhados como
 - **A página se atualiza sozinha a cada minuto**, sem perder o que se mudou no quadro nem a posição do mapa.
 - **O mapa** ocupa 82% da largura, com 1.008 px de altura. Embaixo dele ficam as legendas das camadas ligadas, lado a lado, e uma frase com o que cada camada mostra: quantos relatos entraram (e quantos o serviço tem), a janela da chuva e de quantas estações ela veio.
 - **A chuva é a da página Chuva**: as mesmas estações, as vizinhas na borda, os pluviômetros do CEMADEN e o agrupamento de 15 km dos números. Aqui, o número só aparece onde choveu.
-- **O botão "Estações retiradas"**, o mesmo da página Chuva, com a mesma lista nas duas páginas.
+- **O botão "Estações retiradas"**, o mesmo das outras páginas, com uma lista para a chuva, a temperatura, a umidade, o vento e o risco de fogo, que valem também nas outras páginas.
 - **O imóvel do CAR**, o mesmo das outras páginas, na barra lateral: o mapa abre no imóvel, com o contorno e as células que ele toca por cima das camadas, e embaixo do mapa vai a chuva da janela no imóvel (a média e a faixa das células).
 
 ### Novo: os relatos do CICOE

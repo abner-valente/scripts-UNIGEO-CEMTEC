@@ -199,6 +199,16 @@ def itens_da_escala(niveis, paleta: str, unidade: str) -> list[tuple[str, str]]:
     return itens
 
 
+def itens_da_faixa(niveis, paleta: str, unidade: str, quantos: int = 6) -> list[tuple[str, str]]:
+    # (cor, rótulo) de pontos igualmente espaçados de uma escala contínua (a temperatura, a umidade, o
+    # vento), do menor para o maior, nas cores com que a superfície os pinta
+    menor, maior = float(np.min(niveis)), float(np.max(niveis))
+    valores = np.linspace(menor, maior, quantos)
+    pintura, _ = superficie.cores(valores, paleta, np.asarray(niveis, dtype=float), opacidade=1.0)
+    return [(f"rgb({r},{g},{b})", f"{_br(round(valor, 1))} {unidade}")
+            for (r, g, b, _), valor in zip(pintura.tolist(), valores)]
+
+
 # =====================================================
 # O CATÁLOGO E O QUADRO DE CAMADAS
 # =====================================================
@@ -212,12 +222,18 @@ class Camada:
 
 
 # Na ordem em que o quadro abre, de cima para baixo: o que é ponto por cima, o que é superfície por
-# baixo, como se empilha num SIG. A densidade de raios a 80% deixa ver a chuva por baixo
+# baixo, como se empilha num SIG. A densidade de raios a 80% deixa ver a chuva por baixo. As variáveis
+# do observado e o risco de fogo (pedido de 26/11/2026) abrem desligados, acima da chuva: ligados,
+# aparecem por cima dela
 CATALOGO = (
     Camada("raios_recentes", "Raios da última hora", dos_raios=True),
     Camada("estacoes_chuva", "Estações (chuva)"),
     Camada("limites", "Limites (estado e municípios)"),
     Camada("densidade_raios", "Densidade de raios", opacidade=80, dos_raios=True),
+    Camada("temperatura_maxima", "Temperatura máxima", ligada=False),
+    Camada("umidade_minima", "Umidade mínima", ligada=False),
+    Camada("rajada_maxima", "Rajada máxima", ligada=False),
+    Camada("risco_de_fogo", "Risco de fogo (pior nível)", ligada=False),
     Camada("chuva", "Chuva acumulada"),
 )
 COLUNAS_DO_QUADRO = ["Camada", "Ver", "Opacidade", "Ordem"]

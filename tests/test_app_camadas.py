@@ -188,6 +188,18 @@ def test_a_escala_da_chuva_nas_cores_da_superficie():
     assert [cor for cor, _ in itens[1:]] == [f"rgb({r},{g},{b})" for r, g, b, _ in pintura.tolist()]
 
 
+def test_a_escala_continua_em_pontos_igualmente_espacados():
+    niveis = np.linspace(0.0, 45.0, 21)
+
+    itens = camadas.itens_da_faixa(niveis, "RdYlBu_r", "°C")
+
+    assert [rotulo for _, rotulo in itens] == ["0 °C", "9 °C", "18 °C", "27 °C", "36 °C", "45 °C"]
+    pintura, _ = superficie.cores(np.linspace(0.0, 45.0, 6), "RdYlBu_r", niveis, opacidade=1.0)
+    assert [cor for cor, _ in itens] == [f"rgb({r},{g},{b})" for r, g, b, _ in pintura.tolist()]
+    assert [rotulo for _, rotulo in camadas.itens_da_faixa(np.linspace(0, 130, 21), "turbo", "km/h", 3)] == [
+        "0 km/h", "65 km/h", "130 km/h"]
+
+
 def test_a_escala_que_comeca_no_zero_nao_tem_o_branco():
     itens = camadas.itens_da_escala([0, 0.5, 1.5], "YlOrRd", "flashes/km²")
 
@@ -202,15 +214,19 @@ def test_o_quadro_abre_com_o_catalogo_de_cima_para_baixo():
     assert quadro["Camada"].tolist() == [camada.nome for camada in camadas.CATALOGO]
     assert quadro["Ordem"].tolist() == list(range(1, len(camadas.CATALOGO) + 1))
     assert quadro.set_index("Camada").loc["Densidade de raios", "Opacidade"] == 80
-    assert quadro["Ver"].all()
+    # As variáveis do observado e o risco de fogo abrem desligados, acima da chuva
+    desligadas = ["Temperatura máxima", "Umidade mínima", "Rajada máxima", "Risco de fogo (pior nível)"]
+    assert quadro.loc[~quadro["Ver"], "Camada"].tolist() == desligadas
+    assert quadro["Camada"].tolist().index("Chuva acumulada") == len(quadro) - 1
 
 
 def test_sem_os_raios_do_banco_as_camadas_deles_saem_do_catalogo():
     sem_raios = camadas.disponiveis(com_raios=False)
 
-    assert [camada.chave for camada in sem_raios] == ["estacoes_chuva", "limites", "chuva"]
+    assert [camada.chave for camada in sem_raios] == ["estacoes_chuva", "limites", "temperatura_maxima",
+                                                      "umidade_minima", "rajada_maxima", "risco_de_fogo", "chuva"]
     assert camadas.disponiveis(com_raios=True) == camadas.CATALOGO
-    assert camadas.quadro_inicial(sem_raios)["Ordem"].tolist() == [1, 2, 3]
+    assert camadas.quadro_inicial(sem_raios)["Ordem"].tolist() == list(range(1, 8))
 
 
 def chaves(pilha) -> list[str]:
@@ -220,7 +236,7 @@ def chaves(pilha) -> list[str]:
 def test_as_camadas_vao_ao_mapa_de_baixo_para_cima():
     pilha = camadas.empilhadas(camadas.quadro_inicial())
 
-    assert chaves(pilha) == [camada.chave for camada in reversed(camadas.CATALOGO)]
+    assert chaves(pilha) == [camada.chave for camada in reversed(camadas.CATALOGO) if camada.ligada]
     assert dict((camada.chave, opacidade) for camada, opacidade in pilha)["densidade_raios"] == 0.8
 
 

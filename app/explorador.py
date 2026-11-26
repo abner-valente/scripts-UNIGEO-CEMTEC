@@ -5146,6 +5146,13 @@ def pagina_raios() -> None:
 # "Mensal" da Chuva. A chave é o que a tela mostra; o valor, o rótulo que app/chuva.py entende
 JANELAS_DAS_CAMADAS = {**{rotulo: rotulo for rotulo in chuva_calc.rotulos() if rotulo.endswith(" h")},
                        "30 dias": f"{30 * 24} h"}
+# As variáveis do observado que viram camada (pedido de 26/11/2026), com a regra "do período" da página
+# Mapas aplicada à janela: a maior das máximas horárias, a menor das mínimas, a maior rajada
+VARIAVEIS_DAS_CAMADAS = {"temperatura_maxima": "Temperatura máxima", "umidade_minima": "Umidade mínima",
+                         "rajada_maxima": "Rajada máxima"}
+# As camadas que precisam das leituras das estações na janela
+DAS_LEITURAS = {"chuva", "estacoes_chuva", "risco_de_fogo", *VARIAVEIS_DAS_CAMADAS}
+GRANDEZAS_DAS_CAMADAS = ["Chuva", "Temperatura", "Umidade", "Vento", "Risco de Fogo"]
 # O mapa com 82% da largura e a ficha da ocorrência clicada com 18% ao lado; a altura é a de 720 px
 # do protótipo com mais 40% (pedidos de 26/11/2026)
 PROPORCAO_DO_MAPA_DE_CAMADAS = [0.82, 0.18]
@@ -5180,8 +5187,10 @@ def chuva_das_camadas(rotulo: str, hora: pd.Timestamp) -> dict | None:
     do_inmet, do_apoio, valores_cemaden = (retiradas.retirar(chuva_calc.acumulado(dados, ate, rotulo), fora)
                                            for dados in (leituras, apoio, do_cemaden))
     comeco, _ = chuva_calc.janela(ate, rotulo)
+    # As leituras inteiras ficam para as outras camadas (as variáveis e o risco), na mesma janela
     return {"do_inmet": do_inmet, "apoio": do_apoio, "cemaden": valores_cemaden, "comeco": comeco, "ate": ate,
-            "horas": chuva_calc.horas_da_janela(ate, rotulo), "fora": fora}
+            "horas": chuva_calc.horas_da_janela(ate, rotulo), "fora": fora, "leituras": leituras,
+            "leituras_apoio": apoio, "estacoes": estacoes, "vizinhas": vizinhas}
 
 
 # Os serviços de fora (app/servicos.py). Uma falha do servidor não fica no cache: as funções com
@@ -5385,8 +5394,7 @@ def corpo_das_camadas(com_raios: bool, catalogo: tuple[camadas.Camada, ...], imo
     ligadas = {camada.chave for camada, _ in pilha}
     hora = pd.Timestamp.now(tz=recorte.fuso).floor("h")
     # Com o imóvel do CAR, a chuva vem mesmo com as camadas dela desligadas: o quadro do imóvel a usa
-    chuva = (chuva_das_camadas(rotulo, hora) if ligadas & {"chuva", "estacoes_chuva"} or imovel is not None
-             else None)
+    chuva = chuva_das_camadas(rotulo, hora) if ligadas & DAS_LEITURAS or imovel is not None else None
     ate = chuva["ate"] if chuva is not None else hora
     comeco, _ = chuva_calc.janela(ate, rotulo)
     quando = f"{comeco:%d/%m %H:%M} a {ate:%d/%m %H:%M}"
@@ -5394,8 +5402,9 @@ def corpo_das_camadas(com_raios: bool, catalogo: tuple[camadas.Camada, ...], imo
     # O que cada camada desenhou (sob o mapa, de cima para baixo), as frases que vêm depois (o crédito
     # do CEMADEN, as estações retiradas), os avisos e a legenda de cada camada
     resumo, notas, avisos, legendas = [], [], [], {}
-    if ligadas & {"chuva", "estacoes_chuva"} and chuva is None:
-        avisos.append(f"Nenhuma estação do INMET mandou chuva na janela de {escolha}: o mapa sai sem a chuva.")
+    if ligadas & DAS_LEITURAS and chuva is None:
+        avisos.append(f"Nenhuma estação do INMET mandou leitura na janela de {escolha}: o mapa sai sem as camadas "
+                      "das estações.")
 
     def da_chuva(opacidade: float) -> list[pdk.Layer]:
         valores = pd.concat([chuva["do_inmet"], chuva["cemaden"]]).dropna()
@@ -5425,6 +5434,60 @@ def corpo_das_camadas(com_raios: bool, catalogo: tuple[camadas.Camada, ...], imo
         return [camadas.estacoes(pontos, opacidade=opacidade),
                 *([camadas.pluviometros(pontos_cemaden, opacidade=opacidade)] if not pontos_cemaden.empty else []),
                 *camadas.rotulos_dos_valores(escritas[choveu], opacidade=opacidade)]
+
+    def na_janela(dados: pd.DataFrame) -> pd.DataFrame:
+        if dados.empty:
+            return dados
+        return dados[(dados["dt_local"] > chuva["comeco"]) & (dados["dt_local"] <= chuva["ate"])]
+
+    def da_variavel(chave: str, opacidade: float) -> list[pdk.Layer]:
+        # A superfície da variável na janela, com as vizinhas na borda, e as estações com o valor no balão
+        variavel = variaveis.por_nome(VARIAVEIS_DAS_CAMADAS[chave])
+        fora = retiradas_da_variavel(variavel.grandeza)
+        valores, apoio = (retiradas.retirar(variaveis.por_estacao(variavel, na_janela(dados)), fora).dropna()
+                          for dados in (chuva["leituras"], chuva["leituras_apoio"]))
+        if len(valores) < config.MIN_ESTACOES_INTERPOLACAO:
+            avisos.append(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram {variavel.nome.lower()} "
+                          f"em {quando}.")
+            return []
+        niveis = niveis_da_escala(variavel, chuva["horas"])
+        if niveis is not None:
+            legendas[chave] = camadas.legenda(camadas.itens_da_faixa(niveis, variavel.paleta, variavel.unidade)[::-1],
+                                              f"{variavel.nome} ({variavel.unidade})")
+        # A regra do catálogo, sem o que fala da seta da rajada: aqui não há seta
+        resumo.append(f"{variavel.nome.lower()} de {quando} ({variavel.regra.split(';')[0]}), de "
+                      f"{estacoes_no_mapa(valores)}"
+                      + (f", sem {', '.join(sorted(fora))}" if fora else ""))
+        imagem = camada_superficie(valores, variavel.nome, quando, uf, niveis, apoio)
+        pontos = interativo.pontos_de_valores(_com_coordenadas(valores, variavel.nome, uf), variavel.nome,
+                                              f"{variavel.nome} ({escolha})", variavel.unidade, variavel.decimais)
+        return [camadas.imagem(imagem, superficie.limites(recorte), id=chave, opacidade=opacidade),
+                camadas.estacoes(pontos, id=f"estacoes_{chave}", opacidade=opacidade)]
+
+    def do_risco(opacidade: float) -> list[pdk.Layer]:
+        # A regra 30-30-30 hora a hora, como na página Risco de Fogo, com o pior nível da janela em cada
+        # célula e em cada estação do estado. A avaliação tem cache (risco_avaliado)
+        fora = retiradas_da_variavel("Risco de Fogo")
+        leituras = retiradas.retirar(pd.concat([na_janela(chuva["leituras"]), na_janela(chuva["leituras_apoio"])],
+                                               ignore_index=True), fora)
+        cadastro = retiradas.retirar(pd.concat([chuva["estacoes"], chuva["vizinhas"]], ignore_index=True), fora)
+        _, avaliadas = risco_avaliado(leituras, cadastro, uf)
+        if not avaliadas:
+            avisos.append(f"Nenhuma hora de {quando} teve {config.MIN_ESTACOES_INTERPOLACAO} estações com a "
+                          "temperatura, a umidade e a rajada: o mapa sai sem o risco de fogo.")
+            return []
+        do_estado = set(chuva["estacoes"]["Estação"])
+        piores = (pd.concat([avaliada.estacoes for avaliada in avaliadas.values()], ignore_index=True)
+                  .groupby(["Estação", "Latitude", "Longitude"], as_index=False)[risco_fogo.COLUNA_NIVEL_HORA].max())
+        pontos = interativo.pontos_de_risco(piores[piores["Estação"].isin(do_estado)], risco_fogo.COLUNA_NIVEL_HORA,
+                                            f"Pior nível ({escolha})")
+        legendas["risco_de_fogo"] = camadas.legenda(list(zip(config.CORES_RISCO, config.ROTULOS_RISCO))[::-1],
+                                                    "Risco de fogo (pior nível)")
+        resumo.append(f"risco de fogo de {quando}: o pior nível das {inteiro_br(len(avaliadas))} horas avaliadas"
+                      + (f", sem {', '.join(sorted(fora))}" if fora else ""))
+        imagem = interativo.imagem_de_classes(risco.pior_nivel(avaliadas), malha_fina(uf).dentro)
+        return [camadas.imagem(imagem, superficie.limites(recorte), id="risco_de_fogo", opacidade=opacidade),
+                camadas.estacoes(pontos, id="estacoes_risco", opacidade=opacidade)]
 
     def da_densidade(opacidade: float) -> list[pdk.Layer]:
         try:
@@ -5484,7 +5547,9 @@ def corpo_das_camadas(com_raios: bool, catalogo: tuple[camadas.Camada, ...], imo
     construtores |= {servico.chave: (lambda opacidade, servico=servico: do_servico(servico, opacidade))
                      for servico in servicos.SERVICOS}
     if chuva is not None:
-        construtores |= {"chuva": da_chuva, "estacoes_chuva": das_estacoes}
+        construtores |= {"chuva": da_chuva, "estacoes_chuva": das_estacoes, "risco_de_fogo": do_risco}
+        construtores |= {chave: (lambda opacidade, chave=chave: da_variavel(chave, opacidade))
+                         for chave in VARIAVEIS_DAS_CAMADAS}
     if janela_raios is not None:
         construtores |= {"densidade_raios": da_densidade, "raios_recentes": dos_raios_recentes}
     # O imóvel do CAR vai por cima de todas as camadas, fora do quadro, e o mapa abre nele
@@ -5533,10 +5598,11 @@ def pagina_camadas() -> None:
     st.caption(f"Os produtos do painel como camadas de um SIG, em {config.NOME_UF}: ligue, desligue, mude a "
                "opacidade e a ordem no quadro acima do mapa. Ele se atualiza sozinho a cada minuto."
                + ("" if com_raios else " Os raios só vêm do banco: lendo das APIs, as camadas deles não aparecem."))
-    # A mesma gaveta dos mapas de chuva (pedido de 26/11/2026): a lista é da sessão e vale para a chuva
-    # das páginas Chuva e Mapa de camadas; a ficha dos relatos também pula as estações que estão nela
+    # A mesma gaveta das outras páginas (pedido de 26/11/2026), com uma lista por grandeza das camadas:
+    # a lista é da sessão e vale em todas as páginas; a ficha dos relatos pula as da lista da chuva
     uf = config.UF
-    gaveta_das_retiradas("camadas", ["Chuva"], carregar_estacoes(uf), estacoes_vizinhas(uf), estacoes_do_cemaden(uf))
+    gaveta_das_retiradas("camadas", GRANDEZAS_DAS_CAMADAS, carregar_estacoes(uf), estacoes_vizinhas(uf),
+                         estacoes_do_cemaden(uf))
     # O imóvel do CAR, o mesmo das outras páginas (pedido de 26/11/2026): fica na barra lateral, fora
     # do trecho que se atualiza a cada minuto, porque o Streamlit não deixa esse trecho escrever nela
     with st.sidebar:
