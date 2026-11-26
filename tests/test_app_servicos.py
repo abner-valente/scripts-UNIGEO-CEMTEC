@@ -70,6 +70,38 @@ def test_tipo_desconhecido_ou_vazio_e_data_que_falta():
     assert tabela.set_index("objectid").loc[2, "tipo"] == "OUTRA_OCORRENCIA"
 
 
+def test_a_referencia_da_janela_e_a_observacao_e_sem_ela_o_registro():
+    tabela = servicos.pontos_do_servico(servicos.CICOE, [
+        do_servidor(1, "INCENDIO", OBSERVADO_MS, editado=EDITADO_MS),
+        do_servidor(2, "INCENDIO", None, editado=EDITADO_MS, criado=CRIADO_MS),
+        do_servidor(3, "INCENDIO", None),
+    ], NOMES, FUSO).set_index("objectid")
+
+    assert pd.Timestamp(tabela.loc[1, "referencia"]) == pd.Timestamp("2026-11-25 13:44", tz=FUSO)
+    assert pd.Timestamp(tabela.loc[2, "referencia"]) == pd.Timestamp("2026-11-25 15:00", tz=FUSO)
+    assert tabela.loc[3, "referencia"] == ""
+
+
+def test_a_janela_de_tempo_conta_a_partir_de_agora_pela_observacao():
+    # A captura de 26/11: com a janela de 6 h às 08:27, o relato observado às 13:11 da véspera sai do mapa
+    agora = pd.Timestamp("2026-11-26 08:27", tz=FUSO)
+    observado = {nome: int(momento.tz_convert("UTC").timestamp() * 1000) for nome, momento in {
+        "vespera": pd.Timestamp("2026-11-25 13:11", tz=FUSO), "madrugada": pd.Timestamp("2026-11-26 03:05", tz=FUSO),
+        "adiantado": agora + pd.Timedelta(minutes=20)}.items()}
+    tabela = servicos.pontos_do_servico(servicos.CICOE, [
+        do_servidor(1, "OUTRA_OCORRENCIA", observado["vespera"]),
+        do_servidor(2, "ALAGAMENTO_INUNDACAO", observado["madrugada"]),
+        do_servidor(3, "INCENDIO", observado["adiantado"]),       # o relógio do celular adiantado
+        do_servidor(4, "INCENDIO", None),                           # sem data nenhuma
+    ], NOMES, FUSO)
+
+    na_janela = servicos.desde(tabela, agora - pd.Timedelta(hours=6))
+
+    assert na_janela["objectid"].tolist() == [2, 3]
+    assert servicos.desde(tabela, agora - pd.Timedelta(hours=96))["objectid"].tolist() == [1, 2, 3]
+    assert servicos.desde(tabela.iloc[0:0], agora).empty
+
+
 def test_o_icone_e_um_svg_na_cor_do_tipo():
     svg = base64.b64decode(servicos.icone_uri(servicos.CICOE, "INCENDIO").split(",", 1)[1]).decode("utf-8")
 

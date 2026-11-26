@@ -5374,17 +5374,23 @@ def corpo_das_camadas(rotulo: str, janela_raios: int | None, catalogo: tuple[cam
         resumo.append(f"raios dos últimos {janela_raios} min: {inteiro_br(len(pontos))} flashes")
         return [camadas.flashes(pontos, opacidade)]
 
-    # Os pontos de cada serviço desenhado, para a ficha do que for clicado
+    # Os pontos de cada serviço desenhado, para a ficha do que for clicado. A janela da barra lateral
+    # vale também para eles, contada a partir de agora pela data da observação (pedido de
+    # 26/11/2026): um relato das 07:00 ficaria de fora da janela da chuva, que termina na última hora
+    # do INMET
     pontos_dos_servicos: dict[str, pd.DataFrame] = {}
+    inicio_dos_pontos, _ = chuva_calc.janela(pd.Timestamp.now(tz=recorte.fuso), rotulo)
 
     def do_servico(servico: servicos.Servico, opacidade: float) -> list[pdk.Layer]:
-        pontos, erro = pontos_do_servico(servico.chave)
+        todos, erro = pontos_do_servico(servico.chave)
         if erro:
             avisos.append(f"{servico.nome}: {erro}. O mapa sai sem eles; a página tenta de novo no próximo minuto.")
             return []
+        pontos = servicos.desde(todos, inicio_dos_pontos)
         pontos_dos_servicos[servico.chave] = pontos
         legendas[servico.chave] = servicos.legenda_dos_tipos(servico, nomes_dos_tipos(servico.chave))
-        resumo.append(f"{inteiro_br(len(pontos))} {servico.plural}")
+        resumo.append(f"{inteiro_br(len(pontos))} {servico.plural} observados desde {inicio_dos_pontos:%d/%m %H:%M} "
+                      f"({inteiro_br(len(todos))} no serviço)")
         return [servicos.camada(servico, pontos, opacidade)] if not pontos.empty else []
 
     construtores = {"limites": lambda opacidade: camadas.limites(*contornos_interativos(uf), opacidade=opacidade)}
@@ -5432,9 +5438,11 @@ def pagina_camadas() -> None:
     com_raios = fonte.tem_raios()
     with st.sidebar:
         st.header("Tempo")
-        rotulo = st.selectbox("Janela da chuva" + (" e da densidade de raios" if com_raios else ""),
-                              JANELAS_DAS_CAMADAS, index=JANELAS_DAS_CAMADAS.index("24 h"), key="janela_camadas",
-                              help="Conta para trás a partir da última hora com leitura do INMET.")
+        rotulo = st.selectbox("Janela de tempo", JANELAS_DAS_CAMADAS, index=JANELAS_DAS_CAMADAS.index("24 h"),
+                              key="janela_camadas",
+                              help="A chuva" + (" e a densidade de raios contam" if com_raios else " conta")
+                                   + " para trás a partir da última hora com leitura do INMET; os relatos do CICOE, "
+                                     "a partir de agora, pela data e horário da observação.")
         janela_raios = None
         if com_raios:
             janela_raios = st.segmented_control(

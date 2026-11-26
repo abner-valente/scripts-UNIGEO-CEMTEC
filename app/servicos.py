@@ -93,8 +93,8 @@ CICOE = Servico(
     tipo_padrao="OUTRA_OCORRENCIA", plural="relatos do CICOE",
 )
 SERVICOS = (CICOE,)
-COLUNAS_DOS_PONTOS = ["objectid", "longitude", "latitude", "tipo", "titulo", "detalhe", "quando", "descricao",
-                      "atualizado", "icone"]
+COLUNAS_DOS_PONTOS = ["objectid", "longitude", "latitude", "tipo", "titulo", "detalhe", "quando", "referencia",
+                      "descricao", "atualizado", "icone"]
 # O que vai ao navegador: a descrição e as datas só aparecem na ficha
 COLUNAS_DA_CAMADA = ["objectid", "longitude", "latitude", "titulo", "detalhe", "icone"]
 
@@ -130,7 +130,8 @@ def data_local(milissegundos, fuso) -> pd.Timestamp | None:
 
 def pontos_do_servico(servico: Servico, pontos: list[dict], nomes_dos_tipos: dict[str, str], fuso) -> pd.DataFrame:
     # Uma linha por ponto (de arcgis.pontos), do mais antigo ao mais novo: o mais novo fica por cima
-    # no mapa. "detalhe" é o balão; "quando" vai em ISO, para ser chave de cache
+    # no mapa. "detalhe" é o balão; "quando" vai em ISO, para ser chave de cache. "referencia" é o
+    # momento que a janela de tempo filtra (veja desde): a observação, e sem ela o registro
     linhas = []
     for ponto in pontos:
         campos = ponto["campos"]
@@ -145,12 +146,23 @@ def pontos_do_servico(servico: Servico, pontos: list[dict], nomes_dos_tipos: dic
             "detalhe": (f"Observado em {quando:%d/%m/%Y %H:%M}" if quando is not None else "Sem a data da observação")
                        + f"\nClique para abrir a ficha. Fonte: {servico.credito}",
             "quando": quando.isoformat() if quando is not None else "",
+            "referencia": next((data.isoformat() for data in (quando, atualizado) if data is not None), ""),
             "descricao": str(campos.get(servico.campo_da_descricao) or "").strip(),
             "atualizado": f"{atualizado:%d/%m/%Y %H:%M}" if atualizado is not None else "",
             "icone": {"url": icone_uri(servico, tipo), "width": 64, "height": 64, "anchorY": 32},
         })
     tabela = pd.DataFrame(linhas, columns=COLUNAS_DOS_PONTOS)
-    return tabela.sort_values("quando", kind="stable").reset_index(drop=True)
+    return tabela.sort_values("referencia", kind="stable").reset_index(drop=True)
+
+
+def desde(pontos: pd.DataFrame, inicio) -> pd.DataFrame:
+    # Os pontos com o momento de referência a partir de `inicio` (a janela de tempo da página, que
+    # conta para trás a partir de agora). Ponto sem data nenhuma fica de fora; com a data no futuro
+    # (o relógio do celular adiantado), fica
+    if pontos.empty:
+        return pontos
+    referencia = pd.to_datetime(pontos["referencia"].replace("", None), utc=True, format="ISO8601")
+    return pontos[(referencia >= pd.Timestamp(inicio)).to_numpy()].reset_index(drop=True)
 
 
 def camada(servico: Servico, pontos: pd.DataFrame, opacidade: float | None = None) -> pdk.Layer:
