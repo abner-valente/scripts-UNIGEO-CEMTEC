@@ -5134,9 +5134,12 @@ def pagina_raios() -> None:
 # =====================================================
 # Os produtos do painel empilhados como camadas de um SIG (app/camadas.py), num grupo do menu só do
 # CICOE, que pediu o mapa (pedido de 26/11/2026). Só MS: os raios e os relatos do CICOE são do estado.
-# A janela da barra lateral vale para a chuva e para a densidade de raios; os raios recentes contam
-# para trás a partir de agora
-JANELAS_DAS_CAMADAS = [rotulo for rotulo in chuva_calc.rotulos() if rotulo.endswith(" h")]
+# A janela de tempo vale para a chuva, a densidade de raios e os relatos; os raios recentes contam
+# para trás a partir de agora. As janelas são as de horas da página Chuva e os últimos 30 dias (pedido
+# de 26/11/2026), que a conta trata como 720 h para trás, e não como o mês do calendário, como o
+# "Mensal" da Chuva. A chave é o que a tela mostra; o valor, o rótulo que app/chuva.py entende
+JANELAS_DAS_CAMADAS = {**{rotulo: rotulo for rotulo in chuva_calc.rotulos() if rotulo.endswith(" h")},
+                       "30 dias": f"{30 * 24} h"}
 # O mapa com 82% da largura e a ficha da ocorrência clicada com 18% ao lado; a altura é a de 720 px
 # do protótipo com mais 40% (pedidos de 26/11/2026)
 PROPORCAO_DO_MAPA_DE_CAMADAS = [0.82, 0.18]
@@ -5292,11 +5295,14 @@ def corpo_das_camadas(com_raios: bool, catalogo: tuple[camadas.Camada, ...]) -> 
     filtros_tela, quadro_tela = st.columns(PROPORCAO_DOS_CONTROLES, gap="large")
     with filtros_tela:
         janela_tela, raios_tela = st.columns(2)
-        rotulo = janela_tela.selectbox("Janela de tempo", JANELAS_DAS_CAMADAS, index=JANELAS_DAS_CAMADAS.index("24 h"),
-                              key="janela_camadas",
-                              help="A chuva" + (" e a densidade de raios contam" if com_raios else " conta")
-                                   + " para trás a partir da última hora com leitura do INMET; os relatos do CICOE, "
-                                     "a partir de agora, pela data e horário da observação.")
+        escolha = janela_tela.selectbox(
+            "Janela de tempo", list(JANELAS_DAS_CAMADAS), index=list(JANELAS_DAS_CAMADAS).index("24 h"),
+            key="janela_camadas",
+            help="A chuva" + (" e a densidade de raios contam" if com_raios else " conta")
+                 + " para trás a partir da última hora com leitura do INMET; os relatos do CICOE, a partir de agora, "
+                   "pela data e horário da observação. Os 30 dias são as últimas 720 h, e não o mês do calendário, "
+                   "como o Mensal da página Chuva.")
+        rotulo = JANELAS_DAS_CAMADAS[escolha]
         janela_raios = None
         if com_raios:
             janela_raios = raios_tela.segmented_control(
@@ -5329,12 +5335,12 @@ def corpo_das_camadas(com_raios: bool, catalogo: tuple[camadas.Camada, ...]) -> 
     ate = chuva["ate"] if chuva is not None else hora
     comeco, _ = chuva_calc.janela(ate, rotulo)
     quando = f"{comeco:%d/%m %H:%M} a {ate:%d/%m %H:%M}"
-    produto, legenda_da_chuva = variaveis.por_nome("Chuva acumulada"), chuva_calc.legenda(rotulo)
+    produto, legenda_da_chuva = variaveis.por_nome("Chuva acumulada"), chuva_calc.legenda(escolha)
     # O que cada camada desenhou (sob o mapa, de cima para baixo), as frases que vêm depois (o crédito
     # do CEMADEN, as estações retiradas), os avisos e a legenda de cada camada
     resumo, notas, avisos, legendas = [], [], [], {}
     if ligadas & {"chuva", "estacoes_chuva"} and chuva is None:
-        avisos.append(f"Nenhuma estação do INMET mandou chuva nas últimas {rotulo}: o mapa sai sem a chuva.")
+        avisos.append(f"Nenhuma estação do INMET mandou chuva na janela de {escolha}: o mapa sai sem a chuva.")
 
     def da_chuva(opacidade: float) -> list[pdk.Layer]:
         valores = pd.concat([chuva["do_inmet"], chuva["cemaden"]]).dropna()
@@ -5345,7 +5351,7 @@ def corpo_das_camadas(com_raios: bool, catalogo: tuple[camadas.Camada, ...]) -> 
         if niveis is not None and len(niveis) <= mapas.MAX_CLASSES:
             legendas["chuva"] = camadas.legenda(camadas.itens_da_escala(niveis, produto.paleta, produto.unidade)[::-1],
                                                 f"{legenda_da_chuva} ({produto.unidade})")
-        resumo.append(f"chuva de {quando} ({rotulo}), de {estacoes_no_mapa(valores)}")
+        resumo.append(f"chuva de {quando} ({escolha}), de {estacoes_no_mapa(valores)}")
         notas.append(nota_das_retiradas(chuva["fora"]) + credito_do_cemaden(valores))
         imagem = camada_superficie(valores, produto.nome, quando, uf, niveis, chuva["apoio"])
         return [camadas.imagem(imagem, superficie.limites(recorte), id="chuva", opacidade=opacidade)]
