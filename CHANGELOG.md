@@ -9,6 +9,50 @@ Cada versão separa as mudanças em até quatro grupos:
 
 Para atualizar a sua cópia, veja [Como atualizar](README.md#como-atualizar).
 
+## [0.5.1] — 26/11/2026
+
+O **mapa de camadas**, um pedido do CICOE: os produtos do painel empilhados como num SIG, com os relatos que chegam pelo formulário do CICOE no PIN MS por cima. Fica num grupo novo do menu, **CICOE**, no painel da `main`. O Streamlit Cloud continua na 0.3.9.
+
+### Atenção ao atualizar
+
+- **O menu ganhou o grupo CICOE**, com a página **Mapa de camadas** (`…/cicoe-camadas`). As outras páginas não mudaram de lugar.
+- **A página consulta o PIN MS** (`www.pinms.ms.gov.br`), o portal de mapas do estado, para os relatos do CICOE, no máximo a cada 10 minutos. Sem acesso a ele, o mapa sai sem os relatos, com um aviso, e o resto da página funciona.
+- **Não há dependência nova.** Quem roda o painel na própria máquina precisa só reiniciá-lo (Ctrl+C e `streamlit run app/explorador.py`): o Streamlit não carrega módulos novos sozinho.
+
+### Novo: o mapa de camadas
+
+- **As camadas**: os relatos do CICOE, os raios da última hora, as estações com a chuva, os limites do estado e dos municípios, a densidade de raios e a chuva acumulada. Lendo das APIs, as duas dos raios saem do quadro, porque os raios só vêm do banco.
+- **O quadro de camadas**, acima do mapa:
+  - **Ver** liga e desliga cada camada. Uma camada desligada nem é carregada;
+  - a **Opacidade** vai de 0 a 100%;
+  - a **Ordem** empilha: 1 fica por cima de todas, como no painel de camadas do QGIS.
+
+  A mudança numa célula vale depois de Enter, Tab ou um clique fora dela.
+- **A janela de tempo**, de 3 a 96 horas e os **últimos 30 dias** (720 horas para trás, e não o mês do calendário, como o "Mensal" da página Chuva). Ela vale para:
+  - a chuva e a densidade de raios, que terminam na última hora que o INMET mandou;
+  - os relatos do CICOE, contados a partir de agora pela data e horário da observação. O relato sem essa data vale pela data do registro.
+- **Os raios recentes**: os flashes dos últimos 15, 30 ou 60 minutos, como no Agora da página Raios.
+- **A página se atualiza sozinha a cada minuto**, sem perder o que se mudou no quadro nem a posição do mapa.
+- **O mapa** ocupa 82% da largura, com 1.008 px de altura. Embaixo dele ficam as legendas das camadas ligadas, lado a lado, e uma frase com o que cada camada mostra: quantos relatos entraram (e quantos o serviço tem), a janela da chuva e de quantas estações ela veio.
+- **A chuva é a da página Chuva**: as mesmas estações, as vizinhas na borda, os pluviômetros do CEMADEN e o agrupamento de 15 km dos números. Aqui, o número só aparece onde choveu.
+- **O botão "Estações retiradas"**, o mesmo da página Chuva, com a mesma lista nas duas páginas.
+
+### Novo: os relatos do CICOE
+
+- **Os relatos do formulário do CICOE (Survey123) no PIN MS**, com um ícone por tipo de ocorrência: alagamento ou inundação, ponte danificada, rodovia interditada, queda de árvores, vendaval ou granizo, deslizamento de terra, incêndio e outra. Os nomes dos tipos vêm do próprio serviço.
+- **O clique num ícone abre a ficha da ocorrência**, ao lado do mapa: o tipo, a descrição, a data e horário da observação, a última atualização no serviço e a **foto anexada**, reduzida e sem os dados da câmera (como a posição de GPS). A ficha fica aberta até outro clique num ícone ou o botão "Fechar a ficha".
+- **O tempo na hora da observação**, na ficha:
+  - a leitura do INMET que cobre aquele horário, na estação mais próxima: temperatura, umidade, rajada, chuva na hora e nas 24 horas antes;
+  - o pluviômetro do CEMADEN mais próximo que tenha leitura, a até 50 km: chuva na hora e nas 24 horas antes. Sem nenhum nessa distância, a ficha diz isso;
+  - os flashes do GLM a até 20 km, nas 3 horas antes.
+
+  As estações retiradas ficam de fora: a ficha vai à seguinte.
+- **O contato de quem respondeu o formulário e quem criou ou editou o registro nunca são pedidos ao servidor**, nem aparecem no painel.
+
+### Corrigido
+
+- **Na chuva do mapa navegável, os números escondidos do agrupamento de 15 km saíam inteiros** desde a 0.4.1, embolados atrás do maior do grupo. Com o estado inteiro à vista, eles voltam a ficar pequenos, e crescem ao aproximar o mapa.
+
 ## [0.4.1] — 25/11/2026
 
 A maior versão até aqui, com duas frentes:

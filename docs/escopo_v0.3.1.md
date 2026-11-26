@@ -415,7 +415,8 @@ máquina host, que alcança o banco e a VM. A tecnologia ainda vai ser escolhida
 natural é o FastAPI, por ser Python como o resto.
 
 **Confirmado em 09/10:** a gerência quer a versão externa, e a TI aceita publicar a API por HTTPS.
-Até a API ficar pronta (v0.5.x), a versão da nuvem segue pela opção 1.
+Até a API ficar pronta (v0.6.x; até a 0.4.1, o plano a previa na v0.5.x, que ficou com o mapa de
+camadas do CICOE), a versão da nuvem segue pela opção 1.
 
 ## Fora do escopo
 

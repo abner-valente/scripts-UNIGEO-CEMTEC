@@ -646,7 +646,7 @@ O desenho completo (as tabelas, os usuários do banco, o que falta para o servid
 
 Ferramenta de **análise**, separada dos produtos: olha-se o dado para entender tendências e conferir a qualidade da medição, sem gerar os arquivos do relatório. Os produtos continuam saindo pelo `main.py`, e o explorador não altera nada do que eles produzem.
 
-> **Esta seção descreve o painel da `main` (0.4.x)**, o da equipe na rede da unidade, que lê do banco. O painel publicado no **Streamlit Cloud** é outra linha: a **0.3.9**, da branch `streamlit`, que só lê das APIs e tem as abas antigas (Mapas Boletim, Chuva, Risco de Fogo, Mapa Navegação, Qualidade dos dados). Ele está descrito no README daquela branch.
+> **Esta seção descreve o painel da `main` (0.4.1 em diante)**, o da equipe na rede da unidade, que lê do banco. O painel publicado no **Streamlit Cloud** é outra linha: a **0.3.9**, da branch `streamlit`, que só lê das APIs e tem as abas antigas (Mapas Boletim, Chuva, Risco de Fogo, Mapa Navegação, Qualidade dos dados). Ele está descrito no README daquela branch.
 
 Instale as dependências dele uma vez (quem só gera os produtos não precisa disto):
 
@@ -662,12 +662,13 @@ E abra:
 streamlit run app/explorador.py
 ```
 
-O navegador abre em `http://localhost:8501`, na página **Observado › Mapas**. O menu, no topo da barra lateral, tem uma página por assunto, em dois grupos:
+O navegador abre em `http://localhost:8501`, na página **Observado › Mapas**. O menu, no topo da barra lateral, tem uma página por assunto, em três grupos:
 
 | Grupo | Páginas |
 |---|---|
 | **Observado** | [Mapas](#observado--mapas) (com a localização das estações, as séries e a qualidade dos dados), [Chuva](#observado--chuva), [Risco de Fogo](#observado--risco-de-fogo) e, só no painel que lê do banco, [Raios](#observado--raios-goes-19) |
 | **Previsão (MS)** | [Mapas, Chuva, Risco de Fogo e Semanas](#previsão-ms) |
+| **CICOE** | [Mapa de camadas](#cicoe--mapa-de-camadas): os produtos empilhados como camadas de um SIG, com os relatos do CICOE |
 
 Toda página segue o mesmo desenho:
 
@@ -813,7 +814,7 @@ A mesma retirada do `main.py` (veja [Estações retiradas dos mapas](#estações
 
 | | |
 |---|---|
-| **Onde fica** | Nas páginas **Mapas**, **Chuva** e **Risco de Fogo** do observado, nas duas vistas, o botão **"Estações retiradas"** no canto de cima, à direita, por cima dos mapas. Ele abre uma barra lateral da altura da tela, com uma lista para cada variável dos mapas na tela, e abre e fecha sem refazer os mapas. Fechado, mostra quantas estações estão fora ("Estações retiradas (2)"), para ninguém esquecer delas |
+| **Onde fica** | Nas páginas **Mapas**, **Chuva** e **Risco de Fogo** do observado, nas duas vistas, e no **Mapa de camadas** do CICOE (só a lista da chuva), o botão **"Estações retiradas"** no canto de cima, à direita, por cima dos mapas. Ele abre uma barra lateral da altura da tela, com uma lista para cada variável dos mapas na tela, e abre e fecha sem refazer os mapas. Fechado, mostra quantas estações estão fora ("Estações retiradas (2)"), para ninguém esquecer delas |
 | **O que sai** | O ponto, o ranking e a interpolação dos mapas da variável, inclusive no PNG do boletim, no GIF, no GeoTIFF e no balão do navegável, sem nota sobre a retirada no PNG (decisão da equipe). Os gráficos e as tabelas continuam com todas as estações, que é onde se vê o erro; a série da estação clicada também |
 | **Por variável** | Quem falha é um sensor: um pluviômetro entupido não estraga a temperatura da mesma estação. A lista de uma variável, escolhida numa página, vale nos mapas dela em todas as páginas |
 | **As vizinhas** | As estações de fora do estado que seguram a borda da interpolação também podem sair, no fim da lista, marcadas como "(vizinha)" |
@@ -877,6 +878,23 @@ A previsão do tempo para Mato Grosso do Sul, do [Open-Meteo](https://open-meteo
 
 As decisões estão em [`docs/escopo_v0.3.1.md`](docs/escopo_v0.3.1.md), e o que vem depois (o banco, os coletores e o servidor da unidade), em [`docs/plano_arquitetura.md`](docs/plano_arquitetura.md).
 
+### CICOE › Mapa de camadas
+
+Um pedido do CICOE, num grupo do menu só dele (`…/cicoe-camadas`): os produtos do painel **empilhados como camadas de um SIG**, e por cima os relatos que chegam pelo formulário do CICOE no PIN MS. Só MS, porque os raios e os relatos são do estado.
+
+| | |
+|---|---|
+| **As camadas** | Os relatos do CICOE, os raios da última hora, as estações com a chuva, os limites do estado e dos municípios, a densidade de raios e a chuva acumulada. Lendo das APIs, as duas dos raios saem do quadro, porque os raios só vêm do banco |
+| **Acima do mapa** | À esquerda, a **janela de tempo**, os **raios recentes** (15, 30 ou 60 minutos) e a caixa "Mapa de fundo". À direita, o **quadro de camadas**: **Ver** liga e desliga, a **Opacidade** vai de 0 a 100% e a **Ordem** empilha (1 fica por cima de todas, como no painel de camadas do QGIS). A mudança numa célula vale depois de Enter, Tab ou um clique fora dela, e uma camada desligada nem é carregada |
+| **A janela de tempo** | De 3 a 96 horas e os **últimos 30 dias** (720 horas para trás, e não o mês do calendário, como o "Mensal" da página Chuva). A chuva e a densidade de raios terminam na última hora que o INMET mandou; os relatos contam a partir de agora, pela data e horário da observação (sem ela, pela data do registro). Em 30 dias, a densidade de raios fica quase toda nas classes mais altas: a escala é a da página Raios |
+| **O mapa** | 82% da largura e 1.008 px de altura. Embaixo, as legendas das camadas ligadas, lado a lado, e o que cada camada mostra: quantos relatos entraram (e quantos o serviço tem), a janela da chuva e de quantas estações ela veio. A página se atualiza sozinha a cada minuto, sem perder o quadro nem a posição do mapa |
+| **A chuva** | A da página Chuva: as mesmas estações, as vizinhas na borda, os pluviômetros do CEMADEN e o agrupamento de 15 km dos números. Aqui, o número só aparece onde choveu. O botão [Estações retiradas](#botão-estações-retiradas) é o mesmo da página Chuva, com a mesma lista |
+| **Os relatos do CICOE** | Os do formulário do CICOE (Survey123), lidos do PIN MS, o portal de mapas do estado, no máximo a cada 10 minutos. Um ícone por tipo de ocorrência: alagamento ou inundação, ponte danificada, rodovia interditada, queda de árvores, vendaval ou granizo, deslizamento de terra, incêndio e outra. Sem acesso ao PIN MS, o mapa sai sem eles, com um aviso |
+| **A ficha** | O clique num ícone abre, ao lado do mapa, o tipo, a descrição, a data e horário da observação, a última atualização no serviço e a foto anexada, reduzida e sem os dados da câmera (como a posição de GPS). Fica aberta até outro clique num ícone ou o botão "Fechar a ficha" |
+| **O tempo na hora da observação** | Na ficha: a leitura do INMET que cobre aquele horário, na estação mais próxima (temperatura, umidade, rajada, chuva na hora e nas 24 horas antes); o pluviômetro do CEMADEN mais próximo com leitura, a até 50 km; e os flashes do GLM a até 20 km nas 3 horas antes. As estações retiradas ficam de fora: a ficha vai à seguinte |
+| **Dado pessoal** | O contato de quem respondeu o formulário e quem criou ou editou o registro nunca são pedidos ao servidor, nem aparecem no painel |
+| **A seleção** | Com um relato escolhido, o Streamlit apaga para no máximo 40% os pontos e as células das outras camadas, e a diferença de opacidade quase some neles; a superfície da chuva não muda. A seleção continua depois de fechar a ficha |
+
 ## Novos produtos
 
 Os scripts da equipe estão sendo migrados aos poucos. Cada um vira um produto em `modulos/produtos/`, reaproveitando as peças compartilhadas (API do INMET, períodos, cálculos, mapas e Excel). O passo a passo está em [`docs/como_migrar_um_script.md`](docs/como_migrar_um_script.md).
@@ -896,6 +914,7 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │   ├── fonte.py          # De onde vêm os dados: é a ele que os produtos e o painel pedem (as APIs ou o banco)
 │   ├── inmet.py          # Acesso à API do INMET (estações e dados horários)
 │   ├── openmeteo.py      # Previsão do Open-Meteo (ECMWF, GFS e ICON), hora a hora, e o dia tirado das horas
+│   ├── arcgis.py         # Camadas de pontos de um ArcGIS Feature Service público (o PIN MS), sem os campos proibidos
 │   ├── banco.py          # O banco da UNIGEO (PostgreSQL): a única peça que fala SQL
 │   ├── coletor_inmet.py  # O coletor do INMET: as horas de todas as estações, do INMET para o banco
 │   ├── cemaden.py        # Acesso à PED do CEMADEN (os pluviômetros): cadastro e chuva de um dia do estado
@@ -913,8 +932,10 @@ Cada produto ganha a sua seção em [Como usar](#como-usar), sempre com as mesma
 │       ├── relatorio_inmet.py  # Extremos e chuva das estações automáticas
 │       └── risco_fogo.py       # Risco de fogo pela regra 30-30-30, hora a hora
 ├── app/                  # Explorador em Streamlit (análise), com o seu cache local em cache/
-│   ├── explorador.py     # A tela: as páginas do observado e da previsão, filtros, gráficos, mapas e qualidade
+│   ├── explorador.py     # A tela: as páginas do observado, da previsão e do CICOE, filtros, gráficos, mapas e qualidade
 │   ├── interativo.py     # O mapa navegável (pydeck): as células da grade com o valor de cada uma, os rótulos e o 3D
+│   ├── camadas.py        # As peças de pydeck que os mapas navegáveis dividem, e o quadro do mapa de camadas
+│   ├── servicos.py       # Os serviços de fora no mapa de camadas (os relatos do CICOE): ícones, ficha e o tempo na hora
 │   ├── previsao.py       # Previsão na tela: a rodada guardada de cada modelo, as séries e os mapas dos dias e das horas
 │   ├── raios.py          # Os raios do GOES-19 na tela: o Agora e a densidade por km²
 │   ├── car.py            # O imóvel do CAR: a leitura do arquivo (ou das coordenadas) e as células que ele toca

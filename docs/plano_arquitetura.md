@@ -274,7 +274,8 @@ nuvem** elas continuam sob demanda, a 0,5°, até a publicação da API (passo 1
 |---|---|
 | **v0.3.x** | a fase 1 e a página de previsão sob demanda. A 0.3.9 é a do Streamlit Cloud, na branch `streamlit`, só com as APIs |
 | **v0.4.x** | o banco, os coletores e o servidor interno no Windows (fases 2 e 3); a página de previsão passa a ler do banco no servidor; o produto de previsão do `main.py` (decidido em 09/10/2026), lendo do banco. **A 0.4.1 trouxe** o banco, os coletores do INMET, da previsão, do CEMADEN e dos raios, e a fonte "banco"; **falta** a instalação na VM (passo 8) e o produto de previsão |
-| **v0.5.x** | a API de leitura e a versão externa (fase 4) |
+| **v0.5.x** | o mapa de camadas do CICOE, fora das fases deste plano: os produtos do painel como camadas de um SIG, com os relatos do CICOE no PIN MS. **A 0.5.1 trouxe** a página, no grupo CICOE do menu |
+| **v0.6.x** | a API de leitura e a versão externa (fase 4). Até a 0.4.1, este plano a reservava para a v0.5.x |
 
 Cada versão da linha 0.4 em diante entra na `main` por PR, como de costume, e o servidor interno
 roda a tag que for escolhida. O Streamlit Cloud fica na branch `streamlit`, com a 0.3.9 (desde
