@@ -90,6 +90,29 @@ def test_os_textos_puros_do_rotulo_nao_viram_expressao():
     assert camada["getTextAnchor"] == "start" and camada["getAlignmentBaseline"] == "center"
 
 
+def test_na_chuva_quem_nao_e_o_maior_do_grupo_vai_em_metros_por_baixo():
+    escritas = pd.DataFrame({"Longitude": [-54.6, -54.62, -55.0], "Latitude": [-20.4, -20.45, -22.2],
+                             "rotulo": ["42,0", "0,6", "12,0"], "maior_do_grupo": [True, False, True]})
+
+    escondidos, maiores = no_navegador(*camadas.rotulos_dos_valores(escritas, opacidade=0.5))
+
+    assert [linha["rotulo"] for linha in escondidos["data"]] == ["0,6"]
+    assert escondidos["sizeUnits"] == "meters" and escondidos["getSize"] == camadas.TAMANHO_DOS_ESCONDIDOS_M
+    assert escondidos["sizeMaxPixels"] == camadas.ESTILO_DOS_ROTULOS["get_size"]
+    assert [linha["rotulo"] for linha in maiores["data"]] == ["42,0", "12,0"]
+    assert "sizeUnits" not in maiores and maiores["opacity"] == escondidos["opacity"] == 0.5
+
+
+def test_sem_o_grupo_todos_os_numeros_numa_camada_so():
+    escritas = pd.DataFrame({"Longitude": [-54.6], "Latitude": [-20.4], "rotulo": ["31,2"], "altura": [500.0]})
+
+    camada, = no_navegador(*camadas.rotulos_dos_valores(escritas, ["Longitude", "Latitude", "altura"],
+                                                        parameters={"depthCompare": "always"}))
+
+    assert camada["getPosition"] == "@@=[Longitude, Latitude, altura]"
+    assert camada["parameters"] == {"depthCompare": "always"} and "opacity" not in camada
+
+
 def test_as_estacoes_e_os_pluviometros_em_camadas_proprias():
     pontos = pd.DataFrame({"Estação": ["A"], "Longitude": [-54.6], "Latitude": [-20.4], "cor": [[25, 25, 25, 215]],
                            "altura": [1000.0]})
@@ -180,6 +203,14 @@ def test_o_quadro_abre_com_o_catalogo_de_cima_para_baixo():
     assert quadro["Ordem"].tolist() == list(range(1, len(camadas.CATALOGO) + 1))
     assert quadro.set_index("Camada").loc["Densidade de raios", "Opacidade"] == 80
     assert quadro["Ver"].all()
+
+
+def test_sem_os_raios_do_banco_as_camadas_deles_saem_do_catalogo():
+    sem_raios = camadas.disponiveis(com_raios=False)
+
+    assert [camada.chave for camada in sem_raios] == ["estacoes_chuva", "limites", "chuva"]
+    assert camadas.disponiveis(com_raios=True) == camadas.CATALOGO
+    assert camadas.quadro_inicial(sem_raios)["Ordem"].tolist() == [1, 2, 3]
 
 
 def chaves(pilha) -> list[str]:

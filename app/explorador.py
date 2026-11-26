@@ -1643,12 +1643,6 @@ def visao_do_imovel(imovel: car.Imovel, em_3d: bool) -> dict:
             "zoom": round(min(zoom, ZOOM_DO_IMOVEL_EM_3D) if em_3d else zoom, 1)}
 
 
-# Na chuva, o número de quem não é o maior do seu grupo de 15 km vai em metros: ~2 px com o estado
-# inteiro na tela, escondido atrás do maior, e os 12 px de sempre a partir do zoom ~8,7, quando as
-# estações do grupo já ficam a dezenas de px umas das outras
-TAMANHO_DOS_ESCONDIDOS_M = 4000
-
-
 def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos: bool,
                     celulas: pd.DataFrame | None = None,
                     escolhido: list[int] = interativo.COR_DO_PONTO_ESCOLHIDO,
@@ -1727,17 +1721,9 @@ def mapa_interativo(imagem: str | None, pontos: pd.DataFrame, uf: str, escritos:
     if com_cemaden:
         pilha.append(camadas.pluviometros(cemaden, posicao, **na_frente))
     if escritos:
+        # Na chuva, com a coluna "maior_do_grupo" (veja com_o_maior_do_grupo)
         escritas = pd.concat([pontos, cemaden], ignore_index=True) if com_cemaden else pontos
-        if "maior_do_grupo" in escritas:
-            # Na chuva (veja mapa_navegavel_da_chuva), quem não é o maior do grupo vem antes, por baixo,
-            # com o número em metros: cresce ao aproximar o mapa. O CollisionFilterExtension do deck.gl,
-            # que esconderia os números que se encostam, apaga todos no Streamlit 1.64 (testado em 24/11/2026)
-            maior = escritas["maior_do_grupo"].astype(bool)
-            pilha.append(camadas.rotulos(escritas[~maior], "rotulo", posicao, [0, -18], **na_frente,
-                                         get_size=TAMANHO_DOS_ESCONDIDOS_M, size_units="meters", size_min_pixels=0,
-                                         size_max_pixels=camadas.ESTILO_DOS_ROTULOS["get_size"]))
-            escritas = escritas[maior]
-        pilha.append(camadas.rotulos(escritas, "rotulo", posicao, [0, -18], **na_frente))
+        pilha += camadas.rotulos_dos_valores(escritas, posicao, **na_frente)
     if "angulo" in pontos:
         # As setas do vento, ao lado de cada estação
         setas = pdk.Layer("TextLayer", data=pontos.dropna(subset=["angulo"]).assign(seta="↑"),
@@ -2279,6 +2265,19 @@ def chave_do_mapa(nome: str, em_3d: bool = False, imovel: car.Imovel | None = No
     return nome + ("_3d" if em_3d else "") + (f"_{imovel.chave}" if imovel is not None else "")
 
 
+def com_o_maior_do_grupo(pontos: pd.DataFrame, do_inmet: pd.Series, pontos_cemaden: pd.DataFrame,
+                         valores_cemaden: pd.Series) -> tuple[pd.DataFrame, pd.DataFrame]:
+    # Pedido da equipe (24/11/2026): com o estado inteiro na tela, o agrupamento de 15 km do boletim
+    # (mapas.o_maior_de_cada_grupo, as duas redes juntas); aproximando, o número de cada estação.
+    # camadas.rotulos_dos_valores escreve em metros o de quem não é o maior do grupo
+    juntos = pd.concat(
+        [tabela[["Longitude", "Latitude"]].assign(valor=tabela["Estação"].map(serie).to_numpy(dtype=float))
+         for tabela, serie in ((pontos, do_inmet), (pontos_cemaden, valores_cemaden))], ignore_index=True)
+    maior = juntos.index.isin(mapas.o_maior_de_cada_grupo(juntos, "valor", config.AGRUPAR_CHUVA_KM).index)
+    return (pontos.assign(maior_do_grupo=maior[:len(pontos)]),
+            pontos_cemaden.assign(maior_do_grupo=maior[len(pontos):]))
+
+
 def mapa_navegavel_da_chuva(produto: variaveis.Produto, valores: pd.Series, do_inmet: pd.Series,
                             valores_apoio: pd.Series, valores_cemaden: pd.Series, niveis, escritos: bool,
                             em_3d: bool, quando: str, legenda: str, nome_do_arquivo: str, carimbo: str,
@@ -2297,15 +2296,7 @@ def mapa_navegavel_da_chuva(produto: variaveis.Produto, valores: pd.Series, do_i
     pontos_cemaden = interativo.pontos_do_cemaden(_com_coordenadas(valores_cemaden, produto.nome, uf), produto.nome,
                                                   legenda, produto.unidade, produto.decimais)
     if escritos:
-        # Pedido da equipe (24/11/2026): com o estado inteiro na tela, o agrupamento de 15 km do boletim
-        # (mapas.o_maior_de_cada_grupo, as duas redes juntas); aproximando, o número de cada estação.
-        # O mapa_interativo escreve em metros o de quem não é o maior do grupo
-        juntos = pd.concat(
-            [tabela[["Longitude", "Latitude"]].assign(valor=tabela["Estação"].map(serie).to_numpy(dtype=float))
-             for tabela, serie in ((pontos, do_inmet), (pontos_cemaden, valores_cemaden))], ignore_index=True)
-        maior = juntos.index.isin(mapas.o_maior_de_cada_grupo(juntos, "valor", config.AGRUPAR_CHUVA_KM).index)
-        pontos, pontos_cemaden = (pontos.assign(maior_do_grupo=maior[:len(pontos)]),
-                                  pontos_cemaden.assign(maior_do_grupo=maior[len(pontos):]))
+        pontos, pontos_cemaden = com_o_maior_do_grupo(pontos, do_inmet, pontos_cemaden, valores_cemaden)
     celulas = celulas_do_ponto(valores, valores_apoio, produto.nome, quando, uf, nome=legenda)
     por_unidade = None
     if em_3d:
@@ -5137,6 +5128,192 @@ def pagina_raios() -> None:
         densidade_de_raios(uf, recorte, intervalo)
 
 
+# =====================================================
+# CICOE: O MAPA DE CAMADAS
+# =====================================================
+# Os produtos do painel empilhados como camadas de um SIG (app/camadas.py), num grupo do menu só do
+# CICOE, que pediu o mapa (pedido de 26/11/2026). Só MS: os raios e os relatos do CICOE são do estado.
+# A janela da barra lateral vale para a chuva e para a densidade de raios; os raios recentes contam
+# para trás a partir de agora
+JANELAS_DAS_CAMADAS = [rotulo for rotulo in chuva_calc.rotulos() if rotulo.endswith(" h")]
+# Mais baixo que os outros mapas: ao lado dele vão o quadro de camadas e as legendas
+ALTURA_DO_MAPA_DE_CAMADAS = 720
+LEGENDA_DAS_ESTACOES = [("rgb({}, {}, {})".format(*interativo.COR_DA_ESTACAO[:3]), "Estação do INMET"),
+                        ("rgb({}, {}, {})".format(*interativo.COR_DO_CEMADEN), "Pluviômetro do CEMADEN")]
+
+
+def _em_utc(momento) -> datetime:
+    return pd.Timestamp(momento).tz_convert(config.FUSO_UTC).to_pydatetime()
+
+
+def chuva_das_camadas(rotulo: str, hora: pd.Timestamp) -> dict | None:
+    # A chuva da janela até a última hora com leitura do INMET (a da hora cheia de agora pode ainda
+    # não ter chegado): as estações do estado, as vizinhas e os pluviômetros do CEMADEN, sem as que a
+    # equipe retirou dos mapas de chuva. As cargas têm cache, com a hora cheia na chave
+    uf = config.UF
+    comeco, _ = chuva_calc.janela(hora, rotulo)
+    desde, fim = _em_utc(comeco - timedelta(hours=3)), _em_utc(hora)
+    estacoes, vizinhas = carregar_estacoes(uf), estacoes_vizinhas(uf, avisar=False)
+    leituras, _ = carregar_leituras(tuple(estacoes["CD_ESTACAO"]), tuple(estacoes["Estação"]), desde, fim, uf,
+                                    "Consultando a chuva")
+    if leituras.empty or chuva_calc.COLUNA not in leituras or leituras[chuva_calc.COLUNA].isna().all():
+        return None
+    apoio, _ = carregar_leituras(tuple(vizinhas["CD_ESTACAO"]), tuple(vizinhas["Estação"]), desde, fim, uf,
+                                 "Consultando a chuva das estações vizinhas")
+    do_cemaden = carregar_chuva_cemaden(desde, fim, uf)
+    ate = leituras.loc[leituras[chuva_calc.COLUNA].notna(), "dt_local"].max()
+    fora = retiradas_da_variavel("Chuva")
+    do_inmet, do_apoio, valores_cemaden = (retiradas.retirar(chuva_calc.acumulado(dados, ate, rotulo), fora)
+                                           for dados in (leituras, apoio, do_cemaden))
+    comeco, _ = chuva_calc.janela(ate, rotulo)
+    return {"do_inmet": do_inmet, "apoio": do_apoio, "cemaden": valores_cemaden, "comeco": comeco, "ate": ate,
+            "horas": chuva_calc.horas_da_janela(ate, rotulo), "fora": fora}
+
+
+@st.fragment(run_every=ATUALIZACAO_DOS_RAIOS)
+def corpo_das_camadas(rotulo: str, janela_raios: int | None, catalogo: tuple[camadas.Camada, ...]) -> None:
+    # O quadro, o mapa e as legendas se refazem sozinhos a cada minuto, pelos raios recentes; mexer no
+    # quadro refaz só este trecho. Cada camada só é carregada se estiver ligada (camadas.montar)
+    uf = config.UF
+    recorte = config.recorte_de(uf)
+    mapa_tela, quadro_tela = st.columns([2.4, 1.6])
+    with quadro_tela:
+        st.subheader("Camadas")
+        quadro = st.data_editor(
+            camadas.quadro_inicial(catalogo), key="quadro_de_camadas", hide_index=True, width="stretch",
+            disabled=["Camada"],
+            column_config={
+                "Camada": st.column_config.TextColumn(width="medium"),
+                "Ver": st.column_config.CheckboxColumn(width="small"),
+                "Opacidade": st.column_config.NumberColumn(min_value=0, max_value=100, step=10, format="%d%%",
+                                                           width="small"),
+                "Ordem": st.column_config.NumberColumn(min_value=1, max_value=len(catalogo), step=1, width="small",
+                                                       help="1 fica por cima de todas"),
+            })
+        st.caption("Marque **Ver** para ligar a camada, e mude a **Opacidade** e a **Ordem** (1 fica por cima de "
+                   "todas, como no QGIS).")
+    pilha = camadas.empilhadas(quadro, catalogo)
+    ligadas = {camada.chave for camada, _ in pilha}
+    hora = pd.Timestamp.now(tz=recorte.fuso).floor("h")
+    chuva = chuva_das_camadas(rotulo, hora) if ligadas & {"chuva", "estacoes_chuva"} else None
+    ate = chuva["ate"] if chuva is not None else hora
+    comeco, _ = chuva_calc.janela(ate, rotulo)
+    quando = f"{comeco:%d/%m %H:%M} a {ate:%d/%m %H:%M}"
+    produto, legenda_da_chuva = variaveis.por_nome("Chuva acumulada"), chuva_calc.legenda(rotulo)
+    # O que cada camada desenhou (sob o mapa, de cima para baixo), as frases que vêm depois (o crédito
+    # do CEMADEN, as estações retiradas), os avisos e a legenda de cada camada
+    resumo, notas, avisos, legendas = [], [], [], {}
+    if ligadas & {"chuva", "estacoes_chuva"} and chuva is None:
+        avisos.append(f"Nenhuma estação do INMET mandou chuva nas últimas {rotulo}: o mapa sai sem a chuva.")
+
+    def da_chuva(opacidade: float) -> list[pdk.Layer]:
+        valores = pd.concat([chuva["do_inmet"], chuva["cemaden"]]).dropna()
+        if len(valores) < config.MIN_ESTACOES_INTERPOLACAO:
+            avisos.append(f"Menos de {config.MIN_ESTACOES_INTERPOLACAO} estações mediram a chuva em {quando}.")
+            return []
+        niveis = niveis_da_escala(produto, chuva["horas"])
+        if niveis is not None and len(niveis) <= mapas.MAX_CLASSES:
+            legendas["chuva"] = camadas.legenda(camadas.itens_da_escala(niveis, produto.paleta, produto.unidade)[::-1],
+                                                f"{legenda_da_chuva} ({produto.unidade})")
+        resumo.append(f"chuva de {quando} ({rotulo}), de {estacoes_no_mapa(valores)}")
+        notas.append(nota_das_retiradas(chuva["fora"]) + credito_do_cemaden(valores))
+        imagem = camada_superficie(valores, produto.nome, quando, uf, niveis, chuva["apoio"])
+        return [camadas.imagem(imagem, superficie.limites(recorte), id="chuva", opacidade=opacidade)]
+
+    def das_estacoes(opacidade: float) -> list[pdk.Layer]:
+        do_inmet, do_cemaden = chuva["do_inmet"], chuva["cemaden"]
+        pontos = interativo.pontos_de_valores(_com_coordenadas(do_inmet, produto.nome, uf), produto.nome,
+                                              legenda_da_chuva, produto.unidade, produto.decimais)
+        pontos_cemaden = interativo.pontos_do_cemaden(_com_coordenadas(do_cemaden, produto.nome, uf), produto.nome,
+                                                      legenda_da_chuva, produto.unidade, produto.decimais)
+        pontos, pontos_cemaden = com_o_maior_do_grupo(pontos, do_inmet, pontos_cemaden, do_cemaden)
+        # O número só onde choveu: com os raios por cima, os zeros encheriam o mapa (como no protótipo)
+        escritas = pd.concat([pontos, pontos_cemaden], ignore_index=True)
+        choveu = escritas["Estação"].map(pd.concat([do_inmet, do_cemaden])).fillna(0).to_numpy(dtype=float) > 0
+        legendas["estacoes_chuva"] = camadas.legenda(LEGENDA_DAS_ESTACOES, "Estações")
+        return [camadas.estacoes(pontos, opacidade=opacidade),
+                *([camadas.pluviometros(pontos_cemaden, opacidade=opacidade)] if not pontos_cemaden.empty else []),
+                *camadas.rotulos_dos_valores(escritas[choveu], opacidade=opacidade)]
+
+    def da_densidade(opacidade: float) -> list[pdk.Layer]:
+        try:
+            por_celula, _ = carregar_raios_do_periodo(_em_utc(comeco), _em_utc(ate))
+        except fonte.ErroFonte as erro:
+            avisos.append(f"Não foi possível ler a densidade de raios no banco ({erro}).")
+            return []
+        celulas = raios.celulas_do_mapa(por_celula)
+        legendas["densidade_raios"] = camadas.legenda(
+            list(zip(raios.CORES_DENSIDADE, raios.rotulos_das_classes()))[::-1],
+            f"Densidade de raios ({raios.UNIDADE_DENSIDADE})")
+        resumo.append(f"densidade de raios de {quando}, em {inteiro_br(len(celulas))} células de 0,1° com flash")
+        return [camadas.quadradinhos(celulas, "densidade", opacidade)]
+
+    def dos_raios_recentes(opacidade: float) -> list[pdk.Layer]:
+        # Como o Agora da página Raios: acima de raios.LIMITE_DE_PONTOS, em quadradinhos de 0,1°
+        try:
+            flashes, ultimo, agora = carregar_raios_recentes(datetime.now(config.FUSO_UTC).strftime("%Y%m%d%H%M"))
+        except fonte.ErroFonte as erro:
+            avisos.append(f"Não foi possível ler os raios recentes no banco ({erro}).")
+            return []
+        if ultimo is None or agora - ultimo > ATRASO_ACEITO_DOS_RAIOS:
+            desde = (f"desde {ultimo.tz_convert(recorte.fuso):%d/%m %H:%M}" if ultimo is not None
+                     else f"há mais de {raios.HORAS_DO_GRAFICO} h")
+            avisos.append(f"O GLM não chega ao banco {desde}: os raios recentes mostram o que chegou até lá.")
+        legendas["raios_recentes"] = camadas.legenda(raios.rotulos_das_idades(),
+                                                     f"Raios: {raios.LEGENDA_DO_TEMPO.lower()} desde o flash")
+        pontos = raios.pontos_por_idade(flashes, agora, janela_raios, recorte.fuso)
+        if len(pontos) > raios.LIMITE_DE_PONTOS:
+            celulas = raios.celulas_da_janela(raios.em_celulas(flashes, agora), agora, janela_raios, recorte.fuso)
+            resumo.append(f"raios dos últimos {janela_raios} min: {inteiro_br(len(pontos))} flashes, em quadradinhos "
+                          "de 0,1° na cor do mais novo")
+            return [camadas.quadradinhos(celulas, "raios_recentes_celulas", opacidade)]
+        resumo.append(f"raios dos últimos {janela_raios} min: {inteiro_br(len(pontos))} flashes")
+        return [camadas.flashes(pontos, opacidade)]
+
+    construtores = {"limites": lambda opacidade: camadas.limites(*contornos_interativos(uf), opacidade=opacidade)}
+    if chuva is not None:
+        construtores |= {"chuva": da_chuva, "estacoes_chuva": das_estacoes}
+    if janela_raios is not None:
+        construtores |= {"densidade_raios": da_densidade, "raios_recentes": dos_raios_recentes}
+    deck = camadas.deck(camadas.montar(pilha, construtores), pdk.ViewState(**visao_inicial(recorte)),
+                        st.session_state.get("fundo_interativo", True))
+    with mapa_tela:
+        st.pydeck_chart(deck, key="mapa_de_camadas", height=ALTURA_DO_MAPA_DE_CAMADAS)
+        st.caption((("No mapa: " + "; ".join(reversed(resumo)) + ".") if resumo else "Nenhuma camada ligada.")
+                   + "".join(notas) + " **Passe o mouse** num ponto ou numa célula para ver o que ela tem.")
+        for aviso in avisos:
+            st.warning(aviso)
+    with quadro_tela:
+        if legendas:
+            st.subheader("Legendas")
+            for camada in catalogo:
+                if camada.chave in legendas:
+                    st.html(legendas[camada.chave])
+
+
+def pagina_camadas() -> None:
+    st.title("Mapa de camadas")
+    com_raios = fonte.tem_raios()
+    with st.sidebar:
+        st.header("Tempo")
+        rotulo = st.selectbox("Janela da chuva" + (" e da densidade de raios" if com_raios else ""), JANELAS_DAS_CAMADAS,
+                              index=JANELAS_DAS_CAMADAS.index("24 h"), key="janela_camadas",
+                              help="Conta para trás a partir da última hora com leitura do INMET.")
+        janela_raios = None
+        if com_raios:
+            janela_raios = st.segmented_control(
+                "Raios recentes", raios.JANELAS_DO_AGORA, default=raios.JANELAS_DO_AGORA[-1],
+                format_func=lambda minutos: f"{minutos} min", key="raios_camadas",
+                help="Os flashes dos últimos minutos, contados a partir de agora.") or raios.JANELAS_DO_AGORA[-1]
+        st.checkbox("Mapa de fundo", value=True, key="fundo_interativo",
+                    help="Países, cidades, estradas e rios, da internet. Desligado, ficam só os limites do estado e "
+                         "dos municípios.")
+    st.caption(f"Os produtos do painel como camadas de um SIG, em {config.NOME_UF}: ligue, desligue, mude a opacidade e "
+               "a ordem no quadro ao lado do mapa. Ele se atualiza sozinho a cada minuto."
+               + ("" if com_raios else " Os raios só vêm do banco: lendo das APIs, as camadas deles não aparecem."))
+    corpo_das_camadas(rotulo, janela_raios, camadas.disponiveis(com_raios))
+
+
 # A previsão não usa nenhum filtro do observado (estado, período, estações), e numa aba ela ficaria
 # atrás deles; como página, ela só consulta o Open-Meteo quando alguém a abre. Desde a v0.4.5, uma
 # página por assunto nos dois (veja PÁGINAS DO OBSERVADO e PÁGINAS DA PREVISÃO): no observado, o
@@ -5157,6 +5334,10 @@ pagina = st.navigation({
         st.Page(pagina_risco_previsto, title="Risco de Fogo", icon=":material/local_fire_department:",
                 url_path="previsao-risco-de-fogo"),
         st.Page(pagina_semanas, title="Semanas", icon=":material/date_range:", url_path="previsao-semanas"),
+    ],
+    # Um grupo só do CICOE (pedido de 26/11/2026): o que ele pediu fica aqui, e não no observado
+    "CICOE": [
+        st.Page(pagina_camadas, title="Mapa de camadas", icon=":material/layers:", url_path="cicoe-camadas"),
     ],
 })
 pagina.run()

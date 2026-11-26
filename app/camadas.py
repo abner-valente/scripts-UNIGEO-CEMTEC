@@ -31,6 +31,10 @@ FONTE_DO_PAINEL = "'Source Sans Pro', Arial, sans-serif"
 # expressão ("@@=meters"), e o deck.gl o leria como função. Foi assim que os números em metros da chuva
 # saíram com os 12 px de sempre de 24 a 26/11/2026, embolados atrás do maior do grupo
 TEXTOS_PUROS_DO_ROTULO = ("size_units", "get_text_anchor", "get_alignment_baseline")
+# Na chuva, o número de quem não é o maior do seu grupo de 15 km vai em metros: ~2 px com o estado
+# inteiro na tela, escondido atrás do maior, e os 12 px de sempre a partir do zoom ~8,7, quando as
+# estações do grupo já ficam a dezenas de px umas das outras
+TAMANHO_DOS_ESCONDIDOS_M = 4000
 COR_DOS_MUNICIPIOS = [70, 70, 70, 150]
 # O contorno do estado vai em duas linhas, uma clara e larga por baixo de uma escura: no mapa de fundo
 # escuro, a linha preta sozinha sumiria
@@ -93,6 +97,25 @@ def rotulos(dados: pd.DataFrame, coluna: str, posicao: list[str], deslocamento: 
     for chave, valor in puros.items():
         setattr(camada, chave, valor)
     return camada
+
+
+def rotulos_dos_valores(escritas: pd.DataFrame, posicao: list[str] | None = None, opacidade: float | None = None,
+                        **extras) -> list[pdk.Layer]:
+    # O número sobre cada estação (a coluna "rotulo" de interativo.pontos_de_valores). Com a coluna
+    # "maior_do_grupo" (a chuva), quem não é o maior do seu grupo de 15 km vem antes, por baixo, com o
+    # número em metros: cresce ao aproximar o mapa. O CollisionFilterExtension do deck.gl, que
+    # esconderia os números que se encostam, apaga todos no Streamlit 1.64 (testado em 24/11/2026)
+    posicao = posicao or ["Longitude", "Latitude"]
+    extras = {**_opacidade(opacidade), **extras}
+    pilha = []
+    if "maior_do_grupo" in escritas:
+        maior = escritas["maior_do_grupo"].astype(bool)
+        pilha.append(rotulos(escritas[~maior], "rotulo", posicao, [0, -18], get_size=TAMANHO_DOS_ESCONDIDOS_M,
+                             size_units="meters", size_min_pixels=0, size_max_pixels=ESTILO_DOS_ROTULOS["get_size"],
+                             **extras))
+        escritas = escritas[maior]
+    pilha.append(rotulos(escritas, "rotulo", posicao, [0, -18], **extras))
+    return pilha
 
 
 def estacoes(pontos: pd.DataFrame, posicao: list[str] | None = None, id: str = "estacoes",
@@ -185,18 +208,23 @@ class Camada:
     nome: str            # o que o quadro mostra
     opacidade: int = 100   # %, a de quando a página abre
     ligada: bool = True
+    dos_raios: bool = False   # os raios só vêm do banco: com a fonte "apis", a camada não aparece
 
 
 # Na ordem em que o quadro abre, de cima para baixo: o que é ponto por cima, o que é superfície por
 # baixo, como se empilha num SIG. A densidade de raios a 80% deixa ver a chuva por baixo
 CATALOGO = (
-    Camada("raios_recentes", "Raios da última hora"),
+    Camada("raios_recentes", "Raios da última hora", dos_raios=True),
     Camada("estacoes_chuva", "Estações (chuva)"),
     Camada("limites", "Limites (estado e municípios)"),
-    Camada("densidade_raios", "Densidade de raios", opacidade=80),
+    Camada("densidade_raios", "Densidade de raios", opacidade=80, dos_raios=True),
     Camada("chuva", "Chuva acumulada"),
 )
 COLUNAS_DO_QUADRO = ["Camada", "Ver", "Opacidade", "Ordem"]
+
+
+def disponiveis(com_raios: bool, catalogo: tuple[Camada, ...] = CATALOGO) -> tuple[Camada, ...]:
+    return tuple(camada for camada in catalogo if com_raios or not camada.dos_raios)
 
 
 def quadro_inicial(catalogo: tuple[Camada, ...] = CATALOGO) -> pd.DataFrame:
