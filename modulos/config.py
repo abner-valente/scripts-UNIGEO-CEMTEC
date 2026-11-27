@@ -228,9 +228,10 @@ NOME_DO_CENTRO_DOS_RAIOS = "Campo Grande"
 RAIO_DOS_RAIOS_KM = 1500
 ANEIS_DOS_RAIOS_KM = (500, 1000, 1500)
 MARGEM_DO_QUADRO_DOS_RAIOS = 1.0           # graus em volta do círculo, no PNG do boletim
-# A nossa tabela dos flashes (glm_rt, em banco/esquema.sql) guarda só os que caem a até 2.000 km de
-# Campo Grande: a do colega guardava o disco inteiro do GOES-19 (pedido de 26/11/2026)
-RAIO_DA_TABELA_GLM_KM = 2000
+# A nossa tabela dos flashes (glm_rt, em banco/esquema.sql) guarda só os que caem a até 1.500 km de
+# Campo Grande, o círculo do Agora: a do colega guardava o disco inteiro do GOES-19 (pedido de
+# 26/11/2026, com 2.000 km; antes da carga, o usuário preferiu 1.500)
+RAIO_DA_TABELA_GLM_KM = 1500
 # Os estados do Brasil e os países em volta, para os mapas do círculo (ferramentas/brasil_e_vizinhos.py)
 SHAPE_BRASIL_E_VIZINHOS = PASTA_SHP / "brasil_e_vizinhos.gpkg"
 

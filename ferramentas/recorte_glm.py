@@ -1,4 +1,4 @@
-"""Recorta os raios do colega a 2.000 km de Campo Grande e copia o que fica para a nossa tabela, a glm_rt.
+"""Recorta os raios do colega a 1.500 km de Campo Grande e copia o que fica para a nossa tabela, a glm_rt.
 
 Pedido de 26/11/2026. A tabela do colega (relampagos_glm_rt, no schema config.GLM_SCHEMA) guarda o
 disco inteiro do GOES-19: em dois meses, 104 milhões de flashes e 69 GB, três quartos deles numa

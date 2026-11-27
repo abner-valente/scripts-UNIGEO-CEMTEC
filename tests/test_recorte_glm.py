@@ -1,4 +1,4 @@
-"""O recorte dos raios do colega a 2.000 km e a cópia para a glm_rt (ferramentas/recorte_glm.py), no schema de teste."""
+"""O recorte dos raios do colega a 1.500 km e a cópia para a glm_rt (ferramentas/recorte_glm.py), no schema de teste."""
 import builtins
 from datetime import date, datetime, timedelta, timezone
 
@@ -32,9 +32,9 @@ VINTE_E_UM = datetime(2026, 11, 21, tzinfo=UTC)
 # A distância de Campo Grande entre parênteses
 CAMPO_GRANDE = (-54.62, -20.47)    # (0 km)
 PORTO_ALEGRE = (-51.23, -30.03)    # (1.116 km)
-NO_CANTO = (-68.0, -32.0)          # (1.847 km)
-SALVADOR = (-38.50, -12.97)        # (1.907 km)
-MANAUS = (-60.02, -3.10)           # (2.018 km): fora, por pouco
+RIO = (-43.20, -22.90)             # (1.210 km)
+VITORIA = (-40.30, -20.32)         # (1.492 km): dentro, por pouco
+ROSARIO = (-60.64, -32.95)         # (1.510 km): fora, por pouco, mas dentro da caixa do círculo
 RECIFE = (-34.88, -8.05)           # (2.532 km)
 BOGOTA = (-74.07, 4.71)            # (3.514 km): fora até da caixa do círculo
 SEM_CENA_DE_VERDADE = "Limite de tentativas atingido; cena não localizada no S3."
@@ -74,7 +74,7 @@ def colega(conexao, monkeypatch):
 
 @pytest.fixture
 def dois_dias(colega):
-    colega.arquivo(10, VINTE, [CAMPO_GRANDE, PORTO_ALEGRE, NO_CANTO, SALVADOR, MANAUS, RECIFE, BOGOTA])
+    colega.arquivo(10, VINTE, [CAMPO_GRANDE, PORTO_ALEGRE, RIO, VITORIA, ROSARIO, RECIFE, BOGOTA])
     colega.arquivo(11, VINTE + timedelta(seconds=20), status=banco.SEM_CENA, mensagem=SEM_CENA_DE_VERDADE)
     colega.arquivo(12, VINTE + timedelta(seconds=40), status=banco.SEM_CENA,
                    mensagem=f"RaiseException: {trava_glm.MOTIVO}\nCONTEXT:  ")
@@ -90,7 +90,7 @@ def todos(conexao, consulta: str) -> list[tuple]:
     return linhas
 
 
-def test_copiar_leva_os_flashes_ate_2000_km_com_os_mesmos_ids_e_sem_o_jsonb(conexao, dois_dias):
+def test_copiar_leva_os_flashes_ate_1500_km_com_os_mesmos_ids_e_sem_o_jsonb(conexao, dois_dias):
     assert recorte_glm.copiar(conexao, pausa=0) == (3, 5)
 
     copiados = todos(conexao, "SELECT g.id_registro, g.id_cena, g.flash_lon, g.flash_lat, g.time_utc, "
@@ -99,7 +99,7 @@ def test_copiar_leva_os_flashes_ate_2000_km_com_os_mesmos_ids_e_sem_o_jsonb(cone
     originais = todos(conexao, "SELECT id_registro, id_cena, flash_lon, flash_lat, time_utc, "
                                "flash_time_offset_of_last_event, flash_area, flash_lon, flash_lat "
                                "FROM relampagos_glm_rt WHERE id_registro IN (1, 2, 3, 4, 8) ORDER BY id_registro")
-    assert copiados == originais     # Campo Grande, Porto Alegre, No canto, Salvador e Campo Grande do dia 21
+    assert copiados == originais     # Campo Grande, Porto Alegre, Rio, Vitória e Campo Grande do dia 21
     colunas = {nome for (nome,) in todos(conexao, "SELECT column_name FROM information_schema.columns "
                                                   f"WHERE table_schema = '{SCHEMA_DE_TESTE}' AND table_name = 'glm_rt'")}
     assert "atributos_originais" not in colunas and "geom" in colunas
@@ -147,7 +147,7 @@ def test_cortar_simulando_so_conta(conexao, dois_dias):
     assert todos(conexao, "SELECT count(*) FROM relampagos_glm_rt") == [(9,)]
 
 
-def test_cortar_apaga_so_o_que_esta_alem_de_2000_km_mesmo_com_a_trava_ligada(conexao, dois_dias):
+def test_cortar_apaga_so_o_que_esta_alem_de_1500_km_mesmo_com_a_trava_ligada(conexao, dois_dias):
     trava_glm.parar(conexao, SCHEMA_DE_TESTE)
 
     assert recorte_glm.cortar(conexao, pausa=0) == (0, 4)

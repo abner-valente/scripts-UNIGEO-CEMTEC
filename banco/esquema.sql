@@ -276,12 +276,12 @@ COMMENT ON TABLE raios_glm_coleta IS
     'Até onde o coletor dos raios leu o controle do GLM: o maior id que ele já viu. Uma linha só.';
 
 -- =====================================================
--- OS FLASHES DO GLM ATÉ 2.000 KM DE CAMPO GRANDE
+-- OS FLASHES DO GLM ATÉ 1.500 KM DE CAMPO GRANDE
 -- =====================================================
 -- A nossa cópia das tabelas do colega (eventos_atmosfericos_rt), pedida em 26/11/2026: a dele guarda
 -- o disco inteiro do GOES-19 (~1 GB por dia), com uma coluna jsonb que repete as outras e pesa 74%
--- da linha. Aqui ficam só os flashes a até config.RAIO_DA_TABELA_GLM_KM de Campo Grande (~55% deles,
--- medido em 26/11/2026), sem o jsonb. As colunas, os nomes e a ligação com o controle (id_cena é o id
+-- da linha. Aqui ficam só os flashes a até config.RAIO_DA_TABELA_GLM_KM de Campo Grande (1.500 km, o
+-- círculo do Agora: ~42% deles, medido em 27/11/2026), sem o jsonb. As colunas, os nomes e a ligação com o controle (id_cena é o id
 -- do arquivo de 20 s) são os da dele, para as consultas dos raios valerem nas duas. O que já estava
 -- lá entra com os mesmos ids, por ferramentas/recorte_glm.py; o que o nosso coletor gravar, a partir
 -- de 1 bilhão.
@@ -327,7 +327,7 @@ CREATE TABLE IF NOT EXISTS glm_rt (
 CREATE INDEX IF NOT EXISTS glm_rt_cena ON glm_rt (id_cena);
 CREATE INDEX IF NOT EXISTS glm_rt_hora ON glm_rt (time_utc);
 COMMENT ON TABLE glm_rt IS
-    'Os flashes do GLM do GOES-19 a até 2.000 km de Campo Grande, um por linha. Colunas da '
+    'Os flashes do GLM do GOES-19 a até 1.500 km de Campo Grande, um por linha. Colunas da '
     'relampagos_glm_rt do colega, sem a atributos_originais.';
 COMMENT ON COLUMN glm_rt.id_cena IS 'O arquivo de 20 s que trouxe o flash (controle_glm_rt.id).';
 COMMENT ON COLUMN glm_rt.time_utc IS
