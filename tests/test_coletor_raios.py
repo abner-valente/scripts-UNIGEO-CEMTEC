@@ -1,7 +1,8 @@
-"""Os raios do GLM: as leituras das tabelas do colega, a contagem por hora e célula e o coletor.
+"""Os raios do GLM: as leituras dos flashes, a contagem por hora e célula e o coletor.
 
-As duas tabelas do colega são imitadas no schema de teste, só com as colunas que o projeto lê. Os
-testes que usam o banco são pulados sem ele (a fixture `conexao`, no conftest.py).
+Os testes do banco rodam nas duas fontes (config.FONTE_GLM): a nossa glm_rt, do esquema, e as duas
+tabelas do colega, imitadas no schema de teste só com as colunas que o projeto lê. São pulados sem o
+banco (a fixture `conexao`, no conftest.py).
 """
 from datetime import datetime, timedelta, timezone
 
@@ -48,17 +49,22 @@ def hora(texto: str) -> pd.Timestamp:
     return pd.Timestamp(f"2026-11-18 {texto}", tz="UTC")
 
 
+# O controle e os flashes de cada fonte
+TABELAS = {"nossa": ("controle_glm_rt", "glm_rt"), "colega": ("controle_processamento_glm", "relampagos_glm_rt")}
+
+
 class GLM:
-    # Escreve arquivos de 20 s nas tabelas imitadas, como o script do colega
-    def __init__(self, conexao):
+    # Escreve arquivos de 20 s nas tabelas da fonte, como o script do colega ou o nosso coletor
+    def __init__(self, conexao, fonte: str):
         self.conexao = conexao
+        self.controle, self.tabela = TABELAS[fonte]
         self.proximo_id = 1
 
     def arquivo(self, referencia: datetime, flashes=(), status: str = banco.CONCLUIDO, id_: int | None = None) -> int:
         id_ = id_ if id_ is not None else self.proximo_id
         self.proximo_id = max(self.proximo_id, id_) + 1
-        self.conexao.execute("INSERT INTO controle_processamento_glm VALUES (%s, %s, %s, now())",
-                             (id_, referencia, status))
+        self.conexao.execute(f"INSERT INTO {self.controle} (id, data_hora_referencia, status, concluido_em) "
+                             "VALUES (%s, %s, %s, now())", (id_, referencia, status))
         self.flashes(id_, referencia, flashes)
         self.conexao.commit()
         return id_
@@ -67,24 +73,25 @@ class GLM:
         # Cada flash: (longitude, latitude) ou (longitude, latitude, segundos depois da referência)
         for flash in flashes:
             lon, lat, segundos = (*flash, 5.0) if len(flash) == 2 else flash
-            self.conexao.execute("INSERT INTO relampagos_glm_rt (id_cena, time_utc, flash_lat, flash_lon, "
+            self.conexao.execute(f"INSERT INTO {self.tabela} (id_cena, time_utc, flash_lat, flash_lon, "
                                  "flash_quality_flag) VALUES (%s, %s, %s, %s, 0)",
                                  (id_, referencia + timedelta(seconds=segundos), lat, lon))
 
     def concluir(self, id_: int, referencia: datetime, flashes=()) -> None:
-        self.conexao.execute("UPDATE controle_processamento_glm SET status = %s WHERE id = %s", (banco.CONCLUIDO, id_))
+        self.conexao.execute(f"UPDATE {self.controle} SET status = %s WHERE id = %s", (banco.CONCLUIDO, id_))
         self.flashes(id_, referencia, flashes)
         self.conexao.commit()
 
 
-@pytest.fixture
-def glm(conexao, monkeypatch):
+@pytest.fixture(params=["nossa", "colega"])
+def glm(conexao, monkeypatch, request):
     monkeypatch.setattr(config, "GLM_SCHEMA", SCHEMA_DE_TESTE)
+    monkeypatch.setattr(config, "FONTE_GLM", request.param)
     conexao.execute(ESQUEMA_DO_GLM)
-    conexao.execute("TRUNCATE controle_processamento_glm, relampagos_glm_rt, raios_glm_hora, raios_glm_cobertura, "
-                    "raios_glm_coleta")
+    conexao.execute("TRUNCATE controle_processamento_glm, relampagos_glm_rt, controle_glm_rt, glm_rt, raios_glm_hora, "
+                    "raios_glm_cobertura, raios_glm_coleta")
     conexao.commit()
-    return GLM(conexao)
+    return GLM(conexao, request.param)
 
 
 def contagem(conexao) -> dict[tuple, int]:

@@ -516,10 +516,11 @@ def ler_inmet(conexao: psycopg.Connection, inicio, fim, estacoes: list[str] | No
 # =====================================================
 # OS RAIOS DO GLM
 # =====================================================
-# As tabelas do colega (config.GLM_SCHEMA) não têm índice no horário dos flashes, mas a de controle
-# tem, na referência de cada arquivo de 20 s, e os flashes têm no arquivo (id_cena é o id do
-# controle). Toda leitura delas vai por ali: uma hora fora do cache sai em ~1 s; pelo horário dos
-# flashes, 24 h levavam ~1 min, e piorava conforme a tabela cresce (medido em 19 e 23/11/2026).
+# Os flashes vêm da glm_rt, que o nosso coletor alimenta, ou das tabelas do colega (config.FONTE_GLM):
+# as colunas e a ligação com o controle são as mesmas. A dele não tem índice no horário dos flashes,
+# mas o controle tem, na referência de cada arquivo de 20 s, e os flashes têm no arquivo (id_cena é o
+# id do controle). Toda leitura vai por ali: uma hora fora do cache sai em ~1 s; pelo horário dos
+# flashes, 24 h levavam ~1 min na dele, e piorava conforme a tabela cresce (medido em 19 e 23/11/2026).
 # Os arquivos vão num CTE materializado: sozinho, o planejador lia o controle inteiro pela chave
 # (~2 s a mais por consulta, crescendo com o histórico até 2018)
 CONCLUIDO, SEM_CENA = "CONCLUIDO", "ENCERRADO_SEM_CENA"
@@ -541,25 +542,44 @@ def _do_glm(tabela: str) -> sql.Identifier:
     return sql.Identifier(_conferir_nome(config.GLM_SCHEMA), tabela)
 
 
+def _tabelas_do_glm() -> tuple[sql.Identifier, sql.Identifier]:
+    # O controle e os flashes. Os nossos ficam no schema da conexão (o climageo, ou o de teste)
+    if config.FONTE_GLM == "nossa":
+        return sql.Identifier("controle_glm_rt"), sql.Identifier("glm_rt")
+    if config.FONTE_GLM == "colega":
+        return _do_glm("controle_processamento_glm"), _do_glm("relampagos_glm_rt")
+    raise ErroBanco(f"FONTE_GLM inválida: {config.FONTE_GLM!r} (é nossa ou colega)")
+
+
+def _controle_do_glm() -> sql.Identifier:
+    return _tabelas_do_glm()[0]
+
+
+def _flashes_do_glm() -> sql.Identifier:
+    return _tabelas_do_glm()[1]
+
+
 def _caixa_dos_raios() -> dict:
     oeste, sul, leste, norte = config.CAIXA_RAIOS
     return {"oeste": oeste, "sul": sul, "leste": leste, "norte": norte}
 
 
-def _circulo_dos_raios() -> dict:
-    oeste, sul, leste, norte = calculos.caixa_do_circulo(config.CENTRO_DOS_RAIOS, config.RAIO_DOS_RAIOS_KM)
+def circulo_dos_raios(km: float | None = None) -> dict:
+    # Os parâmetros de NO_CIRCULO: o do Agora, ou outro raio (o da glm_rt, config.RAIO_DA_TABELA_GLM_KM)
+    km = config.RAIO_DOS_RAIOS_KM if km is None else km
+    oeste, sul, leste, norte = calculos.caixa_do_circulo(config.CENTRO_DOS_RAIOS, km)
     folga = FOLGA_DA_CAIXA_DO_CIRCULO
     lon, lat = config.CENTRO_DOS_RAIOS
     return {"c_oeste": oeste - folga, "c_sul": sul - folga, "c_leste": leste + folga, "c_norte": norte + folga,
-            "c_lon": lon, "c_lat": lat, "c_metros": config.RAIO_DOS_RAIOS_KM * 1000.0}
+            "c_lon": lon, "c_lat": lat, "c_metros": km * 1000.0}
 
 
 @_sem_deixar_transacao
 def controle_do_glm(conexao: psycopg.Connection, depois_do_id: int) -> pd.DataFrame:
-    # Os arquivos que entraram no controle depois do id: o do tempo real e o do histórico, que o
-    # colega preenche de trás para frente. O id cresce na ordem em que entram
+    # Os arquivos que entraram no controle depois do id. O id cresce na ordem em que entram; no
+    # nosso, o arquivo que chega depois de dado por perdido ganha um id novo
     tabela = _tabela(conexao, sql.SQL("SELECT id, data_hora_referencia AS referencia, status FROM {} "
-                                      "WHERE id > %s ORDER BY id").format(_do_glm("controle_processamento_glm")),
+                                      "WHERE id > %s ORDER BY id").format(_controle_do_glm()),
                      (depois_do_id,))
     return _horas_em_utc(tabela, ["referencia"])
 
@@ -574,7 +594,7 @@ def arquivos_do_glm(conexao: psycopg.Connection, horas: Iterable) -> pd.DataFram
         "count(c.id) FILTER (WHERE c.status = %s) AS sem_arquivo "
         "FROM unnest(%s::timestamptz[]) AS h(hora) LEFT JOIN {} c "
         "ON c.data_hora_referencia >= h.hora - interval '1 hour' AND c.data_hora_referencia < h.hora "
-        "GROUP BY h.hora ORDER BY h.hora").format(_do_glm("controle_processamento_glm")),
+        "GROUP BY h.hora ORDER BY h.hora").format(_controle_do_glm()),
         (CONCLUIDO, SEM_CENA, horas))
     return _horas_em_utc(tabela, ["hora_utc"]).astype({"arquivos": int, "sem_arquivo": int})
 
@@ -590,7 +610,7 @@ def contar_raios(conexao: psycopg.Connection, de, ate, arquivos: pd.DataFrame) -
         "SELECT date_trunc('hour', c.data_hora_referencia) + interval '1 hour', "
         "floor(r.flash_lon * %(celulas)s)::smallint, floor(r.flash_lat * %(celulas)s)::smallint, count(*) "
         "FROM c JOIN {} r ON r.id_cena = c.id WHERE {} GROUP BY 1, 2, 3 RETURNING hora_utc, flashes")
-        .format(_do_glm("controle_processamento_glm"), _do_glm("relampagos_glm_rt"), NA_CAIXA),
+        .format(_controle_do_glm(), _flashes_do_glm(), NA_CAIXA),
         {"celulas": config.CELULAS_POR_GRAU_RAIOS, "de": de, "ate": ate, **_caixa_dos_raios()}).fetchall()
     por_hora: dict[pd.Timestamp, int] = {}
     for hora, flashes in contadas:
@@ -659,14 +679,14 @@ def ler_raios_por_celula(conexao: psycopg.Connection, inicio, fim) -> pd.DataFra
 
 @_sem_deixar_transacao
 def ler_raios_recentes(conexao: psycopg.Connection, desde, ate) -> pd.DataFrame:
-    # Os flashes de [desde, ate) na caixa, cada um no seu horário, direto da tabela do colega. O
+    # Os flashes de [desde, ate) na caixa, cada um no seu horário, direto da tabela dos flashes. O
     # flash que começou pouco antes de um arquivo vem nele: os arquivos começam 1 minuto antes
     desde, ate = _em_utc(desde), _em_utc(ate)
     tabela = _tabela(conexao, sql.SQL(ARQUIVOS_DO_TRECHO +
         "SELECT r.time_utc AS hora_utc, r.flash_lon AS longitude, r.flash_lat AS latitude "
         "FROM c JOIN {} r ON r.id_cena = c.id "
         "WHERE r.time_utc >= %(desde)s AND r.time_utc < %(ate)s AND {} ORDER BY r.time_utc")
-        .format(_do_glm("controle_processamento_glm"), _do_glm("relampagos_glm_rt"), NA_CAIXA),
+        .format(_controle_do_glm(), _flashes_do_glm(), NA_CAIXA),
         {"de": desde - timedelta(minutes=1), "desde": desde, "ate": ate, **_caixa_dos_raios()})
     return _numeros(_horas_em_utc(tabela, ["hora_utc"]), ["longitude", "latitude"])
 
@@ -683,9 +703,9 @@ def ler_celulas_do_circulo(conexao: psycopg.Connection, desde, ate, idades: list
         "width_bucket(extract(epoch FROM %(ate)s - r.time_utc) / 60, %(idades)s::float8[]) AS faixa, "
         "count(*)::int AS flashes, max(r.time_utc) AS mais_novo FROM c JOIN {} r ON r.id_cena = c.id "
         "WHERE r.time_utc >= %(desde)s AND r.time_utc < %(ate)s AND {} AND NOT ({}) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3")
-        .format(_do_glm("controle_processamento_glm"), _do_glm("relampagos_glm_rt"), NO_CIRCULO, NA_CAIXA),
+        .format(_controle_do_glm(), _flashes_do_glm(), NO_CIRCULO, NA_CAIXA),
         {"de": desde - timedelta(minutes=1), "desde": desde, "ate": ate, "celulas": config.CELULAS_POR_GRAU_RAIOS,
-         "idades": [float(minutos) for minutos in idades[:-1]], **_caixa_dos_raios(), **_circulo_dos_raios()})
+         "idades": [float(minutos) for minutos in idades[:-1]], **_caixa_dos_raios(), **circulo_dos_raios()})
     tabela = _horas_em_utc(tabela, ["mais_novo"])
     return tabela.astype({"lon_celula": int, "lat_celula": int, "faixa": int, "flashes": int})
 
@@ -697,8 +717,8 @@ def ler_raios_do_circulo(conexao: psycopg.Connection, desde, ate) -> pd.DataFram
     tabela = _tabela(conexao, sql.SQL(ARQUIVOS_DO_TRECHO +
         "SELECT r.time_utc AS hora_utc, r.flash_lon AS longitude, r.flash_lat AS latitude "
         "FROM c JOIN {} r ON r.id_cena = c.id WHERE r.time_utc >= %(desde)s AND r.time_utc < %(ate)s AND {} "
-        "ORDER BY r.time_utc").format(_do_glm("controle_processamento_glm"), _do_glm("relampagos_glm_rt"), NO_CIRCULO),
-        {"de": desde - timedelta(minutes=1), "desde": desde, "ate": ate, **_circulo_dos_raios()})
+        "ORDER BY r.time_utc").format(_controle_do_glm(), _flashes_do_glm(), NO_CIRCULO),
+        {"de": desde - timedelta(minutes=1), "desde": desde, "ate": ate, **circulo_dos_raios()})
     return _numeros(_horas_em_utc(tabela, ["hora_utc"]), ["longitude", "latitude"])
 
 
@@ -706,6 +726,57 @@ def ler_raios_do_circulo(conexao: psycopg.Connection, desde, ate) -> pd.DataFram
 def ultimo_arquivo_do_glm(conexao: psycopg.Connection, desde) -> pd.Timestamp | None:
     # A referência do arquivo processado mais novo desde então: até ali, os flashes estão no banco
     (ultimo,) = conexao.execute(sql.SQL("SELECT max(data_hora_referencia) FROM {} WHERE status = %s "
-                                        "AND data_hora_referencia >= %s").format(_do_glm("controle_processamento_glm")),
+                                        "AND data_hora_referencia >= %s").format(_controle_do_glm()),
                                 (CONCLUIDO, _em_utc(desde))).fetchone()
     return pd.Timestamp(ultimo).tz_convert("UTC") if ultimo is not None else None
+
+
+# =====================================================
+# A GLM_RT, QUE O NOSSO COLETOR ALIMENTA
+# =====================================================
+COLUNAS_GLM_RT = ["flash_id", "time_utc", "flash_time_offset_of_first_event", "flash_time_offset_of_last_event",
+                  "flash_frame_time_offset_of_first_event", "flash_frame_time_offset_of_last_event",
+                  "flash_lat", "flash_lon", "flash_area", "flash_energy", "flash_quality_flag"]
+PERDIDO_PELA_NOAA = "O arquivo não apareceu no bucket da NOAA depois de a hora fechar"
+
+
+@_sem_deixar_transacao
+def arquivos_da_glm_rt(conexao: psycopg.Connection, de, ate) -> dict[pd.Timestamp, str]:
+    # Os arquivos de [de, ate) no nosso controle, pela referência, com o status de cada um
+    linhas = conexao.execute("SELECT data_hora_referencia, status FROM controle_glm_rt "
+                             "WHERE data_hora_referencia >= %s AND data_hora_referencia < %s",
+                             (_em_utc(de), _em_utc(ate))).fetchall()
+    return {pd.Timestamp(referencia).tz_convert("UTC"): status for referencia, status in linhas}
+
+
+def gravar_arquivo_glm(conexao: psycopg.Connection, referencia, chave: str, flashes: pd.DataFrame) -> int | None:
+    # Um arquivo de 20 s numa transação: a linha dele no controle e os flashes. A linha é sempre nova,
+    # mesmo no lugar de um "sem cena": o coletar.py raios acha o que mudou pelos ids novos. Se outro
+    # processo gravou o arquivo antes (o tempo real e a busca de um dia juntos), não faz nada e
+    # devolve None; senão, o id do arquivo
+    referencia = _em_utc(referencia)
+    conexao.execute("DELETE FROM controle_glm_rt WHERE data_hora_referencia = %s AND status <> %s",
+                    (referencia, CONCLUIDO))
+    linha = conexao.execute("INSERT INTO controle_glm_rt (data_hora_referencia, source_key, status, tentativas, "
+                            "concluido_em) VALUES (%s, %s, %s, 1, now()) ON CONFLICT (data_hora_referencia) "
+                            "DO NOTHING RETURNING id", (referencia, chave, CONCLUIDO)).fetchone()
+    if linha is None:
+        conexao.rollback()
+        return None
+    (id_cena,) = linha
+    with conexao.cursor() as cursor:
+        comando = sql.SQL("COPY glm_rt (id_cena, {}) FROM STDIN").format(_lista(COLUNAS_GLM_RT))
+        with cursor.copy(comando) as copia:
+            for valores in _linhas(flashes, COLUNAS_GLM_RT):
+                copia.write_row((id_cena, *valores))
+    conexao.commit()
+    return id_cena
+
+
+def marcar_sem_cena(conexao: psycopg.Connection, referencias: Iterable) -> None:
+    # Os trechos de 20 s que a NOAA não publicou, se ainda não estão no controle
+    with conexao.cursor() as cursor:
+        cursor.executemany("INSERT INTO controle_glm_rt (data_hora_referencia, status, tentativas, mensagem_erro) "
+                           "VALUES (%s, %s, 1, %s) ON CONFLICT (data_hora_referencia) DO NOTHING",
+                           [(_em_utc(referencia), SEM_CENA, PERDIDO_PELA_NOAA) for referencia in referencias])
+    conexao.commit()

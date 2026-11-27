@@ -1,13 +1,13 @@
 """O coletor dos raios: conta os flashes do GLM (GOES-19) do estado por hora e por célula de 0,1°.
 
-Os flashes vêm das tabelas que um colega da unidade alimenta no mesmo banco (config.GLM_SCHEMA): uma
-linha por flash, do disco inteiro, sem índice no horário. O painel não lê um mês dali; lê a contagem
+Os flashes vêm da glm_rt, que o nosso coletor do GLM alimenta (coletor_glm.py), ou das tabelas de um
+colega da unidade (config.FONTE_GLM): uma linha por flash. O painel não lê um mês dali; lê a contagem
 que este coletor guarda em `raios_glm_hora` (veja banco/esquema.sql).
 
 O `coletar.py raios` roda de 10 em 10 minutos. Cada execução:
 
-- lê no controle do colega os arquivos de 20 s que entraram desde a anterior. São os do tempo real e
-  os do histórico, que ele preenche de trás para frente, de hoje até 2018: o nosso acompanha sozinho;
+- lê no controle os arquivos de 20 s que entraram desde a anterior: os do tempo real e os de um dia
+  buscado à mão, ou os do histórico que o colega preenchia de trás para frente;
 - junta as horas que já estavam contadas sem os 180 arquivos: o arquivo pendente pode chegar depois;
 - dessas horas, recontar só as que têm arquivo diferente do que estava na contagem.
 
