@@ -10,14 +10,19 @@ coluna jsonb que repete as outras. A gravação nela está parada (ferramentas/t
   controle. Ficam de fora os pendentes e os que bateram na trava (o script do colega os encerrou
   como "sem cena", mas a NOAA os tem): o nosso coletor os busca. Pode rodar de novo: só copia o que
   falta;
-- cortar: apaga da tabela do colega os flashes além do raio. Com --simular, só conta.
+- cortar: apaga da tabela do colega os flashes além do raio. Com --simular, só conta;
+- compactar: devolve ao disco o espaço que o corte liberou (VACUUM FULL). Com --simular, só mostra o
+  tamanho de hoje e o que ela teria reescrita.
 
 As gravações vão dia a dia, um dia por transação, pela rota dos raios: os arquivos do dia no
 controle, e os flashes deles pelo id_cena (a tabela não tem índice no horário). Quem lê a tabela
 enquanto isso não espera nada. A ordem entre copiar e cortar não muda o que vai para a glm_rt.
 
 O corte não diminui o arquivo da tabela: o espaço apagado fica para ela mesma reaproveitar. Devolver
-o disco pede um VACUUM FULL, que bloqueia até a leitura enquanto roda (combinar com o colega).
+o disco pede o compactar, um VACUUM FULL: ele reescreve a tabela e os índices e, enquanto roda
+(dezenas de minutos), ninguém lê nem grava nela, nem o ArcGIS. Precisa de espaço livre no disco do
+banco para a cópia nova, que a simulação estima. Melhor de noite, e depois que o painel lê a glm_rt
+(config.FONTE_GLM).
 
 Quem roda o copiar e o cortar é o usuário, com o papel de gravação (o dono da tabela). Da raiz do projeto:
 
@@ -27,6 +32,8 @@ Quem roda o copiar e o cortar é o usuário, com o papel de gravação (o dono d
     python ferramentas/recorte_glm.py cortar --simular
     python ferramentas/recorte_glm.py cortar
     python ferramentas/recorte_glm.py cortar --desde 2026-10-15   # retoma a partir de um dia
+    python ferramentas/recorte_glm.py compactar --simular
+    python ferramentas/recorte_glm.py compactar
 """
 import argparse
 import sys
@@ -242,6 +249,63 @@ def cortar(conexao: psycopg.Connection, simular: bool = False, desde: date | Non
     return total_lido, total_fora
 
 
+# Por linha, além dos dados: o cabeçalho (23 bytes, alinhado a 24) e o ponteiro dela na página (4)
+BYTES_POR_LINHA = 28
+BYTES_UTEIS_DA_PAGINA = 8192 - 24
+AMOSTRA_DO_TAMANHO = 0.05   # % dos blocos
+
+
+def tamanho(conexao: psycopg.Connection) -> dict:
+    # A tabela do colega hoje e reescrita: os flashes vivos (pela última passada do VACUUM ou do
+    # ANALYZE, que o autovacuum faz depois do corte), com o tamanho médio de uma amostra de blocos, em
+    # páginas cheias. Os índices voltam na mesma proporção da tabela: eles também guardavam os apagados
+    nome = f"{config.GLM_SCHEMA}.{FLASHES}"
+    total, dados, indices, vivos = conexao.execute(
+        "SELECT pg_total_relation_size(%(nome)s::regclass), pg_relation_size(%(nome)s::regclass), "
+        "pg_indexes_size(%(nome)s::regclass), (SELECT greatest(reltuples, 0)::bigint FROM pg_class "
+        "WHERE oid = %(nome)s::regclass)", {"nome": nome}).fetchone()
+    (media,) = conexao.execute(sql.SQL("SELECT avg(pg_column_size(r.*)) FROM {} r TABLESAMPLE SYSTEM ({})")
+                               .format(_dele(FLASHES), sql.Literal(AMOSTRA_DO_TAMANHO))).fetchone()
+    if media is None:
+        # A amostra de blocos sai vazia numa tabela pequena
+        (media,) = conexao.execute(sql.SQL("SELECT avg(pg_column_size(r.*)) FROM (SELECT * FROM {} LIMIT 1000) r")
+                                   .format(_dele(FLASHES))).fetchone()
+    conexao.rollback()
+    por_pagina = BYTES_UTEIS_DA_PAGINA // (float(media or 0) + BYTES_POR_LINHA)
+    dados_depois = -(-vivos // por_pagina) * 8192 if vivos and por_pagina else 0
+    indices_depois = indices * dados_depois / dados if dados else 0
+    return {"total": total, "dados": dados, "indices": indices, "vivos": vivos, "dados_depois": dados_depois,
+            "indices_depois": indices_depois, "total_depois": dados_depois + indices_depois}
+
+
+def compactar(conexao: psycopg.Connection) -> None:
+    # O VACUUM não roda dentro de uma transação. Sem limite de tempo; a espera pela trava, sim, para
+    # não segurar na fila quem chegar depois enquanto uma leitura comprida termina
+    conexao.commit()
+    conexao.autocommit = True
+    try:
+        conexao.execute("SET statement_timeout = 0")
+        for tentativa in range(1, TENTATIVAS + 1):
+            try:
+                conexao.execute(sql.SQL("VACUUM (FULL, ANALYZE) {}").format(_dele(FLASHES)))
+                return
+            except psycopg.errors.LockNotAvailable:
+                print(f"   a tabela estava em uso por outra sessão (tentativa {tentativa} de {TENTATIVAS}); "
+                      f"de novo em {PAUSA_NA_TRAVA} s", flush=True)
+                time.sleep(PAUSA_NA_TRAVA)
+        raise banco.ErroBanco(f"a tabela ficou em uso nas {TENTATIVAS} tentativas: rode de novo mais tarde")
+    finally:
+        conexao.execute(sql.SQL("SET statement_timeout = {}").format(sql.Literal(LIMITE_DO_DIA)))
+        conexao.autocommit = False
+
+
+def _confirmado_compactar(t: dict) -> bool:
+    print(f"Isto reescreve {config.GLM_SCHEMA}.{FLASHES}, a tabela do colega, de {_gb(t['total'])} para "
+          f"~{_gb(t['total_depois'])}. Enquanto roda (dezenas de minutos), ninguém lê nem grava nela, nem o "
+          f"ArcGIS, e o disco do banco precisa de ~{_gb(t['total_depois'])} livres para a cópia nova.")
+    return input("Para seguir, digite COMPACTAR: ").strip() == "COMPACTAR"
+
+
 def _confirmado() -> bool:
     print(f"Isto apaga de {config.GLM_SCHEMA}.{FLASHES}, a tabela do colega, os flashes a mais de "
           f"{_n(config.RAIO_DA_TABELA_GLM_KM)} km de {config.NOME_DO_CENTRO_DOS_RAIOS}. Não tem volta.")
@@ -255,6 +319,8 @@ def argumentos(linha: list[str] | None = None) -> argparse.Namespace:
     copia = acoes.add_parser("copiar", help="copia para a glm_rt o que está dentro do raio, dia a dia")
     corte = acoes.add_parser("cortar", help="apaga da tabela do colega o que está além do raio, dia a dia")
     corte.add_argument("--simular", action="store_true", help="só conta, dia a dia, o que seria apagado")
+    compacta = acoes.add_parser("compactar", help="devolve ao disco o espaço liberado pelo corte (VACUUM FULL)")
+    compacta.add_argument("--simular", action="store_true", help="só mostra o tamanho de hoje e o estimado")
     for acao in (copia, corte):
         acao.add_argument("--desde", type=date.fromisoformat, metavar="AAAA-MM-DD", help="começa neste dia (UTC)")
         acao.add_argument("--pausa", type=float, default=PAUSA, metavar="SEGUNDOS",
@@ -268,6 +334,8 @@ def main(linha: list[str] | None = None) -> int:
     if opcoes.acao == "cortar" and not simular and not _confirmado():
         print("Nada foi apagado.")
         return 1
+    if opcoes.acao == "compactar":
+        return main_compactar(simular)
     so_le = opcoes.acao == "estimar" or simular
     raio = f"{_n(config.RAIO_DA_TABELA_GLM_KM)} km de {config.NOME_DO_CENTRO_DOS_RAIOS}"
     try:
@@ -296,6 +364,33 @@ def main(linha: list[str] | None = None) -> int:
                 else:
                     print(f"Pronto: {_n(fora)} flashes apagados. O arquivo da tabela não diminui: o espaço fica "
                           "para ela reaproveitar, depois que o autovacuum passar.")
+    except (banco.ErroBanco, psycopg.Error) as erro:
+        print(f"Banco: {erro}")
+        return 1
+    return 0
+
+
+def main_compactar(simular: bool) -> int:
+    try:
+        with banco.conectar("leitura") as conexao:
+            antes = tamanho(conexao)
+        print(f"{config.GLM_SCHEMA}.{FLASHES}: {_gb(antes['total'])} ({_gb(antes['dados'])} de dados e "
+              f"{_gb(antes['indices'])} de índices), {_n(antes['vivos'])} flashes. Reescrita, ficaria com "
+              f"~{_gb(antes['total_depois'])} (~{_gb(antes['dados_depois'])} e ~{_gb(antes['indices_depois'])}).")
+        if simular:
+            return 0
+        if not _confirmado_compactar(antes):
+            print("Nada foi feito.")
+            return 1
+        comeco = time.monotonic()
+        print(f"Compactando, desde as {datetime.now():%H:%M}. Não feche este terminal...", flush=True)
+        with banco.conectar("gravacao") as conexao:
+            _preparar(conexao)
+            compactar(conexao)
+        with banco.conectar("leitura") as conexao:
+            depois = tamanho(conexao)
+        print(f"Pronto em {(time.monotonic() - comeco) / 60:.0f} min: de {_gb(antes['total'])} para "
+              f"{_gb(depois['total'])}.")
     except (banco.ErroBanco, psycopg.Error) as erro:
         print(f"Banco: {erro}")
         return 1

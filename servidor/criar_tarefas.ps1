@@ -1,18 +1,22 @@
-# Cria (ou recria) no Agendador de Tarefas do Windows as seis tarefas dos coletores do banco:
+# Cria (ou recria) no Agendador de Tarefas do Windows as sete tarefas dos coletores do banco:
 #   UNIGEO - coletor INMET           de hora em hora, aos 50 minutos   coletar.bat inmet
 #   UNIGEO - coletor INMET extras    todo dia, as 03:00                coletar.bat inmet --extras
 #   UNIGEO - coletor INMET revisao   todo domingo, a 01:05             coletar.bat inmet --revisar 30
 #   UNIGEO - coletor previsao        de hora em hora, aos 15 minutos   coletar.bat previsao
 #   UNIGEO - coletor CEMADEN         de hora em hora, aos 5 minutos    coletar.bat cemaden
 #   UNIGEO - coletor raios           de 10 em 10 minutos               coletar.bat raios
+#   UNIGEO - coletor GLM             a cada minuto                     coletar.bat glm
 #
 # O INMET aos 50 minutos: as estacoes mandam a leitura da hora ao longo de uns 40 minutos. A
 # revisao rebusca 30 dias, para o banco receber os valores que o INMET corrigiu depois.
 # O CEMADEN aos 5 minutos, logo depois da hora cheia: os pluviometros mandam a leitura assim que
 # medem, e cada execucao rebusca os ultimos 3 dias (~20 s, em outra API: nao divide limite com o INMET).
 # Os raios de 10 em 10 minutos: nao usam API nenhuma, so contam no banco os flashes do GLM que o
-# script de um colega grava ali (poucos segundos; a primeira execucao, que conta o historico que ja
-# esta no banco, leva uns 20 minutos e e melhor rodar a mao).
+# coletor GLM grava na glm_rt (poucos segundos).
+# O GLM a cada minuto, o menor intervalo do Agendador: busca no bucket da NOAA os arquivos de 20 s da
+# hora corrente e da anterior (~3 novos por minuto, poucos segundos). Ele para em 10 minutos, e nao
+# em uma hora como os outros: uma execucao presa seguraria as seguintes. O dia que ficou para tras
+# (a maquina ou a rede fora por mais de uma hora) e a mao: coletar.bat glm --dia 2026-11-26
 # A previsao guarda as rodadas das 00Z e das 12Z. A busca normal so alcanca cada uma enquanto e a
 # mais recente do modelo, e cada modelo publica numa hora: em 21/10/2026, a das 00Z do ECMWF ficou
 # pronta as 05:00 de MS, e a do ICON deixou de ser a mais recente as 05:30. Por isso a conferencia
@@ -45,6 +49,7 @@ try {
 $hoje = (Get-Date).Date
 $umaHora = New-TimeSpan -Hours 1
 $dezMinutos = New-TimeSpan -Minutes 10
+$umMinuto = New-TimeSpan -Minutes 1
 $tarefas = @(
     @{ Nome = "UNIGEO - coletor INMET"; Argumentos = "inmet"
        Gatilho = New-ScheduledTaskTrigger -Once -At $hoje.AddMinutes(50) -RepetitionInterval $umaHora },
@@ -57,15 +62,17 @@ $tarefas = @(
     @{ Nome = "UNIGEO - coletor CEMADEN"; Argumentos = "cemaden"
        Gatilho = New-ScheduledTaskTrigger -Once -At $hoje.AddMinutes(5) -RepetitionInterval $umaHora },
     @{ Nome = "UNIGEO - coletor raios"; Argumentos = "raios"
-       Gatilho = New-ScheduledTaskTrigger -Once -At $hoje.AddMinutes(2) -RepetitionInterval $dezMinutos }
+       Gatilho = New-ScheduledTaskTrigger -Once -At $hoje.AddMinutes(2) -RepetitionInterval $dezMinutos },
+    @{ Nome = "UNIGEO - coletor GLM"; Argumentos = "glm"; Limite = $dezMinutos
+       Gatilho = New-ScheduledTaskTrigger -Once -At $hoje -RepetitionInterval $umMinuto }
 )
 # Uma execucao por vez (a seguinte nao comeca se a anterior ainda roda), recupera a que a maquina
 # perdeu desligada, roda na bateria, e para a que passar de uma hora (a mais longa, a revisao,
 # leva ~13 min)
-$opcoes = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable `
-    -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit $umaHora
-
 foreach ($tarefa in $tarefas) {
+    $limite = if ($tarefa.Limite) { $tarefa.Limite } else { $umaHora }
+    $opcoes = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable `
+        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit $limite
     $acao = New-ScheduledTaskAction -Execute "`"$bat`"" -Argument $tarefa.Argumentos -WorkingDirectory $projeto
     Register-ScheduledTask -TaskName $tarefa.Nome -Action $acao -Trigger $tarefa.Gatilho -Settings $opcoes `
         -User $usuario -Password $senha -Force | Out-Null

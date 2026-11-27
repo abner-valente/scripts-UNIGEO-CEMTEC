@@ -12,6 +12,8 @@ Feitos para o Agendador de Tarefas do Windows, pelo servidor\\coletar.bat, e rod
     python coletar.py cemaden                        # de hora em hora: o cadastro e os últimos 3 dias dos pluviômetros
     python coletar.py cemaden --historico 2015-03-01 # uma vez só: os dias desde a data, retomando de onde parou
     python coletar.py raios                          # de 10 em 10 minutos: a contagem dos raios do GOES por hora e célula
+    python coletar.py glm                            # a cada minuto: os flashes do GOES, do bucket da NOAA para a glm_rt
+    python coletar.py glm --dia 2026-11-26           # quando precisar: um dia de MS inteiro, só o que falta (pode repetir)
 
 A conexão é a BANCO_GRAVACAO do .env, no schema BANCO_SCHEMA (padrão: climageo). Com --teste
 (`python coletar.py inmet --teste`), é a BANCO_TESTE, no schema climageo_teste, que os testes
@@ -29,7 +31,8 @@ from datetime import datetime, timedelta, timezone
 
 import psycopg
 
-from modulos import banco, cemaden, coletor_cemaden, coletor_inmet, coletor_previsao, coletor_raios, config, inmet
+from modulos import (banco, cemaden, coletor_cemaden, coletor_glm, coletor_inmet, coletor_previsao, coletor_raios,
+                     config, glm, inmet)
 
 SCHEMA_DE_TESTE = "climageo_teste"
 # A carga do histórico leva horas sem ninguém olhando (~22 a do INMET, ~8 a do CEMADEN). Se a conexão
@@ -93,6 +96,12 @@ def argumentos(linha: list[str] | None = None) -> argparse.Namespace:
     trabalhos.add_parser("raios", parents=[comum],
                          help="a contagem dos raios do GOES (GLM) no estado, por hora e célula de 0,1° "
                               "(de 10 em 10 minutos)")
+    do_glm = trabalhos.add_parser("glm", parents=[comum],
+                                  help="os flashes do GLM do GOES-19 a até 1.500 km de Campo Grande, do bucket da "
+                                       "NOAA para a glm_rt: a hora corrente e a anterior (a cada minuto)")
+    do_glm.add_argument("--dia", type=ler_data, action="append", metavar="DATA",
+                        help="em vez do tempo real, o dia DATA inteiro, no horário de MS (das 00h às 24h), só os "
+                             "arquivos que faltam; pode repetir: --dia 2026-11-26 --dia 2026-11-27")
     opcoes = parser.parse_args(linha)
     if getattr(opcoes, "ate", None) and not opcoes.historico:
         parser.error("--ate só vale com --historico")
@@ -165,6 +174,10 @@ def executar(opcoes: argparse.Namespace) -> int:
             if opcoes.trabalho == "raios":
                 coletor_raios.coletar(conexao)
                 return 0
+            if opcoes.trabalho == "glm":
+                coleta = (coletor_glm.coletar_dias(conexao, [dia.date() for dia in opcoes.dia]) if opcoes.dia
+                          else coletor_glm.coletar(conexao))
+                return 1 if coleta.falhas else 0
             if opcoes.trabalho == "cemaden":
                 coleta = coletor_cemaden.coletar_ultimos(conexao)
             elif opcoes.extras:
@@ -181,6 +194,9 @@ def executar(opcoes: argparse.Namespace) -> int:
         return 1
     except cemaden.ErroCEMADEN as erro:
         print(f"❌ CEMADEN: {erro}")
+        return 1
+    except glm.ErroGLM as erro:
+        print(f"❌ GLM: {erro}")
         return 1
     return 1 if coleta.falhas else 0
 

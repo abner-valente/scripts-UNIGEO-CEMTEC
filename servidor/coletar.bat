@@ -10,6 +10,8 @@ REM   coletar.bat previsao            de hora em hora, aos 15 minutos (leva ate 
 REM   coletar.bat cemaden             de hora em hora, aos 5 minutos (leva ~20 s): os pluviometros
 REM   coletar.bat raios               de 10 em 10 minutos (leva poucos segundos): a contagem dos
 REM                                   raios do GOES, sem API, so no banco
+REM   coletar.bat glm                 a cada minuto (leva poucos segundos): os flashes do GOES, do
+REM                                   bucket da NOAA para a glm_rt
 REM As do INMET nunca devem rodar juntas: somadas, passariam das 100 consultas por minuto que o
 REM INMET aceita de cada endereco. Os extras (03:00) e a revisao (01:05) terminam antes da execucao
 REM de hora em hora seguinte, aos 50 minutos. O servidor\criar_tarefas.ps1 cria todas.
@@ -19,11 +21,13 @@ REM cliques, para testar.
 REM
 REM A saida vai para logs\coletor_<trabalho>.log (logs\coletor_inmet.log,
 REM logs\coletor_inmet_extras.log, logs\coletor_inmet_revisao.log, logs\coletor_previsao.log,
-REM logs\coletor_cemaden.log e logs\coletor_raios.log), porque pelo Agendador ninguem ve a janela. As
+REM logs\coletor_cemaden.log, logs\coletor_raios.log e logs\coletor_glm.log), porque pelo Agendador
+REM ninguem ve a janela. As
 REM cargas do historico, que rodam uma vez so, e melhor rodar a mao, num terminal:
 REM python coletar.py inmet --historico 2018-01-01
 REM python coletar.py cemaden --historico 2015-03-01
 REM python coletar.py raios      (a primeira vez, ~20 min: conta o historico do GLM que ja esta no banco)
+REM python coletar.py glm --dia 2026-11-26   (um dia do GLM que ficou para tras, ~10 min)
 
 setlocal
 cd /d "%~dp0.."
@@ -36,7 +40,7 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 if "%~1"=="" (
-    echo Diga o trabalho: coletar.bat inmet, coletar.bat previsao, coletar.bat cemaden ou coletar.bat raios
+    echo Diga o trabalho: coletar.bat inmet, coletar.bat previsao, coletar.bat cemaden, coletar.bat raios ou coletar.bat glm
     exit /b 1
 )
 if not exist "logs" mkdir "logs"

@@ -182,3 +182,43 @@ def test_os_argumentos():
     opcoes = recorte_glm.argumentos(["cortar", "--simular", "--desde", "2026-10-15", "--pausa", "0"])
     assert (opcoes.acao, opcoes.simular, opcoes.desde, opcoes.pausa) == ("cortar", True, date(2026, 10, 15), 0)
     assert recorte_glm.argumentos(["copiar"]).desde is None
+
+
+def test_compactar_reescreve_a_tabela_com_os_flashes_que_ficaram(conexao, dois_dias):
+    recorte_glm.cortar(conexao, pausa=0)
+    conexao.execute("ANALYZE relampagos_glm_rt")
+    conexao.commit()
+    tamanho = recorte_glm.tamanho(conexao)
+    assert tamanho["vivos"] == 5
+    assert tamanho["total"] >= tamanho["dados"] > 0
+    assert 0 < tamanho["total_depois"] <= tamanho["total"]
+
+    recorte_glm.compactar(conexao)
+
+    assert not conexao.autocommit
+    assert todos(conexao, "SELECT count(*) FROM relampagos_glm_rt") == [(5,)]
+
+
+def test_compactar_pede_confirmacao_antes_de_gravar(monkeypatch, capsys):
+    monkeypatch.setattr(builtins, "input", lambda pergunta: "sim")
+    papeis = []
+
+    class Conexao:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *erro):
+            return None
+
+    def conectar(papel="leitura", **argumentos):
+        papeis.append(papel)
+        return Conexao()
+
+    monkeypatch.setattr(banco, "conectar", conectar)
+    monkeypatch.setattr(recorte_glm, "tamanho", lambda conexao: dict.fromkeys(
+        ("total", "dados", "indices", "vivos", "dados_depois", "indices_depois", "total_depois"), 2**30))
+
+    assert recorte_glm.main(["compactar"]) == 1
+    assert papeis == ["leitura"]
+    assert "Nada foi feito" in capsys.readouterr().out
+    assert recorte_glm.argumentos(["compactar", "--simular"]).simular

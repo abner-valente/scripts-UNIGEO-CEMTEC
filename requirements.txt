@@ -21,6 +21,9 @@ openpyxl>=3.1
 # O banco da UNIGEO (PostgreSQL), para os coletores e os testes do banco
 psycopg[binary]>=3.2
 
+# Os arquivos do GLM (raios do GOES-19), em netCDF
+netCDF4>=1.7
+
 # Fusos horários (obrigatório no Windows) e configuração via .env
 tzdata
 python-dotenv>=1.0

@@ -15,8 +15,8 @@ Os pluviômetros do CEMADEN só vêm do banco (`estacoes_cemaden`, `chuva_cemade
 "apis", a PED teria de ser consultada na hora, e o limite de 12 consultas por minuto é da conta,
 dividido com o coletor. As tabelas deles têm as colunas das do INMET, só com a chuva.
 
-Os raios do GOES (GLM) também só vêm do banco (`tem_raios` diz se há): os recentes direto das
-tabelas que um colega da unidade alimenta, e os de um período da contagem por hora do coletor.
+Os raios do GOES (GLM) também só vêm do banco (`tem_raios` diz se há): os recentes direto da glm_rt,
+que o coletor do GLM alimenta, e os de um período da contagem por hora do coletor dos raios.
 
 As funções procuram o `inmet` na hora de cada chamada, sem guardar referência às funções dele.
 É o que deixa os testes trocarem a API do INMET por dados sintéticos, como sempre fizeram.

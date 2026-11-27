@@ -156,8 +156,9 @@ FONTE_DADOS = os.getenv("FONTE_DADOS", "apis").strip().lower()
 BANCO_SCHEMA = os.getenv("BANCO_SCHEMA", "climageo").strip()
 BANCO_CONEXOES = {"gravacao": "BANCO_GRAVACAO", "leitura": "BANCO_LEITURA", "teste": "BANCO_TESTE"}
 BANCO_ESQUEMA = RAIZ / "banco" / "esquema.sql"
-# Os raios do GOES-19 (GLM) vêm de tabelas que um colega da unidade alimenta no mesmo banco, neste
-# schema: a dos flashes (relampagos_glm_rt) e a de controle dos arquivos (controle_processamento_glm)
+# As tabelas dos raios do GOES-19 (GLM) que um colega da unidade alimenta no mesmo banco, neste
+# schema: a dos flashes (relampagos_glm_rt) e a de controle dos arquivos (controle_processamento_glm).
+# Desde 27/11/2026 o painel lê a nossa, a glm_rt (FONTE_GLM, mais abaixo)
 GLM_SCHEMA = os.getenv("GLM_SCHEMA", "eventos_atmosfericos_rt").strip()
 
 # =====================================================
@@ -232,6 +233,21 @@ MARGEM_DO_QUADRO_DOS_RAIOS = 1.0           # graus em volta do círculo, no PNG 
 # Campo Grande, o círculo do Agora: a do colega guardava o disco inteiro do GOES-19 (pedido de
 # 26/11/2026, com 2.000 km; antes da carga, o usuário preferiu 1.500)
 RAIO_DA_TABELA_GLM_KM = 1500
+# Quem alimenta a glm_rt é o nosso coletor (coletar.py glm), com os arquivos de 20 s do bucket público
+# da NOAA: sem conta nem chave, a listagem do S3 por hora e o download por HTTPS. O arquivo entra no
+# bucket ~15 a 35 s depois de terminar e tem ~260 a 400 KB (medido em 27/11/2026)
+URL_BUCKET_GLM = "https://noaa-goes19.s3.amazonaws.com"
+PRODUTO_GLM = "GLM-L2-LCFA"
+SEGUNDOS_DO_ARQUIVO_GLM = 20
+TIMEOUT_GLM = 60                     # segundos
+DOWNLOADS_SIMULTANEOS_GLM = 8        # na busca de um dia: ~4.300 arquivos em ~10 min, contra ~70 em fila
+# O trecho de 20 s que não tem arquivo no bucket tanto tempo depois de a hora fechar foi perdido pela
+# NOAA: vira "sem cena" no controle, e a hora fica com os 180 arquivos contados
+MINUTOS_PARA_DAR_O_ARQUIVO_POR_PERDIDO = 15
+# De onde o painel e o coletar.py raios leem os flashes: "nossa", a glm_rt e o controle_glm_rt (no
+# BANCO_SCHEMA), ou "colega", as tabelas dele em GLM_SCHEMA. Voltar para a do colega pede zerar a
+# raios_glm_coleta: os ids do nosso controle começam em 1 bilhão
+FONTE_GLM = os.getenv("FONTE_GLM", "nossa").strip().lower()
 # Os estados do Brasil e os países em volta, para os mapas do círculo (ferramentas/brasil_e_vizinhos.py)
 SHAPE_BRASIL_E_VIZINHOS = PASTA_SHP / "brasil_e_vizinhos.gpkg"
 

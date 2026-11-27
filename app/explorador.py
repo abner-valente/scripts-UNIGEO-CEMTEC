@@ -4741,10 +4741,10 @@ def localizacao_das_estacoes(uf: str) -> None:
 # =====================================================
 # RAIOS (GOES-19 GLM)
 # =====================================================
-# Os flashes do GLM que um colega da unidade grava no banco. O Agora lê direto as tabelas dele (o
-# tempo real chega com ~40 s de atraso) e se atualiza sozinho a cada minuto; a Densidade lê a
-# contagem por hora do coletor (`python coletar.py raios`), porque um mês nas tabelas dele levaria
-# minutos. Prioridades da equipe (23/11/2026): o monitoramento, depois a densidade de um período,
+# Os flashes do GLM que o nosso coletor (`python coletar.py glm`, a cada minuto) grava na glm_rt. O
+# Agora lê direto dali (o arquivo de 20 s chega com ~1 a 1,5 min de atraso) e se atualiza sozinho a
+# cada minuto; a Densidade lê a contagem por hora do coletor dos raios (`python coletar.py raios`),
+# porque um mês de flashes levaria minutos. Prioridades da equipe (23/11/2026): o monitoramento, depois a densidade de um período,
 # com todos os flashes, de qualquer qualidade, espalhados pelo estado (sem a conta por estação)
 ATUALIZACAO_DOS_RAIOS = 60     # segundos
 ATRASO_ACEITO_DOS_RAIOS = timedelta(minutes=10)
